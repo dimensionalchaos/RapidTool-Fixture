@@ -1,11 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Label } from '@/components/ui/label';
-import { Switch } from '@/components/ui/switch';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Boxes, AlertCircle, MousePointer2, Square, Circle, Triangle, Spline } from 'lucide-react';
 
 export type SupportType = 'rectangular' | 'cylindrical' | 'conical' | 'custom';
@@ -14,25 +12,25 @@ interface SupportsStepContentProps {
   hasBaseplate?: boolean;
   supportsCount?: number;
   isPlacementMode?: boolean;
-  onTogglePlacementMode?: () => void;
   onStartPlacement?: (type: SupportType) => void;
+  onCancelPlacement?: () => void;
   selectedSupportType?: SupportType;
   onSupportTypeChange?: (type: SupportType) => void;
 }
 
 const SUPPORT_TYPE_CONFIG: Record<SupportType, { label: string; icon: React.ReactNode; description: string }> = {
   rectangular: {
-    label: 'Rect',
+    label: 'Rectangular',
     icon: <Square className="w-4 h-4" />,
     description: 'Box-shaped support with configurable width and depth'
   },
   cylindrical: {
-    label: 'Cyl',
+    label: 'Cylindrical',
     icon: <Circle className="w-4 h-4" />,
     description: 'Cylindrical support with configurable radius'
   },
   conical: {
-    label: 'Cone',
+    label: 'Conical',
     icon: <Triangle className="w-4 h-4" />,
     description: 'Tapered support with base and top radius'
   },
@@ -47,24 +45,38 @@ const SupportsStepContent: React.FC<SupportsStepContentProps> = ({
   hasBaseplate = false,
   supportsCount = 0,
   isPlacementMode = false,
-  onTogglePlacementMode,
   onStartPlacement,
+  onCancelPlacement,
   selectedSupportType = 'cylindrical',
   onSupportTypeChange
 }) => {
-  const [localType, setLocalType] = useState<SupportType>(selectedSupportType);
+  const [localType, setLocalType] = useState<SupportType | null>(null);
 
-  const handleTypeChange = (type: SupportType) => {
+  // Handle escape key to cancel placement
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isPlacementMode) {
+        handleCancelPlacement();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isPlacementMode]);
+
+  const handleTypeSelect = (type: SupportType) => {
     setLocalType(type);
     onSupportTypeChange?.(type);
-  };
-
-  const handleStartPlacement = () => {
-    onStartPlacement?.(localType);
+    onStartPlacement?.(type);
     // Dispatch the event for the 3D scene
     window.dispatchEvent(new CustomEvent('supports-start-placement', {
-      detail: { type: localType, params: {} }
+      detail: { type, params: {} }
     }));
+  };
+
+  const handleCancelPlacement = () => {
+    setLocalType(null);
+    onCancelPlacement?.();
+    window.dispatchEvent(new Event('supports-cancel-placement'));
   };
 
   if (!hasBaseplate) {
@@ -85,64 +97,55 @@ const SupportsStepContent: React.FC<SupportsStepContentProps> = ({
       {/* Support Type Selection */}
       <div className="space-y-3">
         <Label className="text-xs font-tech text-muted-foreground uppercase tracking-wider">
-          Support Type
+          Select Support Type to Place
         </Label>
-        <Tabs value={localType} onValueChange={(v) => handleTypeChange(v as SupportType)}>
-          <TabsList className="grid grid-cols-4 h-9">
-            {Object.entries(SUPPORT_TYPE_CONFIG).map(([type, config]) => (
-              <TabsTrigger 
-                key={type} 
-                value={type} 
-                className="text-xs font-tech gap-1 px-2"
+        <div className="grid grid-cols-2 gap-2">
+          {Object.entries(SUPPORT_TYPE_CONFIG).map(([type, config]) => {
+            const isSelected = localType === type && isPlacementMode;
+            return (
+              <Button
+                key={type}
+                variant={isSelected ? "default" : "outline"}
+                size="sm"
+                className={`h-auto py-3 flex flex-col items-center gap-1.5 font-tech ${
+                  isSelected ? 'ring-2 ring-primary ring-offset-2' : ''
+                }`}
+                onClick={() => handleTypeSelect(type as SupportType)}
                 title={config.description}
               >
                 {config.icon}
-                <span className="hidden sm:inline">{config.label}</span>
-              </TabsTrigger>
-            ))}
-          </TabsList>
-        </Tabs>
-        <p className="text-[10px] text-muted-foreground font-tech">
-          {SUPPORT_TYPE_CONFIG[localType].description}
-        </p>
+                <span className="text-xs">{config.label}</span>
+              </Button>
+            );
+          })}
+        </div>
       </div>
 
-      {/* Placement Mode Card */}
-      <Card className={`tech-glass p-3 ${isPlacementMode ? 'border-primary bg-primary/5' : ''}`}>
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <MousePointer2 className={`w-5 h-5 ${isPlacementMode ? 'text-primary' : 'text-muted-foreground'}`} />
-            <div>
-              <p className="text-sm font-tech font-medium">Placement Mode</p>
-              <p className="text-xs text-muted-foreground font-tech">
-                {isPlacementMode ? 'Click on baseplate to place' : 'Enable to add supports'}
-              </p>
-            </div>
-          </div>
-          <Switch
-            checked={isPlacementMode}
-            onCheckedChange={() => {
-              if (!isPlacementMode) {
-                handleStartPlacement();
-              } else {
-                window.dispatchEvent(new Event('supports-cancel-placement'));
-              }
-              onTogglePlacementMode?.();
-            }}
-          />
-        </div>
-      </Card>
-
-      {/* Placement Instructions */}
-      {isPlacementMode && (
+      {/* Placement Mode Indicator */}
+      {isPlacementMode && localType && (
         <Card className="tech-glass p-3 bg-primary/5 border-primary/30">
           <div className="space-y-2">
-            <p className="text-xs font-tech font-medium text-primary">Placement Instructions</p>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <MousePointer2 className="w-4 h-4 text-primary animate-pulse" />
+                <p className="text-xs font-tech font-medium text-primary">
+                  Placing {SUPPORT_TYPE_CONFIG[localType].label} Support
+                </p>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 px-2 text-xs"
+                onClick={handleCancelPlacement}
+              >
+                Cancel
+              </Button>
+            </div>
             <ol className="text-[10px] text-muted-foreground font-tech space-y-1 list-decimal list-inside">
               <li>Click on the baseplate to set the center point</li>
               <li>Drag outward to set the size/radius</li>
-              <li>Click again or drag up to confirm height</li>
-              <li>Support height auto-adjusts to touch the model</li>
+              <li>Height auto-adjusts to touch the model</li>
+              <li>Press <kbd className="px-1 py-0.5 bg-muted rounded text-[8px]">Esc</kbd> to cancel</li>
             </ol>
           </div>
         </Card>

@@ -148,14 +148,8 @@ export const computeSupportMetrics = ({
   raycaster,
 }: SupportMetricOptions): SupportMetrics | null => {
   const rc = getRaycaster(raycaster);
-  if (baseTarget) {
-    baseTarget.updateMatrixWorld(true);
-  }
-  if (modelTargets && modelTargets.length) {
-    for (const target of modelTargets) {
-      target.updateMatrixWorld(true);
-    }
-  }
+  // Note: Avoid calling updateMatrixWorld(true) here as it's expensive
+  // The matrices should already be updated by the render loop
   const samples = getSupportSamples(support);
   let effectiveBaseY = baseTopY;
   const hitYs: number[] = [];

@@ -29,6 +29,12 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
   const [customPoints, setCustomPoints] = React.useState<THREE.Vector2[]>([]);
   const [drawingCustom, setDrawingCustom] = React.useState(false);
   const raycasterRef = React.useRef(new THREE.Raycaster());
+  // Reusable plane object to avoid GC during mouse moves
+  const planeRef = React.useRef(new THREE.Plane(new THREE.Vector3(0, 1, 0), 0));
+  const hitPointRef = React.useRef(new THREE.Vector3());
+  // Throttle metrics computation
+  const lastMetricsTimeRef = React.useRef(0);
+  const pendingPreviewRef = React.useRef<AnySupport | null>(null);
 
   const computeMetrics = React.useCallback(
     (s: AnySupport) =>
@@ -44,7 +50,7 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
     [baseTopY, contactOffset, baseTarget, raycastTargets, maxRayHeight]
   );
 
-  const closeThreshold = 5;
+  const closeThreshold = 2;  // 2mm threshold for snapping to close the loop
 
   // When entering via edit mode, we may receive an initial center in initParams.
   React.useEffect(() => {
@@ -73,6 +79,7 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
       center: centerV,
       height: baseHeight,
       polygon,
+      cornerRadius: Number(initParams?.cornerRadius ?? 2),
       contactOffset,
     } as AnySupport;
     const metrics = computeMetrics(support);
@@ -90,7 +97,7 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
   }, [computeMetrics, initParams, onCreate, contactOffset]);
 
   const toSupport = (c: THREE.Vector2, cursor: THREE.Vector3): AnySupport => {
-    const snap = 1; // mm grid for higher precision
+    const snap = 0.5; // mm grid for smoother drawing updates
     const snapv = (v: number) => Math.round(v / snap) * snap;
     const cx = c.x;
     const cz = c.y;
@@ -104,7 +111,7 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
       const rectangularFootprint = footprint as RectSupport;
       rectangularFootprint.width = Number(initParams?.width ?? Math.abs(dx) * 2);
       rectangularFootprint.depth = Number(initParams?.depth ?? Math.abs(dz) * 2);
-      rectangularFootprint.cornerRadius = Number(initParams?.cornerRadius ?? 0);
+      rectangularFootprint.cornerRadius = Number(initParams?.cornerRadius ?? 2);
     } else if (type === 'cylindrical') {
       (footprint as CylSupport).radius = Number(initParams?.radius ?? dist);
     } else if (type === 'conical') {
@@ -124,7 +131,7 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
     if (type === 'rectangular') {
       const width = Number(initParams?.width ?? Math.abs(dx) * 2);
       const depth = Number(initParams?.depth ?? Math.abs(dz) * 2);
-      const cornerRadius = Number(initParams?.cornerRadius ?? 0);
+      const cornerRadius = Number(initParams?.cornerRadius ?? 2);
       return { id: `sup-${Date.now()}`, type, center: new THREE.Vector2(cx, cz), height, width, depth, cornerRadius, baseY, contactOffset } as AnySupport;
     }
     if (type === 'conical') {
@@ -213,10 +220,9 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
       return { point: null, planePoint: null, hitOnTarget: false };
     }
 
-    // Intersect with XZ plane at baseTopY
-    const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -baseTopY);
-    const hitPoint = new THREE.Vector3();
-    const hasPlaneHit = ray.intersectPlane(plane, hitPoint) !== null;
+    // Intersect with XZ plane at baseTopY - reuse plane and hitPoint objects
+    planeRef.current.constant = -baseTopY;
+    const hasPlaneHit = ray.intersectPlane(planeRef.current, hitPointRef.current) !== null;
     if (!hasPlaneHit) {
       return { point: null, planePoint: null, hitOnTarget: false };
     }
@@ -237,8 +243,8 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
       }
     }
 
-    const planePoint = new THREE.Vector2(hitPoint.x, hitPoint.z);
-    return { point: hitPoint, planePoint, hitOnTarget };
+    const planePoint = new THREE.Vector2(hitPointRef.current.x, hitPointRef.current.z);
+    return { point: hitPointRef.current.clone(), planePoint, hitOnTarget };
   };
 
   const handlePointerMove = (e: any) => {
@@ -250,33 +256,50 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
     const isCustomDrawing = type === 'custom' && hasCustomPath;
 
     // Before placement starts: only react when hovering over model/baseplate
-    if ((!point || !planePoint) || (!hitOnTarget && !isNonCustomPlacing && !isCustomDrawing)) {
+    // Exception: for custom drawing mode, allow hover anywhere on the plane
+    if ((!point || !planePoint) || (!hitOnTarget && !isNonCustomPlacing && !isCustomDrawing && type !== 'custom')) {
       if (!hasCenter && !hasCustomPath) {
         setHover(null);
       }
       return;
     }
 
-    setHover(planePoint.clone());
-    if (type === 'custom') {
-      if (drawingCustom && customPoints.length >= 1) {
-        setCustomPoints(prev => {
-          if (prev.length === 0) return prev;
-          const next = [...prev];
-          next[next.length - 1] = planePoint.clone();
-          return next;
-        });
+    // For custom drawing, snap hover to first point if close enough to close the loop
+    let snappedPoint = planePoint.clone();
+    if (type === 'custom' && customPoints.length >= 3) {
+      const first = customPoints[0];
+      if (planePoint.distanceTo(first) <= closeThreshold) {
+        snappedPoint = first.clone();
       }
+    }
+
+    setHover(snappedPoint);
+    if (type === 'custom') {
+      // Don't modify customPoints on hover - the hover point is stored separately
+      // and used for preview line drawing. Points are only added on click.
       return;
     }
     if (!center) return;
     const support = toSupport(center, point);
     if (!support) return;
-    const metrics = computeMetrics(support);
-    if (metrics) {
-      (support as any).height = metrics.height;
-      (support as any).baseY = metrics.baseY;
+    
+    // Throttle expensive metrics computation to max 30fps (33ms)
+    const now = performance.now();
+    if (now - lastMetricsTimeRef.current > 33) {
+      lastMetricsTimeRef.current = now;
+      const metrics = computeMetrics(support);
+      if (metrics) {
+        (support as any).height = metrics.height;
+        (support as any).baseY = metrics.baseY;
+      }
+    } else {
+      // Use cached metrics from pending preview if available
+      if (pendingPreviewRef.current) {
+        (support as any).height = (pendingPreviewRef.current as any).height;
+        (support as any).baseY = (pendingPreviewRef.current as any).baseY;
+      }
     }
+    pendingPreviewRef.current = support;
     setPreviewSupport(support);
   };
 
@@ -290,8 +313,9 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
     const hasCenter = !!center;
     const hasCustomPath = customPoints.length > 0 || drawingCustom;
 
-    // First click must be on model/baseplate so camera can rotate freely elsewhere
-    if (!hasCenter && !hasCustomPath && !hitOnTarget) {
+    // For custom drawing, allow first click anywhere on the plane (not just on model/baseplate)
+    // For other support types, first click must be on model/baseplate so camera can rotate freely elsewhere
+    if (type !== 'custom' && !hasCenter && !hasCustomPath && !hitOnTarget) {
       return;
     }
 
@@ -340,25 +364,18 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
       return;
     }
 
-    const pt = planePoint.clone();
-    setHover(pt.clone());
-
+    // Apply same snapping logic as in handlePointerMove - check if closing the loop
     if (customPoints.length >= 3) {
       const first = customPoints[0];
-      if (pt.distanceTo(first) <= closeThreshold) {
+      if (planePoint.distanceTo(first) <= closeThreshold) {
+        // Snap to first point and finalize
         finalizeCustomSupport(customPoints);
         return;
       }
     }
-
-    setCustomPoints(prev => {
-      if (prev.length === 0) return [pt.clone()];
-      const last = prev[prev.length - 1];
-      if (pt.distanceTo(last) < 0.25) {
-        return prev;
-      }
-      return [...prev, pt.clone()];
-    });
+    
+    // Points are added in handlePointerDown, not here
+    // This handler only checks for loop closing
   };
 
   // XY Guides (crosshair + axes through point)
@@ -495,12 +512,37 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
 
   // Custom polygon drawing preview (points + live segment). Standalone so JSX can reference it.
   const CustomPreview: React.FC = () => {
-    if (type !== 'custom' || (customPoints.length === 0 && !hover)) return null;
+    // Show preview as soon as we have hover in custom mode, even before first click
+    if (type !== 'custom' || !hover) return null;
     const y = baseTopY + 0.035;
     const pts = [...customPoints];
-    if (hover) {
+    
+    // Check if hover is close to first point (loop about to close)
+    // Use the same threshold as the snap logic (2mm)
+    let isClosing = false;
+    if (customPoints.length >= 3) {
+      const first = customPoints[0];
+      const dist = Math.sqrt(
+        Math.pow(hover.x - first.x, 2) + Math.pow(hover.y - first.y, 2)
+      );
+      isClosing = dist <= closeThreshold;
+    }
+    
+    // Only add hover point if not closing (when closing, the line goes back to first point automatically)
+    if (hover && !isClosing) {
       pts.push(hover.clone());
     }
+    
+    // Before any points are placed, show the red start marker at hover position
+    if (customPoints.length === 0) {
+      return (
+        <mesh position={[hover.x, y, hover.y]} renderOrder={1001} rotation={[-Math.PI/2,0,0]}>
+          <circleGeometry args={[0.9, 20]} />
+          <meshBasicMaterial color={0xef4444} depthTest={false} depthWrite={false} />
+        </mesh>
+      );
+    }
+    
     if (pts.length < 2) {
       return (
         <>
@@ -513,21 +555,60 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
         </>
       );
     }
-    const positions = new Float32Array(pts.flatMap(v => [v.x, y, v.y]));
+    
+    // Create dashed line as individual segments
+    const dashSize = 2;
+    const gapSize = 1.5;
+    const dashSegments: number[] = [];
+    
+    // Close the loop
+    const closedPts = [...pts, pts[0]];
+    
+    for (let i = 0; i < closedPts.length - 1; i++) {
+      const p1 = closedPts[i];
+      const p2 = closedPts[i + 1];
+      const dx = p2.x - p1.x;
+      const dz = p2.y - p1.y;
+      const length = Math.sqrt(dx * dx + dz * dz);
+      const dirX = dx / length;
+      const dirZ = dz / length;
+      
+      let dist = 0;
+      let drawing = true;
+      while (dist < length) {
+        const segLen = drawing ? dashSize : gapSize;
+        const endDist = Math.min(dist + segLen, length);
+        
+        if (drawing) {
+          const startX = p1.x + dirX * dist;
+          const startZ = p1.y + dirZ * dist;
+          const endX = p1.x + dirX * endDist;
+          const endZ = p1.y + dirZ * endDist;
+          dashSegments.push(startX, y, startZ, endX, y, endZ);
+        }
+        
+        dist = endDist;
+        drawing = !drawing;
+      }
+    }
+    
+    const lineColor = isClosing ? 0x22c55e : 0x2563eb;
+    const dashPositions = new Float32Array(dashSegments);
+    
     return (
       <>
         {customPoints.map((v, i) => (
           <mesh key={`p-${i}`} position={[v.x, y, v.y]} renderOrder={1001} rotation={[-Math.PI/2,0,0]}>
-            <circleGeometry args={[0.9, 20]} />
-            <meshBasicMaterial color={i === 0 ? 0xef4444 : 0x2563eb} depthTest={false} depthWrite={false} />
+            <circleGeometry args={[isClosing && i === 0 ? 1.4 : 0.9, 20]} />
+            <meshBasicMaterial color={i === 0 ? (isClosing ? 0x22c55e : 0xef4444) : 0x2563eb} depthTest={false} depthWrite={false} />
           </mesh>
         ))}
-        <lineLoop renderOrder={1000}>
+        <lineSegments renderOrder={1000}>
           <bufferGeometry>
-            <bufferAttribute attach="attributes-position" count={positions.length/3} array={positions} itemSize={3} />
+            <bufferAttribute attach="attributes-position" count={dashPositions.length / 3} array={dashPositions} itemSize={3} />
           </bufferGeometry>
-          <lineBasicMaterial color={0x2563eb} depthTest={false} depthWrite={false} />
-        </lineLoop>
+          <lineBasicMaterial color={lineColor} depthTest={false} depthWrite={false} />
+        </lineSegments>
       </>
     );
   };

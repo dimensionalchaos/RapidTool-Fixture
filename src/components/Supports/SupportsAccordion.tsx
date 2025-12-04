@@ -255,6 +255,17 @@ const SupportsAccordion: React.FC<SupportsAccordionProps> = ({
               <p className="text-[8px] text-muted-foreground">
                 {customSupport.polygon.length} vertices
               </p>
+              <div className="space-y-1">
+                <Label className="text-[8px] font-mono">Corner Radius</Label>
+                <Input
+                  type="number"
+                  value={(customSupport.cornerRadius ?? 0).toFixed(1)}
+                  onChange={(e) => handlePropertyChange(support, 'cornerRadius', parseFloat(e.target.value) || 0)}
+                  className="h-6 !text-[10px] font-mono"
+                  step="0.5"
+                  min="0"
+                />
+              </div>
               {customSupport.offset !== undefined && (
                 <div className="space-y-1">
                   <Label className="text-[8px] font-mono">Offset</Label>

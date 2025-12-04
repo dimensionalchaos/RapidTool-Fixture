@@ -15,6 +15,10 @@ export default defineConfig(({ mode }) => ({
       "@": path.resolve(__dirname, "./src"),
     },
   },
+  optimizeDeps: {
+    exclude: ['manifold-3d'],
+  },
+  assetsInclude: ['**/*.wasm'],
 }));
 
 

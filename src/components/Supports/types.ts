@@ -34,6 +34,7 @@ export interface CustomSupport extends SupportBase {
   type: 'custom';
   polygon: Array<[number, number]>; // centered at center
   offset?: number;
+  cornerRadius?: number; // radius for rounding polygon corners
 }
 
 export type AnySupport = RectSupport | CylSupport | ConicalSupport | CustomSupport;

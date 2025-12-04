@@ -816,6 +816,9 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       editingSupportRef.current = null;
       setEditingSupport(null);
 
+      // Disable orbit controls during placement
+      setOrbitControlsEnabled(false);
+
       // remember previous view, switch to Top for placement
       prevOrientationRef.current = currentOrientation;
       setCurrentOrientation('top');

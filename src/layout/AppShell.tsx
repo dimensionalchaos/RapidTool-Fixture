@@ -548,6 +548,9 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
         const state = { type: 'support-created', support };
         setUndoStack(prev => [...prev, state]);
         setRedoStack([]);
+        
+        // Exit placement mode after creating a support (so user can create another by clicking a type)
+        setIsPlacementMode(false);
       };
 
       const onSupportUpdated = (e: CustomEvent) => {
@@ -568,16 +571,22 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
         setSelectedSupportId(null);
       };
 
+      const onCancelPlacement = () => {
+        setIsPlacementMode(false);
+      };
+
       window.addEventListener('support-created', onSupportCreated as EventListener);
       window.addEventListener('support-updated', onSupportUpdated as EventListener);
       window.addEventListener('support-delete', onSupportDelete as EventListener);
       window.addEventListener('supports-clear-all', onSupportsClearAll);
+      window.addEventListener('supports-cancel-placement', onCancelPlacement);
 
       return () => {
         window.removeEventListener('support-created', onSupportCreated as EventListener);
         window.removeEventListener('support-updated', onSupportUpdated as EventListener);
         window.removeEventListener('support-delete', onSupportDelete as EventListener);
         window.removeEventListener('supports-clear-all', onSupportsClearAll);
+        window.removeEventListener('supports-cancel-placement', onCancelPlacement);
       };
     }, [selectedSupportId]);
 
@@ -860,12 +869,12 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
                       hasBaseplate={!!currentBaseplate}
                       supportsCount={supports.length}
                       isPlacementMode={isPlacementMode}
-                      onTogglePlacementMode={() => {
-                        setIsPlacementMode(!isPlacementMode);
-                      }}
                       onStartPlacement={(type) => {
                         setSelectedSupportType(type);
                         setIsPlacementMode(true);
+                      }}
+                      onCancelPlacement={() => {
+                        setIsPlacementMode(false);
                       }}
                       selectedSupportType={selectedSupportType}
                       onSupportTypeChange={setSelectedSupportType}
