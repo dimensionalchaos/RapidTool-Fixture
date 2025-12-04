@@ -181,11 +181,14 @@ const getProjectedSizeForOrientation = (bounds: BoundsSummary, orientation: View
   }
 };
 
-// Ground grid that scales with the model
-function ScalableGrid({ modelBounds }: { modelBounds: BoundsSummary | null }) {
+// Ground grid that scales with the model and adapts to model position
+function ScalableGrid({ modelBounds, modelPosition }: { 
+  modelBounds: BoundsSummary | null;
+  modelPosition?: THREE.Vector3;
+}) {
   const gridRef = useRef<THREE.Group>(null);
   
-  // Calculate grid size based on model bounds
+  // Calculate grid size based on model bounds AND current position
   const gridConfig = useMemo(() => {
     if (!modelBounds) {
       // Default grid when no model loaded
@@ -193,10 +196,28 @@ function ScalableGrid({ modelBounds }: { modelBounds: BoundsSummary | null }) {
     }
     
     // Get the largest dimension of the model
-    const maxDim = Math.max(modelBounds.size.x, modelBounds.size.z);
+    const modelMaxDim = Math.max(modelBounds.size.x, modelBounds.size.z);
     
-    // Make grid about 20% larger than the model, rounded to a nice number
-    const rawSize = maxDim * 1.2;
+    // Calculate how far the model extends from origin considering its position
+    let maxExtent = modelMaxDim * 0.6; // Half size + margin
+    
+    if (modelPosition) {
+      // Calculate the furthest point the model reaches from origin
+      const halfSizeX = modelBounds.size.x / 2;
+      const halfSizeZ = modelBounds.size.z / 2;
+      
+      // Max extent in each direction (from origin to model edge)
+      const extentPosX = Math.abs(modelPosition.x) + halfSizeX;
+      const extentNegX = Math.abs(modelPosition.x) + halfSizeX;
+      const extentPosZ = Math.abs(modelPosition.z) + halfSizeZ;
+      const extentNegZ = Math.abs(modelPosition.z) + halfSizeZ;
+      
+      // Take the maximum extent needed in any direction
+      maxExtent = Math.max(extentPosX, extentNegX, extentPosZ, extentNegZ);
+    }
+    
+    // Make grid large enough to cover the model at its position with 20% margin
+    const rawSize = maxExtent * 2 * 1.2;
     
     // Round to nearest nice value (10, 25, 50, 100, 250, 500, etc.)
     const niceValues = [10, 25, 50, 100, 250, 500, 1000, 2500, 5000];
@@ -223,7 +244,7 @@ function ScalableGrid({ modelBounds }: { modelBounds: BoundsSummary | null }) {
     const majorDivisions = cellSize >= 100 ? 1 : (cellSize >= 25 ? 4 : 10);
     
     return { size: gridSize, divisions, majorDivisions, cellSize };
-  }, [modelBounds]);
+  }, [modelBounds, modelPosition]);
 
   // Create axis lines using useMemo to avoid recreation on every render
   const xAxisLine = useMemo(() => {
@@ -1369,8 +1390,8 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       {/* Environment - background disabled to prevent texture regeneration issues */}
       <Environment preset="warehouse" background={false} />
 
-      {/* Scalable grid - sized based on model bounds */}
-      <ScalableGrid modelBounds={modelBounds} />
+      {/* Scalable grid - sized based on model bounds and position */}
+      <ScalableGrid modelBounds={modelBounds} modelPosition={modelTransform.position} />
 
       {/* Base plate */}
       {basePlate && (
