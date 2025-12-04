@@ -671,6 +671,14 @@ export function useViewer(
         meshesRef.current.forEach(mesh => {
           mesh.position.y += dropDy;
         });
+        
+        // Notify SelectableTransformControls about the position change
+        // so the cumulative transform is updated and gizmo won't reset
+        window.dispatchEvent(
+          new CustomEvent('baseplate-moved-model', {
+            detail: { deltaY: dropDy }
+          })
+        );
       }
 
       // Add/update a large ground plane so it doesn't feel like the edge

@@ -33,6 +33,94 @@ const finalizeGeometry = (geometry: THREE.BufferGeometry) => {
   return geometry;
 };
 
+// Helper function to compute signed area of a polygon (positive = CCW, negative = CW)
+const computeSignedArea = (polygon: Array<{x: number; y: number}>): number => {
+  let area = 0;
+  const n = polygon.length;
+  for (let i = 0; i < n; i++) {
+    const curr = polygon[i];
+    const next = polygon[(i + 1) % n];
+    area += (curr.x * next.y - next.x * curr.y);
+  }
+  return area / 2;
+};
+
+// Helper function to offset a 2D polygon outward by a given distance
+// Automatically detects winding order and offsets outward
+const offsetPolygon = (polygon: Array<{x: number; y: number}>, distance: number): Array<{x: number; y: number}> => {
+  if (polygon.length < 3 || distance === 0) return polygon;
+  
+  // Determine winding order: positive area = CCW, negative = CW
+  const signedArea = computeSignedArea(polygon);
+  const isCCW = signedArea >= 0;
+  
+  const result: Array<{x: number; y: number}> = [];
+  const n = polygon.length;
+  
+  for (let i = 0; i < n; i++) {
+    const prev = polygon[(i - 1 + n) % n];
+    const curr = polygon[i];
+    const next = polygon[(i + 1) % n];
+    
+    // Edge vectors (direction of traversal)
+    const e1x = curr.x - prev.x;
+    const e1y = curr.y - prev.y;
+    const e2x = next.x - curr.x;
+    const e2y = next.y - curr.y;
+    
+    // Normalize edge vectors
+    const len1 = Math.hypot(e1x, e1y) || 1;
+    const len2 = Math.hypot(e2x, e2y) || 1;
+    const d1x = e1x / len1;
+    const d1y = e1y / len1;
+    const d2x = e2x / len2;
+    const d2y = e2y / len2;
+    
+    // Outward normals - perpendicular to edge direction
+    // For CCW polygon: outward is to the LEFT of the edge direction = (-dy, dx)
+    // For CW polygon: outward is to the RIGHT of the edge direction = (dy, -dx)
+    let out1x: number, out1y: number, out2x: number, out2y: number;
+    if (isCCW) {
+      out1x = -d1y; out1y = d1x;
+      out2x = -d2y; out2y = d2x;
+    } else {
+      out1x = d1y; out1y = -d1x;
+      out2x = d2y; out2y = -d2x;
+    }
+    
+    // Average normal direction at vertex
+    let avgX = out1x + out2x;
+    let avgY = out1y + out2y;
+    const avgLen = Math.hypot(avgX, avgY);
+    
+    if (avgLen < 0.001) {
+      // Edges are nearly parallel (straight line), just offset along one normal
+      result.push({
+        x: curr.x + out1x * distance,
+        y: curr.y + out1y * distance
+      });
+    } else {
+      avgX /= avgLen;
+      avgY /= avgLen;
+      
+      // Calculate miter length (how far to push the vertex)
+      // miterLen = distance / cos(angle between normal and average)
+      const dot = out1x * avgX + out1y * avgY;
+      const miterLen = dot > 0.1 ? distance / dot : distance;
+      
+      // Clamp miter length to avoid spikes at sharp corners
+      const clampedMiter = Math.min(miterLen, distance * 4);
+      
+      result.push({
+        x: curr.x + avgX * clampedMiter,
+        y: curr.y + avgY * clampedMiter
+      });
+    }
+  }
+  
+  return result;
+};
+
 const BasePlate: React.FC<BasePlateProps> = ({
   type,
   width = 100,
@@ -105,55 +193,124 @@ const BasePlate: React.FC<BasePlateProps> = ({
       case 'convex-hull':
         if (modelGeometry && modelGeometry.attributes && modelGeometry.attributes.position) {
           try {
-            // Build a 2D convex hull of the XZ projection for precise footprint
+            // === STEP 1: Collect all XZ points from the model (top-down shadow) ===
             const positions = modelGeometry.attributes.position as THREE.BufferAttribute;
-            const points2D: Array<{x:number; z:number}> = [];
+            const xzPoints: Array<{x: number; z: number}> = [];
             const dedupe = new Set<string>();
             const sampleStep = Math.max(1, Math.floor(positions.count / 5000));
             const v = new THREE.Vector3();
-            const originX = modelOrigin?.x ?? 0;
-            const originZ = modelOrigin?.z ?? 0;
+            
             for (let i = 0; i < positions.count; i += sampleStep) {
               v.set(positions.getX(i), positions.getY(i), positions.getZ(i));
               if (modelMatrixWorld) {
                 v.applyMatrix4(modelMatrixWorld);
               }
-              const x = v.x - originX;
-              const z = v.z - originZ;
-              const key = `${Math.round(x*100)}:${Math.round(z*100)}`;
-              if (!dedupe.has(key)) { dedupe.add(key); points2D.push({x, z}); }
+              // Project to XZ plane (the floor)
+              const key = `${Math.round(v.x * 100)}:${Math.round(v.z * 100)}`;
+              if (!dedupe.has(key)) {
+                dedupe.add(key);
+                xzPoints.push({ x: v.x, z: v.z });
+              }
             }
 
-            if (points2D.length >= 3) {
-              // Monotone chain convex hull in 2D, already relative to model origin
-              const sorted = points2D.slice().sort((a,b)=> a.x===b.x ? a.z-b.z : a.x-b.x);
-              const cross = (o:any,a:any,b:any)=> (a.x-o.x)*(b.z-o.z) - (a.z-o.z)*(b.x-o.x);
-              const lower:any[]=[]; for (const p of sorted){ while(lower.length>=2 && cross(lower[lower.length-2], lower[lower.length-1], p) <= 0) lower.pop(); lower.push(p);} 
-              const upper:any[]=[]; for (let i=sorted.length-1;i>=0;i--){ const p=sorted[i]; while(upper.length>=2 && cross(upper[upper.length-2], upper[upper.length-1], p) <= 0) upper.pop(); upper.push(p);} 
-              const hull = lower.slice(0, lower.length-1).concat(upper.slice(0, upper.length-1));
+            if (xzPoints.length < 3) {
+              throw new Error('Not enough points for convex hull');
+            }
 
-              // Inflate by oversizeXY away from the model origin so the baseplate
-              // grows outward but stays centered under the model position.
-              const margin = (typeof oversizeXY === 'number' ? oversizeXY : 10);
-              const inflated = hull.map(p=>{
-                const len = Math.hypot(p.x, p.z) || 1;
-                const nx = p.x / len;
-                const nz = p.z / len;
-                return { x: p.x + nx * margin, z: p.z + nz * margin };
+            // === STEP 2: Compute 2D convex hull using monotone chain ===
+            // Sort points by x, then by z
+            const sorted = xzPoints.slice().sort((a, b) => a.x === b.x ? a.z - b.z : a.x - b.x);
+            
+            // Cross product for 2D points (using x and z)
+            const cross = (o: {x: number; z: number}, a: {x: number; z: number}, b: {x: number; z: number}) => 
+              (a.x - o.x) * (b.z - o.z) - (a.z - o.z) * (b.x - o.x);
+            
+            // Build lower hull
+            const lower: Array<{x: number; z: number}> = [];
+            for (const p of sorted) {
+              while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) {
+                lower.pop();
+              }
+              lower.push(p);
+            }
+            
+            // Build upper hull
+            const upper: Array<{x: number; z: number}> = [];
+            for (let i = sorted.length - 1; i >= 0; i--) {
+              const p = sorted[i];
+              while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) {
+                upper.pop();
+              }
+              upper.push(p);
+            }
+            
+            // Concatenate hulls (remove last point of each as it's repeated)
+            // This produces a CCW hull in XZ space
+            const hull = lower.slice(0, lower.length - 1).concat(upper.slice(0, upper.length - 1));
+
+            // === STEP 3: Apply padding by offsetting each vertex outward ===
+            const margin = typeof oversizeXY === 'number' ? oversizeXY : 0;
+            let finalHull = hull;
+            
+            if (margin > 0) {
+              // Compute centroid of the hull
+              let cx = 0, cz = 0;
+              for (const p of hull) {
+                cx += p.x;
+                cz += p.z;
+              }
+              cx /= hull.length;
+              cz /= hull.length;
+              
+              // Offset each vertex outward from centroid by margin
+              // This is a simple radial offset that always expands the polygon
+              finalHull = hull.map(p => {
+                const dx = p.x - cx;
+                const dz = p.z - cz;
+                const dist = Math.hypot(dx, dz);
+                if (dist < 0.001) return p; // Point is at centroid, don't move
+                // Move point outward by margin amount
+                const scale = (dist + margin) / dist;
+                return {
+                  x: cx + dx * scale,
+                  z: cz + dz * scale
+                };
               });
-
-              // Create shape from hull polygon directly in model-origin space
-              const shape = new THREE.Shape();
-              shape.moveTo(inflated[0].x, inflated[0].z);
-              for (let i=1;i<inflated.length;i++){ shape.lineTo(inflated[i].x, inflated[i].z); }
-              shape.closePath();
-
-              const g = new THREE.ExtrudeGeometry(shape, { depth: depth, bevelEnabled: false });
-              // Center along extrusion axis and align thickness to Y
-              g.translate(0, 0, -depth / 2);
-              g.rotateX(-Math.PI / 2);
-              return finalizeGeometry(g);
             }
+
+            // === STEP 4: Create THREE.Shape ===
+            // Shape is defined in XY plane, we'll rotate to XZ after extrusion
+            // Map our XZ coordinates to Shape's XY: shape.x = world.x, shape.y = -world.z
+            // We negate Z because rotateX(-PI/2) will flip the Y axis
+            const shape = new THREE.Shape();
+            shape.moveTo(finalHull[0].x, -finalHull[0].z);
+            for (let i = 1; i < finalHull.length; i++) {
+              shape.lineTo(finalHull[i].x, -finalHull[i].z);
+            }
+            shape.closePath();
+
+            // === STEP 5: Extrude and position with bevel/chamfer ===
+            // Calculate bevel size based on depth (similar to rectangular baseplate)
+            const bevelThickness = Math.min(0.6, depth * 0.15);
+            const bevelSize = Math.min(0.8, depth * 0.1);
+            // Reduce extrusion depth so total height (including bevels) equals specified depth
+            const extrudeDepth = Math.max(0.1, depth - 2 * bevelThickness);
+            
+            const g = new THREE.ExtrudeGeometry(shape, { 
+              depth: extrudeDepth, 
+              bevelEnabled: true,
+              bevelThickness: bevelThickness,
+              bevelSize: bevelSize,
+              bevelSegments: 2,
+            });
+            
+            // After rotation, geometry spans Y=-bevelThickness to Y=extrudeDepth+bevelThickness
+            // = Y=-bevelThickness to Y=(depth-2*bevel)+bevel = Y=-bevelThickness to Y=depth-bevelThickness
+            // Translate up by bevelThickness so bottom sits at Y=0, top at Y=depth
+            g.rotateX(-Math.PI / 2);
+            g.translate(0, bevelThickness, 0);
+            
+            return finalizeGeometry(g);
           } catch (error) {
             console.warn('Error creating convex hull geometry, falling back to rectangular:', error);
           }
@@ -178,7 +335,8 @@ const BasePlate: React.FC<BasePlateProps> = ({
           depth: depth,
           bevelEnabled: false
         });
-        g.translate(0, 0, -depth / 2);
+        // rotateX(-PI/2): extrusion from Z=0..depth becomes Y=0..depth
+        // No pre-translation needed - bottom at Y=0, top at Y=depth
         g.rotateX(-Math.PI / 2);
         return finalizeGeometry(g);
 
@@ -200,15 +358,19 @@ const BasePlate: React.FC<BasePlateProps> = ({
           shape.lineTo(-hw, -hh + r);
           shape.quadraticCurveTo(-hw, -hh, -hw + r, -hh);
 
+          const bevelThickness = Math.min(0.6, depth * 0.15);
+          // Reduce extrusion depth so total height (including bevels) equals specified depth
+          const extrudeDepth = Math.max(0.1, depth - 2 * bevelThickness);
           const g = new THREE.ExtrudeGeometry(shape, {
-            depth: depth,
+            depth: extrudeDepth,
             bevelEnabled: true,
-            bevelThickness: Math.min(0.6, depth * 0.15),
+            bevelThickness: bevelThickness,
             bevelSize: Math.min(0.8, r * 0.25),
             bevelSegments: 2,
           });
-          g.translate(0, 0, -depth / 2);
           g.rotateX(-Math.PI / 2);
+          // Translate up by bevelThickness so bottom sits at Y=0, top at Y=depth
+          g.translate(0, bevelThickness, 0);
           return finalizeGeometry(g);
         }
 
@@ -229,15 +391,19 @@ const BasePlate: React.FC<BasePlateProps> = ({
           shape.lineTo(-hw, -hh + r);
           shape.quadraticCurveTo(-hw, -hh, -hw + r, -hh);
 
+          const bevelThickness = Math.min(0.6, depth * 0.15);
+          // Reduce extrusion depth so total height (including bevels) equals specified depth
+          const extrudeDepth = Math.max(0.1, depth - 2 * bevelThickness);
           const g = new THREE.ExtrudeGeometry(shape, {
-            depth: depth,
+            depth: extrudeDepth,
             bevelEnabled: true,
-            bevelThickness: Math.min(0.6, depth * 0.15),
+            bevelThickness: bevelThickness,
             bevelSize: Math.min(0.8, r * 0.2),
             bevelSegments: 2,
           });
-          g.translate(0, 0, -depth / 2);
           g.rotateX(-Math.PI / 2);
+          // Translate up by bevelThickness so bottom sits at Y=0, top at Y=depth
+          g.translate(0, bevelThickness, 0);
           return finalizeGeometry(g);
         }
 
@@ -259,15 +425,19 @@ const BasePlate: React.FC<BasePlateProps> = ({
           shape.lineTo(-hw, -hh + r);
           shape.quadraticCurveTo(-hw, -hh, -hw + r, -hh);
 
+          const bevelThickness = Math.min(0.6, depth * 0.15);
+          // Reduce extrusion depth so total height (including bevels) equals specified depth
+          const extrudeDepth = Math.max(0.1, depth - 2 * bevelThickness);
           const g = new THREE.ExtrudeGeometry(shape, {
-            depth: depth,
+            depth: extrudeDepth,
             bevelEnabled: true,
-            bevelThickness: Math.min(0.6, depth * 0.15),
+            bevelThickness: bevelThickness,
             bevelSize: Math.min(0.8, r * 0.25),
             bevelSegments: 2,
           });
-          g.translate(0, 0, -depth / 2);
           g.rotateX(-Math.PI / 2);
+          // Translate up by bevelThickness so bottom sits at Y=0, top at Y=depth
+          g.translate(0, bevelThickness, 0);
           return finalizeGeometry(g);
         }
     }

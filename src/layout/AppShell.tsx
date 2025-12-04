@@ -1,4 +1,4 @@
-import React, { forwardRef, ReactNode, useState } from "react";
+import React, { forwardRef, ReactNode, useState, useCallback, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
@@ -6,11 +6,35 @@ import { ThemeToggle } from "@/components/ThemeToggle";
 import ViewCube from "@/components/ViewCube";
 import VerticalToolbar from "@/components/VerticalToolbar";
 import ThreeDViewer from "@/components/3DViewer";
-import BaseplateDialog from "@/components/BaseplateDialog";
 import SupportsPanel from "@/components/Supports/SupportsPanel";
 import BooleanOperationsPanel from "@/components/BooleanOperationsPanel";
 import PartPropertiesAccordion from "@/components/PartPropertiesAccordion";
+import ContextOptionsPanel, { WorkflowStep, WORKFLOW_STEPS } from "@/components/ContextOptionsPanel";
+import {
+  ImportStepContent,
+  BaseplatesStepContent,
+  SupportsStepContent,
+  CavityStepContent,
+  ClampsStepContent,
+  LabelsStepContent,
+  DrillStepContent,
+  OptimizeStepContent,
+  ExportStepContent
+} from "@/components/ContextOptionsPanel/steps";
+import UnitsDialog from "@/modules/FileImport/components/UnitsDialog";
+import MeshOptimizationDialog from "@/modules/FileImport/components/MeshOptimizationDialog";
+import { useFileProcessing } from "@/modules/FileImport/hooks/useFileProcessing";
 import { ProcessedFile } from "@/modules/FileImport/types";
+import {
+  analyzeMesh,
+  repairMesh,
+  decimateMesh,
+  MeshAnalysisResult,
+  MeshProcessingProgress,
+  DECIMATION_THRESHOLD,
+  DECIMATION_TARGET,
+} from "@/modules/FileImport/services/meshAnalysis";
+import * as THREE from 'three';
 import {
   Cpu,
   Upload,
@@ -100,17 +124,49 @@ interface AppShellProps {
 }
 
 const AppShell = forwardRef<AppShellHandle, AppShellProps>(
-  ({ children, onLogout, onToggleDesignMode, designMode = false, isProcessing = false, fileStats, currentFile }, ref) => {
-    const [isBaseplateDialogOpen, setIsBaseplateDialogOpen] = useState(false);
+  ({ children, onLogout, onToggleDesignMode, designMode = false, isProcessing: externalProcessing = false, fileStats, currentFile }, ref) => {
+    // UI State
+    // UI State
     const [isSupportsOpen, setIsSupportsOpen] = useState(false);
     const [isCavityOpen, setIsCavityOpen] = useState(false);
-    const [isFileImportCollapsed, setIsFileImportCollapsed] = useState(false);
+    const [isContextPanelCollapsed, setIsContextPanelCollapsed] = useState(false);
     const [isPropertiesCollapsed, setIsPropertiesCollapsed] = useState(false);
     const [undoStack, setUndoStack] = useState<any[]>([]);
     const [redoStack, setRedoStack] = useState<any[]>([]);
-    const [currentBaseplate, setCurrentBaseplate] = useState<{ id: string; type: string } | null>(null);
+    const [currentBaseplate, setCurrentBaseplate] = useState<{ id: string; type: string; padding?: number; height?: number } | null>(null);
     const [cavityBaseMesh, setCavityBaseMesh] = useState<any | null>(null);
     const [cavityTools, setCavityTools] = useState<any[]>([]);
+
+    // Workflow State
+    const [activeStep, setActiveStep] = useState<WorkflowStep>('import');
+    const [completedSteps, setCompletedSteps] = useState<WorkflowStep[]>([]);
+
+    // File Processing State (moved from FileImport)
+    const [internalFile, setInternalFile] = useState<ProcessedFile | null>(null);
+    const [isProcessing, setIsProcessing] = useState(false);
+    const [fileError, setFileError] = useState<string | null>(null);
+    const [isUnitsDialogOpen, setIsUnitsDialogOpen] = useState(false);
+    const [isOptimizationDialogOpen, setIsOptimizationDialogOpen] = useState(false);
+    const [meshAnalysis, setMeshAnalysis] = useState<MeshAnalysisResult | null>(null);
+    const [meshProgress, setMeshProgress] = useState<MeshProcessingProgress | null>(null);
+    const [isMeshProcessing, setIsMeshProcessing] = useState(false);
+    const [pendingProcessedFile, setPendingProcessedFile] = useState<ProcessedFile | null>(null);
+
+    const pendingFileRef = useRef<File | null>(null);
+    const { processFile, error: fileProcessingError, clearError } = useFileProcessing();
+
+    // Determine the actual file to use (prop or internal)
+    const actualFile = currentFile || internalFile;
+    const actualProcessing = externalProcessing || isProcessing;
+
+    // Support placement state
+    const [isPlacementMode, setIsPlacementMode] = useState(false);
+    const [supports, setSupports] = useState<Array<{ id: string; type: string; height: number; position: { x: number; y: number; z: number } }>>([]);
+    const [supportHeight, setSupportHeight] = useState(20);
+    const [selectedSupportId, setSelectedSupportId] = useState<string | null>(null);
+
+    // Cavity state
+    const [cavityClearance, setCavityClearance] = useState(0.5);
 
     const handleOpenFilePicker = () => {
       const input = document.createElement('input');
@@ -119,12 +175,207 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
       input.onchange = (e) => {
         const file = (e.target as HTMLInputElement).files?.[0];
         if (file) {
-          const event = new CustomEvent('filepicker-selected', { detail: file });
-          window.dispatchEvent(event);
+          handleFileSelected(file);
         }
       };
       input.click();
     };
+
+    // Handle file selection - show units dialog
+    const handleFileSelected = useCallback((file: File) => {
+      console.log('File selected:', file.name);
+      pendingFileRef.current = file;
+      setIsUnitsDialogOpen(true);
+    }, []);
+
+    // Handle units selection and process file
+    const handleUnitsSelected = useCallback(async (units: string) => {
+      if (!pendingFileRef.current) return;
+
+      setIsUnitsDialogOpen(false);
+      setIsProcessing(true);
+      setFileError(null);
+
+      try {
+        const processedFile = await processFile(pendingFileRef.current, units);
+
+        if (processedFile) {
+          // Run mesh analysis
+          setMeshProgress({ stage: 'analyzing', progress: 0, message: 'Analyzing mesh...' });
+          const analysis = await analyzeMesh(processedFile.mesh.geometry, setMeshProgress);
+          setMeshAnalysis(analysis);
+          
+          // Store the processed file for later use
+          setPendingProcessedFile(processedFile);
+          
+          // If mesh has issues or needs decimation, show the optimization dialog
+          if (analysis.issues.length > 0 || analysis.triangleCount > DECIMATION_THRESHOLD) {
+            setIsProcessing(false);
+            setIsOptimizationDialogOpen(true);
+          } else {
+            // Mesh is fine, proceed directly
+            finalizeMeshImport(processedFile);
+          }
+        }
+      } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : 'Failed to process file';
+        setFileError(errorMessage);
+        console.error('Error processing file:', err);
+        setIsProcessing(false);
+      }
+    }, [processFile]);
+
+    // Finalize the mesh import
+    const finalizeMeshImport = useCallback((processedFile: ProcessedFile) => {
+      setInternalFile(processedFile);
+      
+      // Dispatch event for 3D viewer to pick up
+      window.dispatchEvent(new CustomEvent('file-imported', { detail: processedFile }));
+
+      setIsProcessing(false);
+      setIsOptimizationDialogOpen(false);
+      setPendingProcessedFile(null);
+      setMeshAnalysis(null);
+      setMeshProgress(null);
+
+      // Mark import step as completed and auto-advance to baseplates
+      if (!completedSteps.includes('import')) {
+        setCompletedSteps(prev => [...prev, 'import']);
+      }
+    }, [completedSteps]);
+
+    // Handle proceeding with original mesh (no optimization)
+    const handleProceedWithOriginal = useCallback(async () => {
+      if (!pendingProcessedFile) return;
+
+      setIsMeshProcessing(true);
+      
+      try {
+        if (meshAnalysis && meshAnalysis.issues.length > 0 && !meshAnalysis.issues.every(i => i.includes('High triangle count'))) {
+          setMeshProgress({ stage: 'repairing', progress: 0, message: 'Repairing mesh...' });
+          const repairResult = await repairMesh(pendingProcessedFile.mesh.geometry, setMeshProgress);
+          
+          if (repairResult.success && repairResult.repairedGeometry) {
+            const repairedMesh = new THREE.Mesh(
+              repairResult.repairedGeometry,
+              pendingProcessedFile.mesh.material
+            );
+            repairedMesh.castShadow = true;
+            repairedMesh.receiveShadow = true;
+            
+            const updatedFile: ProcessedFile = {
+              ...pendingProcessedFile,
+              mesh: repairedMesh,
+              metadata: {
+                ...pendingProcessedFile.metadata,
+                triangles: repairResult.triangleCount,
+              },
+            };
+            
+            finalizeMeshImport(updatedFile);
+          } else {
+            finalizeMeshImport(pendingProcessedFile);
+          }
+        } else {
+          finalizeMeshImport(pendingProcessedFile);
+        }
+      } catch (err) {
+        console.error('Error during mesh repair:', err);
+        finalizeMeshImport(pendingProcessedFile);
+      } finally {
+        setIsMeshProcessing(false);
+      }
+    }, [pendingProcessedFile, meshAnalysis, finalizeMeshImport]);
+
+    // Handle mesh optimization (decimation)
+    const handleOptimizeMesh = useCallback(async () => {
+      if (!pendingProcessedFile) return;
+
+      setIsMeshProcessing(true);
+      
+      try {
+        let currentGeometry = pendingProcessedFile.mesh.geometry;
+        
+        if (meshAnalysis && meshAnalysis.issues.length > 0 && !meshAnalysis.issues.every(i => i.includes('High triangle count'))) {
+          setMeshProgress({ stage: 'repairing', progress: 0, message: 'Repairing mesh...' });
+          const repairResult = await repairMesh(currentGeometry, setMeshProgress);
+          
+          if (repairResult.success && repairResult.repairedGeometry) {
+            currentGeometry = repairResult.repairedGeometry;
+          }
+        }
+        
+        setMeshProgress({ stage: 'decimating', progress: 0, message: 'Decimating mesh...' });
+        const decimationResult = await decimateMesh(currentGeometry, DECIMATION_TARGET, setMeshProgress);
+        
+        if (decimationResult.success && decimationResult.decimatedGeometry) {
+          const decimatedMesh = new THREE.Mesh(
+            decimationResult.decimatedGeometry,
+            pendingProcessedFile.mesh.material
+          );
+          decimatedMesh.castShadow = true;
+          decimatedMesh.receiveShadow = true;
+          
+          const updatedFile: ProcessedFile = {
+            ...pendingProcessedFile,
+            mesh: decimatedMesh,
+            metadata: {
+              ...pendingProcessedFile.metadata,
+              triangles: decimationResult.finalTriangles,
+            },
+          };
+          
+          finalizeMeshImport(updatedFile);
+        } else {
+          setFileError(decimationResult.error || 'Decimation failed');
+          finalizeMeshImport(pendingProcessedFile);
+        }
+      } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : 'Failed to optimize mesh';
+        setFileError(errorMessage);
+        finalizeMeshImport(pendingProcessedFile);
+      } finally {
+        setIsMeshProcessing(false);
+      }
+    }, [pendingProcessedFile, meshAnalysis, finalizeMeshImport]);
+
+    // Handle canceling mesh optimization
+    const handleCancelOptimization = useCallback(() => {
+      setIsOptimizationDialogOpen(false);
+      setPendingProcessedFile(null);
+      setMeshAnalysis(null);
+      setMeshProgress(null);
+      setIsProcessing(false);
+    }, []);
+
+    // Clear file
+    const handleClearFile = useCallback(() => {
+      setInternalFile(null);
+      setFileError(null);
+      clearError();
+      setCompletedSteps(prev => prev.filter(s => s !== 'import'));
+      window.dispatchEvent(new CustomEvent('session-reset'));
+    }, [clearError]);
+
+    // Handle step change from context panel or toolbar
+    const handleStepChange = useCallback((step: WorkflowStep) => {
+      setActiveStep(step);
+      
+      // Close any open panels when changing steps
+      setIsSupportsOpen(false);
+      setIsCavityOpen(false);
+      
+      // Trigger step-specific events
+      switch (step) {
+        case 'supports':
+          window.dispatchEvent(new CustomEvent('open-supports-dialog'));
+          break;
+        case 'cavity':
+          window.dispatchEvent(new CustomEvent('open-cavity-dialog'));
+          setTimeout(() => window.dispatchEvent(new CustomEvent('request-cavity-context')), 0);
+          break;
+      }
+    }, []);
 
     const handleResetSession = () => {
       // Reset all session state - like starting fresh
@@ -135,6 +386,12 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
       setCavityTools([]);
       setIsCavityOpen(false);
       setIsSupportsOpen(false);
+      setInternalFile(null);
+      setFileError(null);
+      setActiveStep('import');
+      setCompletedSteps([]);
+      setSupports([]);
+      setIsPlacementMode(false);
       
       // Dispatch events to reset the 3D scene and clear the file
       window.dispatchEvent(new CustomEvent('viewer-reset'));
@@ -172,9 +429,18 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
     };
 
     const handleBaseplateCreated = (e: CustomEvent) => {
-      const { option } = e.detail;
+      const { option, dimensions } = e.detail;
       const baseplateId = `baseplate-${Date.now()}`;
-      setCurrentBaseplate({ id: baseplateId, type: option });
+      setCurrentBaseplate({ 
+        id: baseplateId, 
+        type: option, 
+        padding: dimensions?.padding || dimensions?.oversizeXY, 
+        height: dimensions?.height 
+      });
+      // Mark baseplates step as completed
+      if (!completedSteps.includes('baseplates')) {
+        setCompletedSteps(prev => [...prev, 'baseplates']);
+      }
       // Also cancel any ongoing supports placement and close panel
       setIsSupportsOpen(false);
       window.dispatchEvent(new Event('supports-cancel-placement'));
@@ -182,16 +448,22 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
 
     const handleBaseplateRemoved = (basePlateId: string) => {
       setCurrentBaseplate(null);
+      setCompletedSteps(prev => prev.filter(s => s !== 'baseplates'));
       window.dispatchEvent(new CustomEvent('remove-baseplate', { detail: { basePlateId } }));
     };
 
+    // Handle tool selection - now also updates active step
     const handleToolSelect = (toolId: string) => {
+      // Update the active step in the context panel
+      if (['import', 'baseplates', 'supports', 'cavity', 'clamps', 'labels', 'drill', 'optimize', 'export'].includes(toolId)) {
+        setActiveStep(toolId as WorkflowStep);
+      }
+
       switch (toolId) {
         case 'import':
-          handleOpenFilePicker();
+          // Just switch to import step, don't open file picker automatically
           return;
         case 'baseplates':
-          setIsBaseplateDialogOpen(true);
           // Close supports and cancel placement if active
           setIsSupportsOpen(false);
           window.dispatchEvent(new Event('supports-cancel-placement'));
@@ -296,7 +568,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
                 size="sm"
                 onClick={handleResetSession}
                 className="tech-transition"
-                disabled={isProcessing}
+                disabled={actualProcessing}
               >
                 <RotateCcw className="w-4 h-4 mr-2" />
                 Reset
@@ -335,24 +607,27 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
 
           {/* Center Section - File Info */}
           <div className="flex items-center gap-4">
-            {fileStats?.name && (
+            {(fileStats?.name || actualFile?.metadata?.name) && (
               <div className="flex items-center gap-3 text-xs font-tech">
                 <div className="flex items-center gap-1">
                   <Box className="w-3 h-3 text-muted-foreground" />
-                  <span className="text-foreground">{fileStats.name}</span>
+                  <span className="text-foreground">{fileStats?.name || actualFile?.metadata?.name}</span>
                 </div>
-                {fileStats.triangles && (
+                {(fileStats?.triangles || actualFile?.metadata?.triangles) && (
                   <Badge variant="secondary" className="font-tech text-xs">
-                    {fileStats.triangles.toLocaleString()} tri
+                    {(fileStats?.triangles || actualFile?.metadata?.triangles)?.toLocaleString()} tri
                   </Badge>
                 )}
-                {fileStats.size && (
-                  <span className="text-muted-foreground">{fileStats.size}</span>
+                {(fileStats?.size || actualFile?.metadata?.dimensions) && (
+                  <span className="text-muted-foreground">
+                    {fileStats?.size || 
+                      `${actualFile?.metadata?.dimensions?.x.toFixed(1)}×${actualFile?.metadata?.dimensions?.y.toFixed(1)}×${actualFile?.metadata?.dimensions?.z.toFixed(1)} ${actualFile?.metadata?.units || ''}`}
+                  </span>
                 )}
               </div>
             )}
 
-            {isProcessing && (
+            {actualProcessing && (
               <div className="flex items-center gap-2 text-xs font-tech text-primary">
                 <div className="w-3 h-3 border border-current border-t-transparent rounded-full animate-spin-smooth" />
                 <span className="text-primary">Processing...</span>
@@ -368,7 +643,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
                 size="sm"
                 onClick={() => handleSetOrientation('front')}
                 className="tech-transition px-2"
-                disabled={isProcessing}
+                disabled={actualProcessing}
                 title="Front View"
               >
                 <IconIsoFace className="w-4 h-4" />
@@ -378,7 +653,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
                 size="sm"
                 onClick={() => handleSetOrientation('back')}
                 className="tech-transition px-2"
-                disabled={isProcessing}
+                disabled={actualProcessing}
                 title="Back View"
               >
                 <IconIsoFace className="w-4 h-4 rotate-180" />
@@ -388,7 +663,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
                 size="sm"
                 onClick={() => handleSetOrientation('left')}
                 className="tech-transition px-2"
-                disabled={isProcessing}
+                disabled={actualProcessing}
                 title="Left View"
               >
                 <IconIsoLeftFace className="w-4 h-4" />
@@ -398,7 +673,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
                 size="sm"
                 onClick={() => handleSetOrientation('right')}
                 className="tech-transition px-2"
-                disabled={isProcessing}
+                disabled={actualProcessing}
                 title="Right View"
               >
                 <IconIsoFace className="w-4 h-4" />
@@ -408,7 +683,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
                 size="sm"
                 onClick={() => handleSetOrientation('top')}
                 className="tech-transition px-2"
-                disabled={isProcessing}
+                disabled={actualProcessing}
                 title="Top View"
               >
                 <IconTopFace className="w-4 h-4" />
@@ -418,7 +693,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
                 size="sm"
                 onClick={() => handleSetOrientation('iso')}
                 className="tech-transition px-2"
-                disabled={isProcessing}
+                disabled={actualProcessing}
                 title="Isometric View"
               >
                 <IconIsoTop className="w-4 h-4" />
@@ -445,36 +720,36 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
         <div className="flex-1 flex overflow-hidden">
           {/* Left Static Vertical Toolbar */}
           <aside className="w-14 flex-shrink-0 border-r border-border/50 tech-glass flex flex-col justify-center">
-            <VerticalToolbar onToolSelect={handleToolSelect} />
+            <VerticalToolbar onToolSelect={handleToolSelect} activeTool={activeStep} />
           </aside>
 
-          {/* Collapsible File Import Section */}
+          {/* Collapsible Context Options Panel */}
           <aside 
             className="border-r border-border/50 tech-glass flex flex-col overflow-hidden flex-shrink-0"
             style={{ 
-              width: isFileImportCollapsed ? 48 : 320,
+              width: isContextPanelCollapsed ? 48 : 320,
               transition: 'width 300ms ease-in-out'
             }}
           >
             <div className="p-2 border-b border-border/50 flex items-center justify-between flex-shrink-0">
-              {!isFileImportCollapsed && (
-                <h3 className="font-tech font-semibold text-sm whitespace-nowrap">File Import</h3>
+              {!isContextPanelCollapsed && (
+                <h3 className="font-tech font-semibold text-sm whitespace-nowrap">Context Options</h3>
               )}
               <Button
                 variant="ghost"
                 size="sm"
                 onClick={() => {
-                  const next = !isFileImportCollapsed;
-                  setIsFileImportCollapsed(next);
+                  const next = !isContextPanelCollapsed;
+                  setIsContextPanelCollapsed(next);
                   setTimeout(() => {
                     window.dispatchEvent(new Event('resize'));
                     window.dispatchEvent(new CustomEvent('viewer-resize'));
                   }, 320);
                 }}
-                className={`w-8 h-8 p-0 tech-transition hover:bg-primary/10 hover:text-primary flex-shrink-0 ${isFileImportCollapsed ? 'mx-auto' : ''}`}
-                title={isFileImportCollapsed ? 'Expand File Import' : 'Collapse File Import'}
+                className={`w-8 h-8 p-0 tech-transition hover:bg-primary/10 hover:text-primary flex-shrink-0 ${isContextPanelCollapsed ? 'mx-auto' : ''}`}
+                title={isContextPanelCollapsed ? 'Expand Panel' : 'Collapse Panel'}
               >
-                {isFileImportCollapsed ? (
+                {isContextPanelCollapsed ? (
                   <ChevronRight className="w-4 h-4" />
                 ) : (
                   <ChevronLeft className="w-4 h-4" />
@@ -482,11 +757,104 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
               </Button>
             </div>
 
-            {!isFileImportCollapsed && (
-              <div className="flex-1 overflow-auto">
-                {children && React.cloneElement(children as React.ReactElement, {
-                  isInCollapsiblePanel: true
-                })}
+            {!isContextPanelCollapsed && (
+              <div className="flex-1 overflow-hidden">
+                <ContextOptionsPanel
+                  currentFile={actualFile}
+                  activeStep={activeStep}
+                  onStepChange={handleStepChange}
+                  completedSteps={completedSteps}
+                  isProcessing={actualProcessing}
+                >
+                  {/* Render step-specific content */}
+                  {activeStep === 'import' && (
+                    <ImportStepContent
+                      currentFile={actualFile}
+                      isProcessing={actualProcessing}
+                      error={fileError}
+                      onFileSelected={handleFileSelected}
+                      onClearFile={handleClearFile}
+                    />
+                  )}
+                  {activeStep === 'baseplates' && (
+                    <BaseplatesStepContent
+                      hasWorkpiece={!!actualFile}
+                      currentBaseplate={currentBaseplate}
+                      onSelectBaseplate={(type, options) => {
+                        window.dispatchEvent(new CustomEvent('create-baseplate', {
+                          detail: { 
+                            type: 'baseplate',
+                            option: type,
+                            dimensions: {
+                              padding: options.padding,
+                              height: options.height,
+                              oversizeXY: options.padding // For convex-hull
+                            }
+                          }
+                        }));
+                      }}
+                      onRemoveBaseplate={() => currentBaseplate && handleBaseplateRemoved(currentBaseplate.id)}
+                    />
+                  )}
+                  {activeStep === 'supports' && (
+                    <SupportsStepContent
+                      hasBaseplate={!!currentBaseplate}
+                      supports={supports}
+                      isPlacementMode={isPlacementMode}
+                      onTogglePlacementMode={() => {
+                        setIsPlacementMode(!isPlacementMode);
+                        window.dispatchEvent(new CustomEvent('supports-toggle-placement', { detail: !isPlacementMode }));
+                      }}
+                      onSupportSelect={setSelectedSupportId}
+                      onSupportDelete={(id) => {
+                        setSupports(prev => prev.filter(s => s.id !== id));
+                        window.dispatchEvent(new CustomEvent('support-delete', { detail: id }));
+                      }}
+                      selectedSupportId={selectedSupportId}
+                      supportHeight={supportHeight}
+                      onSupportHeightChange={setSupportHeight}
+                    />
+                  )}
+                  {activeStep === 'cavity' && (
+                    <CavityStepContent
+                      hasWorkpiece={!!actualFile}
+                      hasBaseplate={!!currentBaseplate}
+                      clearance={cavityClearance}
+                      onClearanceChange={setCavityClearance}
+                      onExecuteSubtract={() => {
+                        window.dispatchEvent(new CustomEvent('cavity-execute', { detail: { clearance: cavityClearance } }));
+                      }}
+                      onPreview={() => {
+                        window.dispatchEvent(new CustomEvent('cavity-preview', { detail: { clearance: cavityClearance } }));
+                      }}
+                    />
+                  )}
+                  {activeStep === 'clamps' && (
+                    <ClampsStepContent
+                      hasWorkpiece={!!actualFile}
+                    />
+                  )}
+                  {activeStep === 'labels' && (
+                    <LabelsStepContent
+                      hasWorkpiece={!!actualFile || !!currentBaseplate}
+                    />
+                  )}
+                  {activeStep === 'drill' && (
+                    <DrillStepContent
+                      hasWorkpiece={!!actualFile || !!currentBaseplate}
+                    />
+                  )}
+                  {activeStep === 'optimize' && (
+                    <OptimizeStepContent
+                      hasFixture={!!currentBaseplate}
+                    />
+                  )}
+                  {activeStep === 'export' && (
+                    <ExportStepContent
+                      hasFixture={!!actualFile || !!currentBaseplate}
+                    />
+                  )}
+                </ContextOptionsPanel>
               </div>
             )}
           </aside>
@@ -494,10 +862,32 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
           {/* Main Viewport - this is the only flex element */}
           <main className="flex-1 relative min-w-0">
             <ThreeDViewer
-              currentFile={currentFile}
-              isProcessing={isProcessing}
+              currentFile={actualFile}
+              isProcessing={actualProcessing}
               onComponentPlaced={handleComponentPlaced}
             />
+
+            {/* Floating Tips Overlay */}
+            {(() => {
+              const currentStepConfig = WORKFLOW_STEPS.find(s => s.id === activeStep);
+              return currentStepConfig?.helpText?.length ? (
+                <div className="absolute top-4 left-4 z-10 max-w-xs">
+                  <div className="tech-glass rounded-lg p-3 text-xs text-muted-foreground font-tech space-y-1.5 bg-background/80 backdrop-blur-sm border border-border/50 shadow-lg">
+                    <p className="font-semibold text-foreground flex items-center gap-1.5">
+                      <span>💡</span> Tips
+                    </p>
+                    <ul className="space-y-1 ml-1">
+                      {currentStepConfig.helpText.map((tip, i) => (
+                        <li key={i} className="flex items-start gap-2">
+                          <ChevronRight className="w-3 h-3 mt-0.5 flex-shrink-0 text-primary" />
+                          <span>{tip}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              ) : null;
+            })()}
 
             {/* ViewCube temporarily disabled
             <div className="absolute top-4 right-4 z-10">
@@ -516,7 +906,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
           <aside 
             className="border-l border-border/50 tech-glass flex flex-col overflow-hidden flex-shrink-0"
             style={{ 
-              width: isPropertiesCollapsed ? 48 : 250,
+              width: isPropertiesCollapsed ? 48 : 280,
               transition: 'width 300ms ease-in-out'
             }}
           >
@@ -549,7 +939,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
             {!isPropertiesCollapsed && (
               <div className="p-4 flex-1 overflow-auto">
                 {/* Part Properties Accordion - File Details and Transform controls */}
-                <PartPropertiesAccordion hasModel={!!currentFile} currentFile={currentFile} />
+                <PartPropertiesAccordion hasModel={!!actualFile} currentFile={actualFile} />
 
                 {/* Subtract Workpieces panel anchored here */}
                 {isCavityOpen && (
@@ -587,24 +977,6 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
           </div>
         </footer>
 
-        {/* Baseplate Selection Dialog */}
-        <BaseplateDialog
-          isOpen={isBaseplateDialogOpen}
-          onOpenChange={setIsBaseplateDialogOpen}
-          onBaseplateSelect={(type, option) => {
-            window.dispatchEvent(new CustomEvent('create-baseplate', {
-              detail: {
-                type,
-                option,
-                dimensions: { padding: 10, height: 10 }
-              }
-            }));
-            setIsBaseplateDialogOpen(false);
-          }}
-          currentBaseplate={currentBaseplate}
-          onRemoveBaseplate={handleBaseplateRemoved}
-        />
-
         {/* Supports Panel */}
         <SupportsPanel
           open={isSupportsOpen}
@@ -612,6 +984,27 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
             setIsSupportsOpen(false);
             window.dispatchEvent(new Event('supports-cancel-placement'));
           }}
+        />
+
+        {/* Units Selection Dialog */}
+        <UnitsDialog
+          isOpen={isUnitsDialogOpen}
+          onOpenChange={setIsUnitsDialogOpen}
+          onUnitsSelect={handleUnitsSelected}
+          fileName={pendingFileRef.current?.name || ''}
+          fileSize={pendingFileRef.current ? `${(pendingFileRef.current.size / 1024 / 1024).toFixed(2)} MB` : ''}
+        />
+
+        {/* Mesh Optimization Dialog */}
+        <MeshOptimizationDialog
+          open={isOptimizationDialogOpen}
+          onOpenChange={setIsOptimizationDialogOpen}
+          analysis={meshAnalysis}
+          progress={meshProgress}
+          isProcessing={isMeshProcessing}
+          onProceedWithOriginal={handleProceedWithOriginal}
+          onOptimizeMesh={handleOptimizeMesh}
+          onCancel={handleCancelOptimization}
         />
       </div>
     );

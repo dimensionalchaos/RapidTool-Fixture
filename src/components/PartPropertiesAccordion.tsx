@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Accordion,
   AccordionContent,
@@ -8,7 +8,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
-import { RotateCcw, Move, RotateCw, FileText, Info } from 'lucide-react';
+import { RotateCcw, Move, RotateCw, FileText, Info, ToggleLeft, ToggleRight } from 'lucide-react';
 import * as THREE from 'three';
 import { ProcessedFile } from '@/modules/FileImport/types';
 
@@ -17,29 +17,67 @@ interface PartTransform {
   rotation: { x: number; y: number; z: number }; // in degrees for UI
 }
 
+type PositioningMode = 'absolute' | 'incremental';
+
 interface PartPropertiesAccordionProps {
   hasModel: boolean;
   currentFile?: ProcessedFile | null;
 }
 
 const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({ hasModel, currentFile }) => {
+  // Current transform (what's displayed in the UI)
   const [transform, setTransform] = useState<PartTransform>({
     position: { x: 0, y: 0, z: 0 },
     rotation: { x: 0, y: 0, z: 0 },
   });
+
+  // Positioning mode: absolute (wrt original) or incremental (wrt last position)
+  const [positioningMode, setPositioningMode] = useState<PositioningMode>('absolute');
+
+  // Original transform - captured when model is first loaded
+  const originalTransformRef = useRef<PartTransform>({
+    position: { x: 0, y: 0, z: 0 },
+    rotation: { x: 0, y: 0, z: 0 },
+  });
   
-  // Store the initial transform when model is first loaded (for reset functionality)
-  const [initialTransform, setInitialTransform] = useState<PartTransform | null>(null);
+  // Last incremental position - updated when switching to incremental mode or after restore
+  const lastIncrementalTransformRef = useRef<PartTransform>({
+    position: { x: 0, y: 0, z: 0 },
+    rotation: { x: 0, y: 0, z: 0 },
+  });
+  
+  // Flag to track if we've captured the original transform
+  const hasOriginalTransformRef = useRef(false);
 
   // Convert radians to degrees for display
   const radToDeg = (rad: number) => (rad * 180) / Math.PI;
   // Convert degrees to radians for internal use
   const degToRad = (deg: number) => (deg * Math.PI) / 180;
 
+  // CAD Convention mapping: 
+  // - CAD X = Three.js X (horizontal)
+  // - CAD Y = Three.js Z (depth) 
+  // - CAD Z = Three.js Y (vertical/up)
+  // So in UI we display: X, Y (internally Z), Z (internally Y)
+  
+  // Get CAD-style position for display (swap Y and Z)
+  const getCadPosition = () => ({
+    x: transform.position.x,
+    y: transform.position.z,  // CAD Y = Three.js Z
+    z: transform.position.y,  // CAD Z = Three.js Y
+  });
+  
+  // Get CAD-style rotation for display (swap Y and Z)
+  const getCadRotation = () => ({
+    x: transform.rotation.x,
+    y: transform.rotation.z,  // CAD Y = Three.js Z
+    z: transform.rotation.y,  // CAD Z = Three.js Y
+  });
+
   // Listen for transform updates from the 3D scene
   useEffect(() => {
     const handleTransformUpdate = (e: CustomEvent) => {
-      const { position, rotation, isInitial } = e.detail;
+      const { position, rotation } = e.detail;
       const newTransform = {
         position: {
           x: parseFloat(position.x.toFixed(2)),
@@ -53,12 +91,14 @@ const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({ hasMo
         },
       };
       
-      setTransform(newTransform);
-      
-      // Store initial transform when model is first loaded
-      if (isInitial || !initialTransform) {
-        setInitialTransform(newTransform);
+      // Capture original transform on first update
+      if (!hasOriginalTransformRef.current) {
+        originalTransformRef.current = { ...newTransform };
+        lastIncrementalTransformRef.current = { ...newTransform };
+        hasOriginalTransformRef.current = true;
       }
+      
+      setTransform(newTransform);
     };
 
     window.addEventListener('model-transform-updated', handleTransformUpdate as EventListener);
@@ -70,13 +110,13 @@ const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({ hasMo
       window.removeEventListener('model-transform-updated', handleTransformUpdate as EventListener);
     };
   }, []);
-  
-  // Reset initial transform when model changes
+
+  // Reset original transform when file changes
   useEffect(() => {
-    if (!hasModel) {
-      setInitialTransform(null);
+    if (currentFile) {
+      hasOriginalTransformRef.current = false;
     }
-  }, [hasModel]);
+  }, [currentFile]);
 
   // Dispatch transform change to 3D scene
   const dispatchTransformChange = useCallback((newTransform: PartTransform) => {
@@ -98,31 +138,35 @@ const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({ hasMo
     );
   }, []);
 
-  // Handle position change
-  const handlePositionChange = (axis: 'x' | 'y' | 'z', value: string) => {
+  // Handle position change - cadAxis is what UI shows, map to Three.js axis
+  const handlePositionChange = (cadAxis: 'x' | 'y' | 'z', value: string) => {
     const numValue = parseFloat(value) || 0;
+    // Map CAD axis to Three.js axis: X->X, Y->Z, Z->Y
+    const threeAxis = cadAxis === 'y' ? 'z' : cadAxis === 'z' ? 'y' : 'x';
     const newTransform = {
       ...transform,
-      position: { ...transform.position, [axis]: numValue },
+      position: { ...transform.position, [threeAxis]: numValue },
     };
     setTransform(newTransform);
     dispatchTransformChange(newTransform);
   };
 
-  // Handle rotation change
-  const handleRotationChange = (axis: 'x' | 'y' | 'z', value: string) => {
+  // Handle rotation change - cadAxis is what UI shows, map to Three.js axis
+  const handleRotationChange = (cadAxis: 'x' | 'y' | 'z', value: string) => {
     const numValue = parseFloat(value) || 0;
+    // Map CAD axis to Three.js axis: X->X, Y->Z, Z->Y
+    const threeAxis = cadAxis === 'y' ? 'z' : cadAxis === 'z' ? 'y' : 'x';
     const newTransform = {
       ...transform,
-      rotation: { ...transform.rotation, [axis]: numValue },
+      rotation: { ...transform.rotation, [threeAxis]: numValue },
     };
     setTransform(newTransform);
     dispatchTransformChange(newTransform);
   };
 
-  // Reset position to initial import position
+  // Reset position to origin (0, 0, 0)
   const handleResetPosition = () => {
-    const resetPosition = initialTransform?.position ?? { x: 0, y: 0, z: 0 };
+    const resetPosition = { x: 0, y: 0, z: 0 };
     const newTransform = {
       ...transform,
       position: resetPosition,
@@ -131,15 +175,168 @@ const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({ hasMo
     dispatchTransformChange(newTransform);
   };
 
-  // Reset rotation to initial import rotation
+  // Reset rotation to zero (0, 0, 0)
   const handleResetRotation = () => {
-    const resetRotation = initialTransform?.rotation ?? { x: 0, y: 0, z: 0 };
+    const resetRotation = { x: 0, y: 0, z: 0 };
     const newTransform = {
       ...transform,
       rotation: resetRotation,
     };
     setTransform(newTransform);
     dispatchTransformChange(newTransform);
+  };
+
+  // Handle mode toggle
+  const handleModeToggle = () => {
+    if (positioningMode === 'absolute') {
+      // Switching to incremental: save current position as the new baseline
+      lastIncrementalTransformRef.current = { ...transform };
+      setPositioningMode('incremental');
+    } else {
+      // Switching to absolute
+      setPositioningMode('absolute');
+    }
+  };
+
+  // Restore based on mode - dispatches restore event to 3D scene
+  const handleRestore = () => {
+    let targetTransform: PartTransform;
+    
+    if (positioningMode === 'absolute') {
+      // Restore to original transform (0,0,0 since that's the initial state)
+      targetTransform = originalTransformRef.current;
+    } else {
+      // Restore to last incremental position
+      targetTransform = lastIncrementalTransformRef.current;
+    }
+    
+    // Dispatch restore event with THREE.js types
+    window.dispatchEvent(
+      new CustomEvent('restore-model-transform', {
+        detail: {
+          position: new THREE.Vector3(
+            targetTransform.position.x,
+            targetTransform.position.y,
+            targetTransform.position.z
+          ),
+          rotation: new THREE.Euler(
+            degToRad(targetTransform.rotation.x),
+            degToRad(targetTransform.rotation.y),
+            degToRad(targetTransform.rotation.z)
+          ),
+        },
+      })
+    );
+  };
+
+  // Get display values based on mode
+  const getDisplayPosition = () => {
+    const cadPos = getCadPosition();
+    if (positioningMode === 'incremental') {
+      // Show delta from last incremental position
+      // lastIncrementalTransformRef stores in Three.js coordinates, we need to convert to CAD
+      const lastPos = lastIncrementalTransformRef.current.position;
+      const lastCadPos = {
+        x: lastPos.x,
+        y: lastPos.z,  // CAD Y = Three.js Z
+        z: lastPos.y,  // CAD Z = Three.js Y
+      };
+      return {
+        x: parseFloat((cadPos.x - lastCadPos.x).toFixed(2)),
+        y: parseFloat((cadPos.y - lastCadPos.y).toFixed(2)),
+        z: parseFloat((cadPos.z - lastCadPos.z).toFixed(2)),
+      };
+    }
+    return cadPos;
+  };
+
+  const getDisplayRotation = () => {
+    const cadRot = getCadRotation();
+    if (positioningMode === 'incremental') {
+      // Show delta from last incremental rotation
+      const lastRot = lastIncrementalTransformRef.current.rotation;
+      const lastCadRot = {
+        x: lastRot.x,
+        y: lastRot.z,  // CAD Y = Three.js Z
+        z: lastRot.y,  // CAD Z = Three.js Y
+      };
+      return {
+        x: parseFloat((cadRot.x - lastCadRot.x).toFixed(1)),
+        y: parseFloat((cadRot.y - lastCadRot.y).toFixed(1)),
+        z: parseFloat((cadRot.z - lastCadRot.z).toFixed(1)),
+      };
+    }
+    return cadRot;
+  };
+
+  // Handle position change with mode awareness
+  const handlePositionChangeWithMode = (cadAxis: 'x' | 'y' | 'z', value: string) => {
+    const numValue = parseFloat(value) || 0;
+    
+    if (positioningMode === 'incremental') {
+      // Value is delta from last position, calculate absolute
+      const lastPos = lastIncrementalTransformRef.current.position;
+      // Convert last position to CAD coordinates first
+      const lastCadPos = {
+        x: lastPos.x,
+        y: lastPos.z,  // CAD Y = Three.js Z
+        z: lastPos.y,  // CAD Z = Three.js Y
+      };
+      
+      // Calculate new CAD position
+      const newCadPos = { ...getCadPosition() };
+      newCadPos[cadAxis] = lastCadPos[cadAxis] + numValue;
+      
+      // Convert back to Three.js coordinates
+      const newTransform = {
+        ...transform,
+        position: {
+          x: newCadPos.x,
+          y: newCadPos.z,  // Three.js Y = CAD Z
+          z: newCadPos.y,  // Three.js Z = CAD Y
+        },
+      };
+      setTransform(newTransform);
+      dispatchTransformChange(newTransform);
+    } else {
+      // Absolute mode - use existing handler
+      handlePositionChange(cadAxis, value);
+    }
+  };
+
+  // Handle rotation change with mode awareness
+  const handleRotationChangeWithMode = (cadAxis: 'x' | 'y' | 'z', value: string) => {
+    const numValue = parseFloat(value) || 0;
+    
+    if (positioningMode === 'incremental') {
+      // Value is delta from last rotation, calculate absolute
+      const lastRot = lastIncrementalTransformRef.current.rotation;
+      // Convert last rotation to CAD coordinates first
+      const lastCadRot = {
+        x: lastRot.x,
+        y: lastRot.z,  // CAD Y = Three.js Z
+        z: lastRot.y,  // CAD Z = Three.js Y
+      };
+      
+      // Calculate new CAD rotation
+      const newCadRot = { ...getCadRotation() };
+      newCadRot[cadAxis] = lastCadRot[cadAxis] + numValue;
+      
+      // Convert back to Three.js coordinates
+      const newTransform = {
+        ...transform,
+        rotation: {
+          x: newCadRot.x,
+          y: newCadRot.z,  // Three.js Y = CAD Z
+          z: newCadRot.y,  // Three.js Z = CAD Y
+        },
+      };
+      setTransform(newTransform);
+      dispatchTransformChange(newTransform);
+    } else {
+      // Absolute mode - use existing handler
+      handleRotationChange(cadAxis, value);
+    }
   };
 
   if (!hasModel) {
@@ -157,18 +354,18 @@ const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({ hasMo
   const formatDimension = (value: number) => value.toFixed(2);
 
   return (
-    <Accordion type="multiple" defaultValue={["file-details", "part-position"]} className="w-full">
+    <Accordion type="single" collapsible defaultValue="part-position" className="w-full">
       {/* File Details Accordion */}
       {currentFile && (
         <AccordionItem value="file-details" className="border-border/50">
-          <AccordionTrigger className="py-2 text-sm font-tech hover:no-underline">
+          <AccordionTrigger className="py-2 text-xs font-tech hover:no-underline">
             <div className="flex items-center gap-2">
-              <FileText className="w-4 h-4 text-primary" />
+              <FileText className="w-3.5 h-3.5 text-primary" />
               File Details
             </div>
           </AccordionTrigger>
           <AccordionContent className="pt-2">
-            <div className="space-y-2 text-xs">
+            <div className="space-y-2 text-[8px]">
               <div className="flex justify-between items-center">
                 <span className="text-muted-foreground">Name:</span>
                 <span className="font-mono truncate max-w-[120px]" title={currentFile.metadata.name}>
@@ -189,21 +386,21 @@ const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({ hasMo
               </div>
               <div className="border-t border-border/30 pt-2 mt-2">
                 <div className="text-muted-foreground mb-1 flex items-center gap-1">
-                  <Info className="w-3 h-3" />
+                  <Info className="w-2.5 h-2.5" />
                   Dimensions ({currentFile.metadata.units})
                 </div>
                 <div className="grid grid-cols-3 gap-1 text-center">
                   <div>
-                    <span className="text-red-500 font-mono text-xs">X</span>
+                    <span className="text-red-500 font-mono text-[8px]">X</span>
                     <div className="font-mono">{formatDimension(currentFile.metadata.dimensions.x)}</div>
                   </div>
                   <div>
-                    <span className="text-green-500 font-mono text-xs">Y</span>
-                    <div className="font-mono">{formatDimension(currentFile.metadata.dimensions.y)}</div>
+                    <span className="text-green-500 font-mono text-[8px]">Y</span>
+                    <div className="font-mono">{formatDimension(currentFile.metadata.dimensions.z)}</div>
                   </div>
                   <div>
-                    <span className="text-blue-500 font-mono text-xs">Z</span>
-                    <div className="font-mono">{formatDimension(currentFile.metadata.dimensions.z)}</div>
+                    <span className="text-blue-500 font-mono text-[8px]">Z</span>
+                    <div className="font-mono">{formatDimension(currentFile.metadata.dimensions.y)}</div>
                   </div>
                 </div>
               </div>
@@ -214,59 +411,93 @@ const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({ hasMo
 
       {/* Part Position Accordion */}
       <AccordionItem value="part-position" className="border-border/50">
-        <AccordionTrigger className="py-2 text-sm font-tech hover:no-underline">
+        <AccordionTrigger className="py-2 text-xs font-tech hover:no-underline">
           <div className="flex items-center gap-2">
-            <Move className="w-4 h-4 text-primary" />
+            <Move className="w-3.5 h-3.5 text-primary" />
             Part Position
           </div>
         </AccordionTrigger>
         <AccordionContent className="pt-2">
           <div className="space-y-4">
+            {/* Mode Toggle */}
+            <div className="flex items-center justify-between border-b border-border/30 pb-2">
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleModeToggle}
+                  className="h-5 px-1.5 text-[8px] gap-1"
+                  title={`Switch to ${positioningMode === 'absolute' ? 'incremental' : 'absolute'} mode`}
+                >
+                  {positioningMode === 'absolute' ? (
+                    <ToggleLeft className="w-3.5 h-3.5" />
+                  ) : (
+                    <ToggleRight className="w-3.5 h-3.5 text-primary" />
+                  )}
+                  <span className={positioningMode === 'incremental' ? 'text-primary font-medium' : ''}>
+                    {positioningMode === 'absolute' ? 'Absolute' : 'Incremental'}
+                  </span>
+                </Button>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleRestore}
+                className="h-5 px-1.5 text-[8px] gap-1"
+                title={positioningMode === 'absolute' 
+                  ? 'Restore to original position' 
+                  : 'Restore to last incremental position'}
+              >
+                <RotateCcw className="w-2.5 h-2.5" />
+                Restore
+              </Button>
+            </div>
+
             {/* Position Controls */}
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <Label className="text-xs font-tech text-muted-foreground flex items-center gap-1">
-                  <Move className="w-3 h-3" />
-                  Position (mm)
+                <Label className="text-[8px] font-tech text-muted-foreground flex items-center gap-1">
+                  <Move className="w-2.5 h-2.5" />
+                  Position (mm){positioningMode === 'incremental' && ' Δ'}
                 </Label>
                 <Button
                   variant="ghost"
                   size="sm"
                   onClick={handleResetPosition}
-                  className="h-6 px-2 text-xs"
-                  title="Reset position to origin"
+                  className="h-5 px-1.5 text-[8px]"
+                  title="Reset position to zero"
                 >
-                  <RotateCcw className="w-3 h-3" />
+                  <RotateCcw className="w-2.5 h-2.5" />
                 </Button>
               </div>
               <div className="grid grid-cols-3 gap-2">
                 <div className="space-y-1">
-                  <Label className="text-xs text-red-500 font-mono">X</Label>
+                  <Label className="text-[8px] text-red-500 font-mono">X</Label>
                   <Input
                     type="number"
-                    value={transform.position.x}
-                    onChange={(e) => handlePositionChange('x', e.target.value)}
-                    className="h-8 text-xs font-mono"
+                    value={getDisplayPosition().x}
+                    onChange={(e) => handlePositionChangeWithMode('x', e.target.value)}
+                    className="h-7 text-[6px] font-mono"
                     step="0.1"
                   />
                 </div>
                 <div className="space-y-1">
-                  <Label className="text-xs text-green-500 font-mono">Y</Label>
+                  <Label className="text-[8px] text-green-500 font-mono">Y</Label>
                   <Input
                     type="number"
-                    value={transform.position.y}
-                    onChange={(e) => handlePositionChange('y', e.target.value)}
-                    className="h-8 text-xs font-mono"
+                    value={getDisplayPosition().y}
+                    onChange={(e) => handlePositionChangeWithMode('y', e.target.value)}
+                    className="h-7 text-[6px] font-mono"
                     step="0.1"
                   />
                 </div>
                 <div className="space-y-1">
-                  <Label className="text-xs text-blue-500 font-mono">Z</Label>
+                  <Label className="text-[8px] text-blue-500 font-mono">Z</Label>
                   <Input
                     type="number"
-                    value={transform.position.z}
-                    onChange={(e) => handlePositionChange('z', e.target.value)}
-                    className="h-8 text-xs font-mono"
+                    value={getDisplayPosition().z}
+                    onChange={(e) => handlePositionChangeWithMode('z', e.target.value)}
+                    className="h-7 text-[6px] font-mono"
                     step="0.1"
                   />
                 </div>
@@ -276,48 +507,48 @@ const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({ hasMo
             {/* Rotation Controls */}
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <Label className="text-xs font-tech text-muted-foreground flex items-center gap-1">
-                  <RotateCw className="w-3 h-3" />
-                  Rotation (°)
+                <Label className="text-[8px] font-tech text-muted-foreground flex items-center gap-1">
+                  <RotateCw className="w-2.5 h-2.5" />
+                  Rotation (°){positioningMode === 'incremental' && ' Δ'}
                 </Label>
                 <Button
                   variant="ghost"
                   size="sm"
                   onClick={handleResetRotation}
-                  className="h-6 px-2 text-xs"
-                  title="Reset rotation"
+                  className="h-5 px-1.5 text-[8px]"
+                  title="Reset rotation to zero"
                 >
-                  <RotateCcw className="w-3 h-3" />
+                  <RotateCcw className="w-2.5 h-2.5" />
                 </Button>
               </div>
               <div className="grid grid-cols-3 gap-2">
                 <div className="space-y-1">
-                  <Label className="text-xs text-red-500 font-mono">X</Label>
+                  <Label className="text-[8px] text-red-500 font-mono">X</Label>
                   <Input
                     type="number"
-                    value={transform.rotation.x}
-                    onChange={(e) => handleRotationChange('x', e.target.value)}
-                    className="h-8 text-xs font-mono"
+                    value={getDisplayRotation().x}
+                    onChange={(e) => handleRotationChangeWithMode('x', e.target.value)}
+                    className="h-7 text-[6px] font-mono"
                     step="1"
                   />
                 </div>
                 <div className="space-y-1">
-                  <Label className="text-xs text-green-500 font-mono">Y</Label>
+                  <Label className="text-[8px] text-green-500 font-mono">Y</Label>
                   <Input
                     type="number"
-                    value={transform.rotation.y}
-                    onChange={(e) => handleRotationChange('y', e.target.value)}
-                    className="h-8 text-xs font-mono"
+                    value={getDisplayRotation().y}
+                    onChange={(e) => handleRotationChangeWithMode('y', e.target.value)}
+                    className="h-7 text-[6px] font-mono"
                     step="1"
                   />
                 </div>
                 <div className="space-y-1">
-                  <Label className="text-xs text-blue-500 font-mono">Z</Label>
+                  <Label className="text-[8px] text-blue-500 font-mono">Z</Label>
                   <Input
                     type="number"
-                    value={transform.rotation.z}
-                    onChange={(e) => handleRotationChange('z', e.target.value)}
-                    className="h-8 text-xs font-mono"
+                    value={getDisplayRotation().z}
+                    onChange={(e) => handleRotationChangeWithMode('z', e.target.value)}
+                    className="h-7 text-[6px] font-mono"
                     step="1"
                   />
                 </div>

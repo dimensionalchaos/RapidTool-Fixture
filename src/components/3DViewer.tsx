@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { ProcessedFile } from "@/modules/FileImport/types";
 import ThreeDScene from './3DScene';
@@ -15,6 +15,7 @@ const ThreeDViewer: React.FC<ThreeDViewerProps> = ({
   isProcessing,
   onComponentPlaced,
 }) => {
+  const [internalFile, setInternalFile] = useState<ProcessedFile | null>(null);
   const [modelTransform, setModelTransform] = useState<{
     position: THREE.Vector3;
     rotation: THREE.Euler;
@@ -24,6 +25,28 @@ const ThreeDViewer: React.FC<ThreeDViewerProps> = ({
     rotation: new THREE.Euler(0, 0, 0),
     scale: new THREE.Vector3(1, 1, 1)
   });
+
+  // Listen for file-imported events from the context panel
+  useEffect(() => {
+    const handleFileImported = (e: CustomEvent<ProcessedFile>) => {
+      setInternalFile(e.detail);
+    };
+
+    const handleSessionReset = () => {
+      setInternalFile(null);
+    };
+
+    window.addEventListener('file-imported', handleFileImported as EventListener);
+    window.addEventListener('session-reset', handleSessionReset);
+
+    return () => {
+      window.removeEventListener('file-imported', handleFileImported as EventListener);
+      window.removeEventListener('session-reset', handleSessionReset);
+    };
+  }, []);
+
+  // Use prop file if provided, otherwise use internal file
+  const displayFile = currentFile || internalFile;
 
   return (
     <div className="w-full h-full relative" onContextMenu={(e) => e.preventDefault()}>
@@ -44,7 +67,7 @@ const ThreeDViewer: React.FC<ThreeDViewerProps> = ({
         onContextMenu={(e) => e.preventDefault()}
       >
         <ThreeDScene
-          currentFile={currentFile}
+          currentFile={displayFile}
           modelTransform={modelTransform}
           setModelTransform={setModelTransform}
         />
@@ -63,7 +86,7 @@ const ThreeDViewer: React.FC<ThreeDViewerProps> = ({
       )}
 
       {/* Empty state */}
-      {!currentFile && !isProcessing && (
+      {!displayFile && !isProcessing && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
           <div className="text-center tech-glass p-6 rounded-lg border border-border/50">
             <h3 className="font-tech font-semibold text-lg mb-2">3D Viewer</h3>

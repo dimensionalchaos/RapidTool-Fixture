@@ -1208,13 +1208,15 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       };
 
       if (option === 'rectangular') {
-        const width = clampPos(dimensions?.width, 10, size.x + fitPadTotal);
-        const height = clampPos(dimensions?.length ?? dimensions?.depth, 10, size.z + fitPadTotal);
+        // Use padding from dimensions if provided, otherwise use default
+        const paddingValue = clampPos(dimensions?.padding, 0, 10);
+        const width = clampPos(dimensions?.width, 10, size.x + (paddingValue * 2));
+        const height = clampPos(dimensions?.length ?? dimensions?.depth, 10, size.z + (paddingValue * 2));
         const depth = clampPos(dimensions?.height, 1, tRect);
         cfg = { ...cfg, type: 'rectangular', width, height, depth };
       } else if (option === 'convex-hull') {
         const depth = clampPos(dimensions?.height, 1, tHull);
-        const oversizeXY = clampPos(dimensions?.oversizeXY, 0, 10);
+        const oversizeXY = clampPos(dimensions?.oversizeXY ?? dimensions?.padding, 0, 10);
         // width/height are derived in BasePlate from model geometry + oversize, we pass hint values too
         cfg = { ...cfg, type: 'convex-hull', depth, oversizeXY, width: size.x + oversizeXY * 2, height: size.z + oversizeXY * 2 };
       } else if (option === 'perforated-panel') {
@@ -1235,27 +1237,42 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
         return;
       }
 
-      // Ensure model rests on top: set model minY to 0 if needed
+      // Get baseplate depth/thickness - total height is exactly this value
+      const baseplateDepth = cfg.depth ?? tStd;
+      // Top of baseplate is at Y = baseplateDepth (bevel is included within the depth, not added to it)
+      const baseplateTopY = baseplateDepth;
+      
+      // Smart model lifting: only move the model if it collides with the baseplate
+      // If model is already above the baseplate, don't move it
       if (modelMeshRef.current) {
         const mbox = new THREE.Box3().setFromObject(modelMeshRef.current);
-        const minY = mbox.min.y;
-        if (Math.abs(minY) > 1e-3) {
-          modelMeshRef.current.position.y -= minY; // shift so minY becomes 0
+        const currentMinY = mbox.min.y;
+        
+        // Only lift if model's bottom is below the baseplate's top surface (collision)
+        if (currentMinY < baseplateTopY) {
+          const offsetY = baseplateTopY - currentMinY;
+          modelMeshRef.current.position.y += offsetY;
           setModelTransform({
             position: modelMeshRef.current.position.clone(),
             rotation: modelMeshRef.current.rotation.clone(),
             scale: modelMeshRef.current.scale.clone(),
           });
         }
+        // If currentMinY >= baseplateTopY, model is already above baseplate - no movement needed
       }
 
-      // Place plate directly under the current model transform so convex-hull
-      // plates align with the model footprint even when the model is offset.
-      const modelPos = modelMeshRef.current
-        ? modelMeshRef.current.position.clone()
-        : new THREE.Vector3(0, 0, 0);
-      const depthForPos = cfg.depth ?? tStd;
-      cfg.position = new THREE.Vector3(modelPos.x, modelPos.y - depthForPos / 2, modelPos.z);
+      // Baseplate sits at Y=0 (geometry already positioned so bottom is at Y=0, top at Y=depth)
+      // For convex-hull: geometry already includes world coordinates, so position is (0, 0, 0)
+      // For other types: geometry is centered, so position should match model XZ position
+      if (option === 'convex-hull') {
+        // Convex hull geometry already contains world XZ coordinates
+        cfg.position = new THREE.Vector3(0, 0, 0);
+      } else {
+        // Other baseplate types have geometry centered at origin, so we position them under the model
+        // Use bounding box center since mesh.position may be (0,0,0) after transforms are baked into geometry
+        const boxCenter = box ? box.getCenter(new THREE.Vector3()) : new THREE.Vector3(0, 0, 0);
+        cfg.position = new THREE.Vector3(boxCenter.x, 0, boxCenter.z);
+      }
 
       setBasePlate(cfg);
     };
@@ -1289,6 +1306,51 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     };
   }, [basePlate]);
 
+  // Update rectangular baseplate size and position when model transform changes
+  // This recalculates dimensions based on new bounding box after gizmo closes
+  React.useEffect(() => {
+    if (!basePlate) return;
+    if (!modelMeshRef.current) return;
+    
+    // Only update for non-convex-hull types
+    // Convex-hull recalculates its geometry from modelGeometry/modelMatrixWorld props automatically
+    if (basePlate.type === 'convex-hull') return;
+    
+    // Compute current bounding box of the model
+    modelMeshRef.current.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(modelMeshRef.current);
+    if (box.isEmpty()) return;
+    
+    const size = new THREE.Vector3();
+    const center = new THREE.Vector3();
+    box.getSize(size);
+    box.getCenter(center);
+    
+    // Get current padding (oversizeXY or default)
+    const currentPadding = basePlate.oversizeXY ?? 10;
+    
+    // Calculate new dimensions based on bounding box + padding
+    const newWidth = size.x + currentPadding * 2;
+    const newHeight = size.z + currentPadding * 2; // height in baseplate terms = Z extent
+    const newPosition = new THREE.Vector3(center.x, 0, center.z);
+    
+    // Only update if dimensions actually changed significantly
+    const widthChanged = Math.abs((basePlate.width || 0) - newWidth) > 0.1;
+    const heightChanged = Math.abs((basePlate.height || 0) - newHeight) > 0.1;
+    const positionChanged = !basePlate.position || 
+      Math.abs(basePlate.position.x - newPosition.x) > 0.1 ||
+      Math.abs(basePlate.position.z - newPosition.z) > 0.1;
+    
+    if (widthChanged || heightChanged || positionChanged) {
+      setBasePlate(prev => prev ? {
+        ...prev,
+        width: newWidth,
+        height: newHeight,
+        position: newPosition
+      } : null);
+    }
+  }, [modelTransform.position, modelTransform.rotation, basePlate?.type]);
+
   // Handle transform mode toggle events
   React.useEffect(() => {
     const handleToggleTransform = () => {
@@ -1316,6 +1378,15 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   React.useEffect(() => {
     const handleSetTransform = (e: CustomEvent) => {
       const { position, rotation } = e.detail;
+      
+      // Directly update the mesh position and rotation
+      if (modelMeshRef.current) {
+        modelMeshRef.current.position.copy(position);
+        modelMeshRef.current.rotation.copy(rotation);
+        modelMeshRef.current.updateMatrixWorld(true);
+      }
+      
+      // Also update the state
       setModelTransform({
         position: position.clone(),
         rotation: rotation.clone(),
@@ -1324,15 +1395,28 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     };
 
     const handleRequestTransform = () => {
-      // Send current transform state when requested
-      window.dispatchEvent(
-        new CustomEvent('model-transform-updated', {
-          detail: {
-            position: modelTransform.position,
-            rotation: modelTransform.rotation,
-          },
-        })
-      );
+      // Send current transform state from the actual mesh (more accurate)
+      const mesh = modelMeshRef.current;
+      if (mesh) {
+        window.dispatchEvent(
+          new CustomEvent('model-transform-updated', {
+            detail: {
+              position: mesh.position.clone(),
+              rotation: mesh.rotation.clone(),
+            },
+          })
+        );
+      } else {
+        // Fallback to state
+        window.dispatchEvent(
+          new CustomEvent('model-transform-updated', {
+            detail: {
+              position: modelTransform.position,
+              rotation: modelTransform.rotation,
+            },
+          })
+        );
+      }
     };
 
     window.addEventListener('set-model-transform', handleSetTransform as EventListener);
@@ -1467,7 +1551,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
           holeDiameter={basePlate.holeDiameter}
           modelGeometry={basePlate.type === 'convex-hull' && modelMeshRef.current?.geometry ? modelMeshRef.current.geometry : undefined}
           modelMatrixWorld={basePlate.type === 'convex-hull' && modelMeshRef.current ? modelMeshRef.current.matrixWorld : undefined}
-          modelOrigin={basePlate.type === 'convex-hull' && modelMeshRef.current ? modelMeshRef.current.position : undefined}
+          modelOrigin={modelMeshRef.current ? modelMeshRef.current.position : undefined}
           selected={false}
           meshRef={basePlateMeshRef}
           onSelect={() => {
