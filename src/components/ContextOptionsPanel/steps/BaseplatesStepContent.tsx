@@ -46,7 +46,7 @@ const BaseplatesStepContent: React.FC<BaseplatesStepContentProps> = ({
     (currentBaseplate?.type as 'rectangular' | 'convex-hull') || 'rectangular'
   );
   const [padding, setPadding] = useState(currentBaseplate?.padding || 10);
-  const [height, setHeight] = useState(currentBaseplate?.height || 10);
+  const [height, setHeight] = useState(currentBaseplate?.height || 4);
 
   if (!hasWorkpiece) {
     return (

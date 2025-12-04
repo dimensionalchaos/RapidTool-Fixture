@@ -529,11 +529,8 @@ function ModelMesh({ file, meshRef, dimensions, colorsMap, setColorsMap, onBound
         const now = Date.now();
         const timeSinceLastClick = now - lastClickTimeRef.current;
         
-        console.log('ModelMesh: Click detected, time since last:', timeSinceLastClick);
-        
         if (timeSinceLastClick < DOUBLE_CLICK_DELAY) {
-          // This is a double-click
-          console.log('ModelMesh: Double-click detected! Dispatching event...');
+          // Double-click detected
           window.dispatchEvent(new CustomEvent('mesh-double-click'));
           lastClickTimeRef.current = 0; // Reset to prevent triple-click
         } else {
@@ -541,7 +538,7 @@ function ModelMesh({ file, meshRef, dimensions, colorsMap, setColorsMap, onBound
         }
       }}
       onPointerOver={(e) => {
-        console.log('ModelMesh: Pointer over mesh');
+
       }}
     />
   );
@@ -1183,7 +1180,6 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   React.useEffect(() => {
     const handleCreateBaseplate = (e: CustomEvent) => {
       const { type, option, dimensions } = e.detail;
-      console.log('Creating baseplate:', type, option, dimensions);
 
       const basePlateId = `baseplate-${Date.now()}`;
 
@@ -1195,10 +1191,8 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       // Helper to coerce dimension
       const clampPos = (v: any, min: number, fallback: number) => Math.max(Number(v) || fallback, min);
 
-      // Thickness defaults per type (reduced)
-      const tRect = 3;
-      const tHull = 3;
-      const tStd = 6;
+      // Default baseplate thickness (4mm)
+      const DEFAULT_THICKNESS = 4;
 
       let cfg: NonNullable<typeof basePlate> = {
         type: (option as any),
@@ -1212,24 +1206,24 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
         const paddingValue = clampPos(dimensions?.padding, 0, 10);
         const width = clampPos(dimensions?.width, 10, size.x + (paddingValue * 2));
         const height = clampPos(dimensions?.length ?? dimensions?.depth, 10, size.z + (paddingValue * 2));
-        const depth = clampPos(dimensions?.height, 1, tRect);
+        const depth = clampPos(dimensions?.height, 1, DEFAULT_THICKNESS);
         cfg = { ...cfg, type: 'rectangular', width, height, depth };
       } else if (option === 'convex-hull') {
-        const depth = clampPos(dimensions?.height, 1, tHull);
+        const depth = clampPos(dimensions?.height, 1, DEFAULT_THICKNESS);
         const oversizeXY = clampPos(dimensions?.oversizeXY ?? dimensions?.padding, 0, 10);
         // width/height are derived in BasePlate from model geometry + oversize, we pass hint values too
         cfg = { ...cfg, type: 'convex-hull', depth, oversizeXY, width: size.x + oversizeXY * 2, height: size.z + oversizeXY * 2 };
       } else if (option === 'perforated-panel') {
         const width = clampPos(dimensions?.width, 10, size.x + fitPadTotal);
         const height = clampPos(dimensions?.length ?? dimensions?.depth, 10, size.z + fitPadTotal);
-        const depth = clampPos(dimensions?.height, 1, tStd);
+        const depth = clampPos(dimensions?.height, 1, DEFAULT_THICKNESS);
         const pitch = clampPos(dimensions?.pitch ?? dimensions?.holeDistance, 2, 20);
         const holeDiameter = clampPos(dimensions?.holeDiameter, 1, 6);
         cfg = { ...cfg, type: 'perforated-panel', width, height, depth, pitch, holeDiameter };
       } else if (option === 'metal-wooden-plate') {
         const width = clampPos(dimensions?.width, 10, size.x + fitPadTotal);
         const height = clampPos(dimensions?.length ?? dimensions?.depth, 10, size.z + fitPadTotal);
-        const depth = clampPos(dimensions?.height, 1, tStd);
+        const depth = clampPos(dimensions?.height, 1, DEFAULT_THICKNESS);
         const holeDiameter = clampPos(dimensions?.holeDiameter, 1, 6);
         cfg = { ...cfg, type: 'metal-wooden-plate', width, height, depth, holeDiameter };
       } else {
@@ -1238,7 +1232,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       }
 
       // Get baseplate depth/thickness - total height is exactly this value
-      const baseplateDepth = cfg.depth ?? tStd;
+      const baseplateDepth = cfg.depth ?? DEFAULT_THICKNESS;
       // Top of baseplate is at Y = baseplateDepth (bevel is included within the depth, not added to it)
       const baseplateTopY = baseplateDepth;
       
@@ -1285,7 +1279,6 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   React.useEffect(() => {
     const handleDeselectBaseplate = (e: CustomEvent) => {
       const { basePlateId } = e.detail;
-      console.log('Deselecting baseplate:', basePlateId);
 
       if (basePlate && basePlate.id === basePlateId) {
         setBasePlate(null);
@@ -1293,7 +1286,6 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     };
 
     const handleCancelBaseplate = () => {
-      console.log('Cancelling baseplate selection');
       setBasePlate(null);
     };
 
@@ -1577,7 +1569,6 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
           }}
           onSelectionChange={(selected) => {
             // Orbit controls stay enabled - only disabled during drag via events
-            console.log('Gizmo active:', selected);
           }}
         >
           <ModelMesh
@@ -1597,7 +1588,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
           key={item.id}
           component={item.component}
           position={item.position}
-          onSelect={() => console.log('Component selected:', item.id)}
+          onSelect={() => {}}
         />
       ))}
 

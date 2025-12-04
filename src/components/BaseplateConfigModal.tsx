@@ -35,7 +35,7 @@ const BaseplateConfigModal: React.FC<BaseplateConfigModalProps> = ({ open, type,
   const [fit, setFit] = useState<boolean>(type==='rectangular' || type==='metal-wooden-plate');
   const [width, setWidth] = useState<number>(Math.round(footprint.w + 10));
   const [depth, setDepth] = useState<number>(Math.round(footprint.d + 10));
-  const [height, setHeight] = useState<number>(type==='perforated-panel'?10:5);
+  const [height, setHeight] = useState<number>(type==='perforated-panel'?6:4);
   const [oversizeXY, setOversizeXY] = useState<number>(10);
 
   const title = type === 'rectangular' ? 'Rectangular Baseplate'

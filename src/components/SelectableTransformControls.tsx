@@ -295,14 +295,7 @@ const SelectableTransformControls: React.FC<SelectableTransformControlsProps> = 
     if (!enabled) return;
     
     const handleMeshDoubleClick = () => {
-      console.log('SelectableTransformControls: mesh-double-click event received, isActive:', isActive);
-      
-      if (isActive) {
-        console.log('SelectableTransformControls: Already active, ignoring');
-        return;
-      }
-      
-      console.log('SelectableTransformControls: Activating gizmo');
+      if (isActive) return;
       activateGizmo();
     };
     

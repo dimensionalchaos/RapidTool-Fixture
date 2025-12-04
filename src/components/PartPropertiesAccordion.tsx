@@ -477,7 +477,7 @@ const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({ hasMo
                     type="number"
                     value={getDisplayPosition().x}
                     onChange={(e) => handlePositionChangeWithMode('x', e.target.value)}
-                    className="h-7 text-[6px] font-mono"
+                    className="h-7 !text-[10px] font-mono"
                     step="0.1"
                   />
                 </div>
@@ -487,7 +487,7 @@ const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({ hasMo
                     type="number"
                     value={getDisplayPosition().y}
                     onChange={(e) => handlePositionChangeWithMode('y', e.target.value)}
-                    className="h-7 text-[6px] font-mono"
+                    className="h-7 !text-[10px] font-mono"
                     step="0.1"
                   />
                 </div>
@@ -497,7 +497,7 @@ const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({ hasMo
                     type="number"
                     value={getDisplayPosition().z}
                     onChange={(e) => handlePositionChangeWithMode('z', e.target.value)}
-                    className="h-7 text-[6px] font-mono"
+                    className="h-7 !text-[10px] font-mono"
                     step="0.1"
                   />
                 </div>
@@ -528,7 +528,7 @@ const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({ hasMo
                     type="number"
                     value={getDisplayRotation().x}
                     onChange={(e) => handleRotationChangeWithMode('x', e.target.value)}
-                    className="h-7 text-[6px] font-mono"
+                    className="h-7 !text-[10px] font-mono"
                     step="1"
                   />
                 </div>
@@ -538,7 +538,7 @@ const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({ hasMo
                     type="number"
                     value={getDisplayRotation().y}
                     onChange={(e) => handleRotationChangeWithMode('y', e.target.value)}
-                    className="h-7 text-[6px] font-mono"
+                    className="h-7 !text-[10px] font-mono"
                     step="1"
                   />
                 </div>
@@ -548,7 +548,7 @@ const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({ hasMo
                     type="number"
                     value={getDisplayRotation().z}
                     onChange={(e) => handleRotationChangeWithMode('z', e.target.value)}
-                    className="h-7 text-[6px] font-mono"
+                    className="h-7 !text-[10px] font-mono"
                     step="1"
                   />
                 </div>
