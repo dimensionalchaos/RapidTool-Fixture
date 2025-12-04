@@ -506,6 +506,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
               onTransformToggle={setTransformEnabled}
             />
 
+            {/* ViewCube temporarily disabled
             <div className="absolute top-4 right-4 z-10">
               <ViewCube
                 onViewChange={handleSetOrientation}
@@ -513,6 +514,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
                 size={150}
               />
             </div>
+            */}
 
             {/* Cavity panel moved under Properties pane */}
           </main>

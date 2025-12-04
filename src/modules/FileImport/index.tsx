@@ -7,9 +7,20 @@ import FileDropzone from "./components/FileDropzone";
 import { useFileProcessing } from "./hooks/useFileProcessing";
 import { useViewer } from "./hooks/useViewer";
 import UnitsDialog from "./components/UnitsDialog";
+import MeshOptimizationDialog from "./components/MeshOptimizationDialog";
 import LoadingOverlay from "@/components/loading/LoadingOverlay";
 import { useLoadingManager } from "@/hooks/useLoadingManager";
 import { ProcessedFile } from "./types";
+import {
+  analyzeMesh,
+  repairMesh,
+  decimateMesh,
+  MeshAnalysisResult,
+  MeshProcessingProgress,
+  DECIMATION_THRESHOLD,
+  DECIMATION_TARGET,
+} from "./services/meshAnalysis";
+import * as THREE from 'three';
 
 interface FileImportProps {
   onFileLoaded: (file: ProcessedFile | null) => void;
@@ -21,6 +32,11 @@ const FileImport: React.FC<FileImportProps> = ({ onFileLoaded, isInCollapsiblePa
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isUnitsDialogOpen, setIsUnitsDialogOpen] = useState(false);
+  const [isOptimizationDialogOpen, setIsOptimizationDialogOpen] = useState(false);
+  const [meshAnalysis, setMeshAnalysis] = useState<MeshAnalysisResult | null>(null);
+  const [meshProgress, setMeshProgress] = useState<MeshProcessingProgress | null>(null);
+  const [isMeshProcessing, setIsMeshProcessing] = useState(false);
+  const [pendingProcessedFile, setPendingProcessedFile] = useState<ProcessedFile | null>(null);
   const [loadingState, setLoadingState] = useState<{
     isLoading: boolean;
     type?: 'file-processing' | 'model-loading';
@@ -62,23 +78,160 @@ const FileImport: React.FC<FileImportProps> = ({ onFileLoaded, isInCollapsiblePa
       const processedFile = await processFile(pendingFileRef.current, units);
 
       if (processedFile) {
-        setCurrentFile(processedFile);
-        onFileLoaded(processedFile);
-
-        // Add mesh to viewer if not in collapsible panel
-        if (!isInCollapsiblePanel && viewer.isReady) {
-          viewer.addMesh(processedFile.mesh);
-          viewer.resetView();
+        // Run mesh analysis
+        setMeshProgress({ stage: 'analyzing', progress: 0, message: 'Analyzing mesh...' });
+        const analysis = await analyzeMesh(processedFile.mesh.geometry, setMeshProgress);
+        setMeshAnalysis(analysis);
+        
+        // Store the processed file for later use
+        setPendingProcessedFile(processedFile);
+        
+        // If mesh has issues or needs decimation, show the optimization dialog
+        if (analysis.issues.length > 0 || analysis.triangleCount > DECIMATION_THRESHOLD) {
+          setIsProcessing(false);
+          setIsOptimizationDialogOpen(true);
+        } else {
+          // Mesh is fine, proceed directly
+          finalizeMeshImport(processedFile);
         }
       }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to process file';
       setError(errorMessage);
       console.error('Error processing file:', err);
-    } finally {
       setIsProcessing(false);
     }
   }, [processFile, onFileLoaded, isInCollapsiblePanel, viewer]);
+
+  // Finalize the mesh import (add to viewer and notify parent)
+  const finalizeMeshImport = useCallback((processedFile: ProcessedFile) => {
+    setCurrentFile(processedFile);
+    onFileLoaded(processedFile);
+
+    // Add mesh to viewer if not in collapsible panel
+    if (!isInCollapsiblePanel && viewer.isReady) {
+      viewer.addMesh(processedFile.mesh);
+      viewer.resetView();
+    }
+
+    setIsProcessing(false);
+    setIsOptimizationDialogOpen(false);
+    setPendingProcessedFile(null);
+    setMeshAnalysis(null);
+    setMeshProgress(null);
+  }, [onFileLoaded, isInCollapsiblePanel, viewer]);
+
+  // Handle proceeding with original mesh (no optimization)
+  const handleProceedWithOriginal = useCallback(async () => {
+    if (!pendingProcessedFile) return;
+
+    setIsMeshProcessing(true);
+    
+    try {
+      // If there are issues, do a basic repair
+      if (meshAnalysis && meshAnalysis.issues.length > 0 && !meshAnalysis.issues.every(i => i.includes('High triangle count'))) {
+        setMeshProgress({ stage: 'repairing', progress: 0, message: 'Repairing mesh...' });
+        const repairResult = await repairMesh(pendingProcessedFile.mesh.geometry, setMeshProgress);
+        
+        if (repairResult.success && repairResult.repairedGeometry) {
+          // Create new mesh with repaired geometry
+          const repairedMesh = new THREE.Mesh(
+            repairResult.repairedGeometry,
+            pendingProcessedFile.mesh.material
+          );
+          repairedMesh.castShadow = true;
+          repairedMesh.receiveShadow = true;
+          
+          const updatedFile: ProcessedFile = {
+            ...pendingProcessedFile,
+            mesh: repairedMesh,
+            metadata: {
+              ...pendingProcessedFile.metadata,
+              triangles: repairResult.triangleCount,
+            },
+          };
+          
+          finalizeMeshImport(updatedFile);
+        } else {
+          finalizeMeshImport(pendingProcessedFile);
+        }
+      } else {
+        finalizeMeshImport(pendingProcessedFile);
+      }
+    } catch (err) {
+      console.error('Error during mesh repair:', err);
+      finalizeMeshImport(pendingProcessedFile);
+    } finally {
+      setIsMeshProcessing(false);
+    }
+  }, [pendingProcessedFile, meshAnalysis, finalizeMeshImport]);
+
+  // Handle mesh optimization (decimation)
+  const handleOptimizeMesh = useCallback(async () => {
+    if (!pendingProcessedFile) return;
+
+    setIsMeshProcessing(true);
+    
+    try {
+      // First repair if needed
+      let currentGeometry = pendingProcessedFile.mesh.geometry;
+      
+      if (meshAnalysis && meshAnalysis.issues.length > 0 && !meshAnalysis.issues.every(i => i.includes('High triangle count'))) {
+        setMeshProgress({ stage: 'repairing', progress: 0, message: 'Repairing mesh...' });
+        const repairResult = await repairMesh(currentGeometry, setMeshProgress);
+        
+        if (repairResult.success && repairResult.repairedGeometry) {
+          currentGeometry = repairResult.repairedGeometry;
+        }
+      }
+      
+      // Then decimate
+      setMeshProgress({ stage: 'decimating', progress: 0, message: 'Decimating mesh...' });
+      const decimationResult = await decimateMesh(currentGeometry, DECIMATION_TARGET, setMeshProgress);
+      
+      if (decimationResult.success && decimationResult.decimatedGeometry) {
+        // Create new mesh with decimated geometry
+        const decimatedMesh = new THREE.Mesh(
+          decimationResult.decimatedGeometry,
+          pendingProcessedFile.mesh.material
+        );
+        decimatedMesh.castShadow = true;
+        decimatedMesh.receiveShadow = true;
+        
+        const updatedFile: ProcessedFile = {
+          ...pendingProcessedFile,
+          mesh: decimatedMesh,
+          metadata: {
+            ...pendingProcessedFile.metadata,
+            triangles: decimationResult.finalTriangles,
+          },
+        };
+        
+        console.log(`Mesh decimated: ${decimationResult.originalTriangles} -> ${decimationResult.finalTriangles} triangles (${decimationResult.reductionPercent.toFixed(1)}% reduction)`);
+        
+        finalizeMeshImport(updatedFile);
+      } else {
+        setError(decimationResult.error || 'Decimation failed');
+        finalizeMeshImport(pendingProcessedFile);
+      }
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to optimize mesh';
+      setError(errorMessage);
+      console.error('Error during mesh optimization:', err);
+      finalizeMeshImport(pendingProcessedFile);
+    } finally {
+      setIsMeshProcessing(false);
+    }
+  }, [pendingProcessedFile, meshAnalysis, finalizeMeshImport]);
+
+  // Handle canceling mesh optimization
+  const handleCancelOptimization = useCallback(() => {
+    setIsOptimizationDialogOpen(false);
+    setPendingProcessedFile(null);
+    setMeshAnalysis(null);
+    setMeshProgress(null);
+    setIsProcessing(false);
+  }, []);
 
   // Handle file reset
   const handleReset = useCallback(() => {
@@ -284,6 +437,18 @@ const FileImport: React.FC<FileImportProps> = ({ onFileLoaded, isInCollapsiblePa
           fileSize={pendingFileRef.current ? `${(pendingFileRef.current.size / 1024 / 1024).toFixed(2)} MB` : ''}
         />
       )}
+
+      {/* Mesh Optimization Dialog */}
+      <MeshOptimizationDialog
+        open={isOptimizationDialogOpen}
+        onOpenChange={setIsOptimizationDialogOpen}
+        analysis={meshAnalysis}
+        progress={meshProgress}
+        isProcessing={isMeshProcessing}
+        onProceedWithOriginal={handleProceedWithOriginal}
+        onOptimizeMesh={handleOptimizeMesh}
+        onCancel={handleCancelOptimization}
+      />
     </div>
   );
 };

@@ -313,10 +313,9 @@ const ViewCube: React.FC<ViewCubeProps> = ({ onViewChange, className = '', size 
         };
         cubeGroup.rotation.y += deltaMove.x * 0.01;
         cubeGroup.rotation.x += deltaMove.y * 0.01;
-        // Publish inverse cube quaternion so main viewer rotates accordingly
+        // Publish cube quaternion directly so main viewer camera matches the cube orientation
         const q = new THREE.Quaternion();
         cubeGroup.getWorldQuaternion(q);
-        q.invert();
         const arr: [number, number, number, number] = [q.x, q.y, q.z, q.w];
         window.dispatchEvent(new CustomEvent('viewer-camera-set-quaternion', { detail: { q: arr } }));
         event.stopPropagation();
@@ -449,9 +448,9 @@ const ViewCube: React.FC<ViewCubeProps> = ({ onViewChange, className = '', size 
     const handleCameraChanged = (e: CustomEvent<{ q: [number, number, number, number] }>) => {
       if (!cubeGroup) return;
       const [x, y, z, w] = e.detail.q;
-      // Apply inverse so the cube acts as a navigator gizmo (industry standard)
-      // This makes labeled faces align with selected views consistently, including isometric.
-      const q = new THREE.Quaternion(x, y, z, w).invert();
+      // Apply camera quaternion directly so the cube shows what direction the camera is facing
+      // The FRONT face should be visible when looking at the front of the model
+      const q = new THREE.Quaternion(x, y, z, w);
       cubeGroup.setRotationFromQuaternion(q);
       // Determine active face from camera orientation (choose major axis of camera forward)
       const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(new THREE.Quaternion(x, y, z, w));
