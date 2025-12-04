@@ -713,6 +713,20 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     if (!currentFile) {
       setModelBounds(null);
       setCurrentOrientation('iso');
+    } else {
+      // When a new file is loaded, emit the initial transform with isInitial flag
+      // This allows the Properties panel to store the initial position for reset functionality
+      setTimeout(() => {
+        window.dispatchEvent(
+          new CustomEvent('model-transform-updated', {
+            detail: {
+              position: modelTransform.position,
+              rotation: modelTransform.rotation,
+              isInitial: true,
+            },
+          })
+        );
+      }, 100); // Small delay to ensure mesh is positioned
     }
   }, [currentFile]);
 
@@ -1284,6 +1298,51 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     window.addEventListener('toggle-transform-mode', handleToggleTransform as EventListener);
     return () => window.removeEventListener('toggle-transform-mode', handleToggleTransform as EventListener);
   }, []);
+
+  // Emit model transform updates when transform changes (for Properties panel sync)
+  React.useEffect(() => {
+    // Dispatch current transform state to any listeners
+    window.dispatchEvent(
+      new CustomEvent('model-transform-updated', {
+        detail: {
+          position: modelTransform.position,
+          rotation: modelTransform.rotation,
+        },
+      })
+    );
+  }, [modelTransform]);
+
+  // Listen for transform changes from Properties panel input fields
+  React.useEffect(() => {
+    const handleSetTransform = (e: CustomEvent) => {
+      const { position, rotation } = e.detail;
+      setModelTransform({
+        position: position.clone(),
+        rotation: rotation.clone(),
+        scale: modelTransform.scale.clone(),
+      });
+    };
+
+    const handleRequestTransform = () => {
+      // Send current transform state when requested
+      window.dispatchEvent(
+        new CustomEvent('model-transform-updated', {
+          detail: {
+            position: modelTransform.position,
+            rotation: modelTransform.rotation,
+          },
+        })
+      );
+    };
+
+    window.addEventListener('set-model-transform', handleSetTransform as EventListener);
+    window.addEventListener('request-model-transform', handleRequestTransform as EventListener);
+
+    return () => {
+      window.removeEventListener('set-model-transform', handleSetTransform as EventListener);
+      window.removeEventListener('request-model-transform', handleRequestTransform as EventListener);
+    };
+  }, [modelTransform, setModelTransform]);
 
   // Handle orbit controls enable/disable for transform mode
   React.useEffect(() => {

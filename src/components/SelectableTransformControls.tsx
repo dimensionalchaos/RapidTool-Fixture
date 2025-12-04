@@ -29,6 +29,9 @@ const SelectableTransformControls: React.FC<SelectableTransformControlsProps> = 
   const raycasterRef = useRef(new THREE.Raycaster());
   const groupRef = useRef<THREE.Group>(null);
   
+  // Use a controlled matrix for the PivotControls
+  const [controlMatrix, setControlMatrix] = useState<THREE.Matrix4>(() => new THREE.Matrix4());
+  
   // Track the last transform to detect changes
   const lastTransformRef = useRef<{ position: THREE.Vector3; rotation: THREE.Euler } | null>(null);
 
@@ -167,6 +170,38 @@ const SelectableTransformControls: React.FC<SelectableTransformControlsProps> = 
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isActive, onSelectionChange]);
 
+  // Listen for external transform updates (from Properties panel input fields)
+  useEffect(() => {
+    const handleSetTransform = (e: CustomEvent) => {
+      if (!meshRef.current) return;
+      
+      const { position, rotation } = e.detail;
+      
+      // Update mesh transform
+      meshRef.current.position.copy(position);
+      meshRef.current.rotation.copy(rotation);
+      meshRef.current.updateMatrixWorld(true);
+      
+      // Update the controlled matrix for PivotControls
+      const newMatrix = new THREE.Matrix4();
+      newMatrix.compose(
+        position,
+        new THREE.Quaternion().setFromEuler(rotation),
+        new THREE.Vector3(1, 1, 1)
+      );
+      setControlMatrix(newMatrix.clone());
+      
+      // Update our tracked transform to prevent re-emitting the same values
+      lastTransformRef.current = {
+        position: position.clone(),
+        rotation: rotation.clone(),
+      };
+    };
+
+    window.addEventListener('set-model-transform', handleSetTransform as EventListener);
+    return () => window.removeEventListener('set-model-transform', handleSetTransform as EventListener);
+  }, [meshRef]);
+
   // Scale the gizmo based on model size
   const gizmoScale = bounds ? Math.max(bounds.radius * 0.75, 25) : 50;
 
@@ -184,6 +219,7 @@ const SelectableTransformControls: React.FC<SelectableTransformControlsProps> = 
         annotations={isActive}
         annotationsClass="pivot-annotation"
         autoTransform={true}
+        matrix={controlMatrix}
         anchor={[0, 0, 0]}
         disableAxes={!isActive}
         disableSliders={!isActive}
@@ -193,6 +229,9 @@ const SelectableTransformControls: React.FC<SelectableTransformControlsProps> = 
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
         onDrag={(local, deltaL, world, deltaW) => {
+          // Update the controlled matrix
+          setControlMatrix(world.clone());
+          
           if (onTransformChange) {
             const position = new THREE.Vector3();
             const quaternion = new THREE.Quaternion();

@@ -4,22 +4,30 @@
  * Clean, production-ready exports for mesh processing pipeline.
  */
 
-// Services
+// Default export - FileImport component
+export { default } from './index.tsx';
+
+// Services - Mesh Analysis
 export { 
-  MeshAnalysisService,
+  analyzeMesh,
+  repairMesh,
+  decimateMesh,
+  processMeshPipeline,
+  DECIMATION_THRESHOLD,
+  DECIMATION_TARGET,
   type MeshAnalysisResult,
-  type RepairResult,
+  type MeshRepairResult,
   type DecimationResult,
-  type ProcessingPipelineResult,
-  type MeshIssues,
-  type MeshProcessingConfig,
+  type ProcessingProgress,
+  type ProgressCallback,
+  type PipelineOptions,
+  type PipelineResult,
 } from './services/meshAnalysisService';
 
 export { 
-  STLParser,
-  type STLParseResult,
-  type STLParseOptions,
-  type STLFormat,
+  parseSTL,
+  validateSTLBuffer,
+  type ParseResult as STLParseResult,
 } from './services/stlParser';
 
 // Hooks

@@ -9,6 +9,7 @@ import ThreeDViewer from "@/components/3DViewer";
 import BaseplateDialog from "@/components/BaseplateDialog";
 import SupportsPanel from "@/components/Supports/SupportsPanel";
 import BooleanOperationsPanel from "@/components/BooleanOperationsPanel";
+import PartPropertiesAccordion from "@/components/PartPropertiesAccordion";
 import { ProcessedFile } from "@/modules/FileImport/types";
 import {
   Cpu,
@@ -535,32 +536,8 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
 
             {!isPropertiesCollapsed && (
               <div className="p-4 flex-1 overflow-auto">
-                {fileStats ? (
-                  <div className="space-y-2 text-xs font-tech">
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">File:</span>
-                      <span className="truncate ml-2 max-w-[120px]" title={fileStats.name}>
-                        {fileStats.name}
-                      </span>
-                    </div>
-                    {fileStats.triangles && (
-                      <div className="flex justify-between">
-                        <span className="text-muted-foreground">Triangles:</span>
-                        <span>{fileStats.triangles.toLocaleString()}</span>
-                      </div>
-                    )}
-                    {fileStats.size && (
-                      <div className="flex justify-between">
-                        <span className="text-muted-foreground">Size:</span>
-                        <span>{fileStats.size}</span>
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <p className="text-xs text-muted-foreground font-tech">
-                    No file loaded
-                  </p>
-                )}
+                {/* Part Properties Accordion - Transform controls */}
+                <PartPropertiesAccordion hasModel={!!currentFile} />
 
                 {/* Subtract Workpieces panel anchored here */}
                 {isCavityOpen && (
