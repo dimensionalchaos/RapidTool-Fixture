@@ -110,7 +110,9 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
     } else if (type === 'conical') {
       const conicalFootprint = footprint as ConicalSupport;
       conicalFootprint.baseRadius = Number(initParams?.baseRadius ?? dist);
-      conicalFootprint.topRadius = Number(initParams?.topRadius ?? 0);
+      // Default top radius is 50% of base radius for a truncated cone
+      const defaultTopRadius = conicalFootprint.baseRadius * 0.5;
+      conicalFootprint.topRadius = Number(initParams?.topRadius ?? defaultTopRadius);
     }
     const metrics = computeMetrics(footprint);
     const height = metrics?.height ?? Number(initParams?.height ?? 5);
@@ -127,7 +129,9 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
     }
     if (type === 'conical') {
       const baseRadius = Number(initParams?.baseRadius ?? dist);
-      const topRadius = Number(initParams?.topRadius ?? 0);
+      // Default top radius is 50% of base radius for a truncated cone
+      const defaultTopRadius = baseRadius * 0.5;
+      const topRadius = Number(initParams?.topRadius ?? defaultTopRadius);
       return { id: `sup-${Date.now()}`, type, center: new THREE.Vector2(cx, cz), height, baseRadius, topRadius, baseY, contactOffset } as AnySupport;
     }
     // custom placeholder

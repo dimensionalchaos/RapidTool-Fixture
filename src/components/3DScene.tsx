@@ -944,6 +944,40 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     return () => window.removeEventListener('support-created', onSupportCreated as EventListener);
   }, []);
 
+  // Listen for support updates from properties panel
+  React.useEffect(() => {
+    const onSupportUpdated = (e: CustomEvent) => {
+      const updatedSupport = e.detail as AnySupport;
+      setSupports(prev => prev.map(s => s.id === updatedSupport.id ? updatedSupport : s));
+    };
+
+    const onSupportDelete = (e: CustomEvent) => {
+      const supportId = e.detail as string;
+      setSupports(prev => prev.filter(s => s.id !== supportId));
+      // If we were editing this support, cancel the edit
+      if (editingSupportRef.current?.id === supportId) {
+        editingSupportRef.current = null;
+        setEditingSupport(null);
+      }
+    };
+
+    const onSupportsClearAll = () => {
+      setSupports([]);
+      editingSupportRef.current = null;
+      setEditingSupport(null);
+    };
+
+    window.addEventListener('support-updated', onSupportUpdated as EventListener);
+    window.addEventListener('support-delete', onSupportDelete as EventListener);
+    window.addEventListener('supports-clear-all', onSupportsClearAll);
+
+    return () => {
+      window.removeEventListener('support-updated', onSupportUpdated as EventListener);
+      window.removeEventListener('support-delete', onSupportDelete as EventListener);
+      window.removeEventListener('supports-clear-all', onSupportsClearAll);
+    };
+  }, []);
+
   // Undo/Redo handlers for supports
   React.useEffect(() => {
     const onUndo = (e: CustomEvent) => {

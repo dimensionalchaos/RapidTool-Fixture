@@ -11,6 +11,8 @@ import { Button } from '@/components/ui/button';
 import { RotateCcw, Move, RotateCw, FileText, Info, ToggleLeft, ToggleRight } from 'lucide-react';
 import * as THREE from 'three';
 import { ProcessedFile } from '@/modules/FileImport/types';
+import SupportsAccordion from './Supports/SupportsAccordion';
+import { AnySupport } from './Supports/types';
 
 interface PartTransform {
   position: { x: number; y: number; z: number };
@@ -22,9 +24,22 @@ type PositioningMode = 'absolute' | 'incremental';
 interface PartPropertiesAccordionProps {
   hasModel: boolean;
   currentFile?: ProcessedFile | null;
+  supports?: AnySupport[];
+  selectedSupportId?: string | null;
+  onSupportSelect?: (id: string | null) => void;
+  onSupportUpdate?: (support: AnySupport) => void;
+  onSupportDelete?: (id: string) => void;
 }
 
-const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({ hasModel, currentFile }) => {
+const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({ 
+  hasModel, 
+  currentFile,
+  supports = [],
+  selectedSupportId = null,
+  onSupportSelect,
+  onSupportUpdate,
+  onSupportDelete 
+}) => {
   // Current transform (what's displayed in the UI)
   const [transform, setTransform] = useState<PartTransform>({
     position: { x: 0, y: 0, z: 0 },
@@ -557,6 +572,15 @@ const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({ hasMo
           </div>
         </AccordionContent>
       </AccordionItem>
+
+      {/* Supports Accordion */}
+      <SupportsAccordion
+        supports={supports}
+        selectedSupportId={selectedSupportId}
+        onSupportSelect={onSupportSelect || (() => {})}
+        onSupportUpdate={onSupportUpdate || (() => {})}
+        onSupportDelete={onSupportDelete || (() => {})}
+      />
     </Accordion>
   );
 };

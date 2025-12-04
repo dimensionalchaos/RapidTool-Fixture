@@ -1,43 +1,72 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Slider } from '@/components/ui/slider';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Boxes, Plus, Trash2, AlertCircle, MousePointer2 } from 'lucide-react';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Boxes, AlertCircle, MousePointer2, Square, Circle, Triangle, Spline } from 'lucide-react';
 
-interface Support {
-  id: string;
-  type: string;
-  height: number;
-  position: { x: number; y: number; z: number };
-}
+export type SupportType = 'rectangular' | 'cylindrical' | 'conical' | 'custom';
 
 interface SupportsStepContentProps {
   hasBaseplate?: boolean;
-  supports?: Support[];
+  supportsCount?: number;
   isPlacementMode?: boolean;
   onTogglePlacementMode?: () => void;
-  onSupportSelect?: (supportId: string) => void;
-  onSupportDelete?: (supportId: string) => void;
-  selectedSupportId?: string | null;
-  supportHeight?: number;
-  onSupportHeightChange?: (height: number) => void;
+  onStartPlacement?: (type: SupportType) => void;
+  selectedSupportType?: SupportType;
+  onSupportTypeChange?: (type: SupportType) => void;
 }
+
+const SUPPORT_TYPE_CONFIG: Record<SupportType, { label: string; icon: React.ReactNode; description: string }> = {
+  rectangular: {
+    label: 'Rect',
+    icon: <Square className="w-4 h-4" />,
+    description: 'Box-shaped support with configurable width and depth'
+  },
+  cylindrical: {
+    label: 'Cyl',
+    icon: <Circle className="w-4 h-4" />,
+    description: 'Cylindrical support with configurable radius'
+  },
+  conical: {
+    label: 'Cone',
+    icon: <Triangle className="w-4 h-4" />,
+    description: 'Tapered support with base and top radius'
+  },
+  custom: {
+    label: 'Custom',
+    icon: <Spline className="w-4 h-4" />,
+    description: 'Draw a custom polygon shape'
+  }
+};
 
 const SupportsStepContent: React.FC<SupportsStepContentProps> = ({
   hasBaseplate = false,
-  supports = [],
+  supportsCount = 0,
   isPlacementMode = false,
   onTogglePlacementMode,
-  onSupportSelect,
-  onSupportDelete,
-  selectedSupportId,
-  supportHeight = 20,
-  onSupportHeightChange
+  onStartPlacement,
+  selectedSupportType = 'cylindrical',
+  onSupportTypeChange
 }) => {
+  const [localType, setLocalType] = useState<SupportType>(selectedSupportType);
+
+  const handleTypeChange = (type: SupportType) => {
+    setLocalType(type);
+    onSupportTypeChange?.(type);
+  };
+
+  const handleStartPlacement = () => {
+    onStartPlacement?.(localType);
+    // Dispatch the event for the 3D scene
+    window.dispatchEvent(new CustomEvent('supports-start-placement', {
+      detail: { type: localType, params: {} }
+    }));
+  };
+
   if (!hasBaseplate) {
     return (
       <div className="p-4">
@@ -53,7 +82,32 @@ const SupportsStepContent: React.FC<SupportsStepContentProps> = ({
 
   return (
     <div className="p-4 space-y-4">
-      {/* Placement Mode Toggle */}
+      {/* Support Type Selection */}
+      <div className="space-y-3">
+        <Label className="text-xs font-tech text-muted-foreground uppercase tracking-wider">
+          Support Type
+        </Label>
+        <Tabs value={localType} onValueChange={(v) => handleTypeChange(v as SupportType)}>
+          <TabsList className="grid grid-cols-4 h-9">
+            {Object.entries(SUPPORT_TYPE_CONFIG).map(([type, config]) => (
+              <TabsTrigger 
+                key={type} 
+                value={type} 
+                className="text-xs font-tech gap-1 px-2"
+                title={config.description}
+              >
+                {config.icon}
+                <span className="hidden sm:inline">{config.label}</span>
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </Tabs>
+        <p className="text-[10px] text-muted-foreground font-tech">
+          {SUPPORT_TYPE_CONFIG[localType].description}
+        </p>
+      </div>
+
+      {/* Placement Mode Card */}
       <Card className={`tech-glass p-3 ${isPlacementMode ? 'border-primary bg-primary/5' : ''}`}>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -61,111 +115,65 @@ const SupportsStepContent: React.FC<SupportsStepContentProps> = ({
             <div>
               <p className="text-sm font-tech font-medium">Placement Mode</p>
               <p className="text-xs text-muted-foreground font-tech">
-                Click on baseplate to add supports
+                {isPlacementMode ? 'Click on baseplate to place' : 'Enable to add supports'}
               </p>
             </div>
           </div>
           <Switch
             checked={isPlacementMode}
-            onCheckedChange={onTogglePlacementMode}
+            onCheckedChange={() => {
+              if (!isPlacementMode) {
+                handleStartPlacement();
+              } else {
+                window.dispatchEvent(new Event('supports-cancel-placement'));
+              }
+              onTogglePlacementMode?.();
+            }}
           />
         </div>
       </Card>
 
-      {/* Support Parameters */}
-      <div className="space-y-3">
-        <Label className="text-xs font-tech text-muted-foreground uppercase tracking-wider">
-          Support Height
-        </Label>
-        <div className="flex items-center gap-3">
-          <Slider
-            value={[supportHeight]}
-            onValueChange={([v]) => onSupportHeightChange?.(v)}
-            min={5}
-            max={100}
-            step={1}
-            className="flex-1"
-          />
-          <Badge variant="secondary" className="font-tech min-w-[50px] justify-center">
-            {supportHeight}mm
+      {/* Placement Instructions */}
+      {isPlacementMode && (
+        <Card className="tech-glass p-3 bg-primary/5 border-primary/30">
+          <div className="space-y-2">
+            <p className="text-xs font-tech font-medium text-primary">Placement Instructions</p>
+            <ol className="text-[10px] text-muted-foreground font-tech space-y-1 list-decimal list-inside">
+              <li>Click on the baseplate to set the center point</li>
+              <li>Drag outward to set the size/radius</li>
+              <li>Click again or drag up to confirm height</li>
+              <li>Support height auto-adjusts to touch the model</li>
+            </ol>
+          </div>
+        </Card>
+      )}
+
+      {/* Summary */}
+      <div className="pt-2 border-t border-border/50">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Boxes className="w-4 h-4 text-muted-foreground" />
+            <span className="text-xs font-tech text-muted-foreground">
+              Total Supports
+            </span>
+          </div>
+          <Badge variant="secondary" className="font-tech">
+            {supportsCount}
           </Badge>
         </div>
+        <p className="text-[10px] text-muted-foreground font-tech mt-2">
+          View and edit individual supports in the Properties panel →
+        </p>
       </div>
 
-      {/* Placed Supports List */}
-      <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <Label className="text-xs font-tech text-muted-foreground uppercase tracking-wider">
-            Supports ({supports.length})
-          </Label>
-          {isPlacementMode && (
-            <Badge variant="outline" className="text-xs animate-pulse">
-              Click to place
-            </Badge>
-          )}
-        </div>
-
-        {supports.length === 0 ? (
-          <Card className="tech-glass p-4 text-center">
-            <Boxes className="w-8 h-8 mx-auto text-muted-foreground/50 mb-2" />
-            <p className="text-xs text-muted-foreground font-tech">
-              No supports placed yet
-            </p>
-            <p className="text-xs text-muted-foreground font-tech mt-1">
-              Enable placement mode and click on the baseplate
-            </p>
-          </Card>
-        ) : (
-          <div className="space-y-1 max-h-[200px] overflow-auto">
-            {supports.map((support, index) => (
-              <Card
-                key={support.id}
-                className={`
-                  tech-glass p-2 cursor-pointer transition-all
-                  hover:border-primary/50
-                  ${selectedSupportId === support.id ? 'border-primary bg-primary/10' : ''}
-                `}
-                onClick={() => onSupportSelect?.(support.id)}
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <div className="w-6 h-6 rounded bg-muted/50 flex items-center justify-center text-xs font-tech">
-                      {index + 1}
-                    </div>
-                    <div>
-                      <p className="text-xs font-tech">Support {index + 1}</p>
-                      <p className="text-[8px] text-muted-foreground font-tech">
-                        Height: {support.height}mm
-                      </p>
-                    </div>
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onSupportDelete?.(support.id);
-                    }}
-                    className="w-6 h-6 p-0 text-muted-foreground hover:text-destructive"
-                  >
-                    <Trash2 className="w-3 h-3" />
-                  </Button>
-                </div>
-              </Card>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Quick actions */}
-      {supports.length > 0 && (
-        <div className="flex gap-2">
+      {/* Quick Actions */}
+      {supportsCount > 0 && (
+        <div className="flex gap-2 pt-2">
           <Button
             variant="outline"
             size="sm"
             className="flex-1 font-tech text-xs"
             onClick={() => {
-              // Auto-arrange supports
               window.dispatchEvent(new CustomEvent('supports-auto-arrange'));
             }}
           >
@@ -176,7 +184,6 @@ const SupportsStepContent: React.FC<SupportsStepContentProps> = ({
             size="sm"
             className="flex-1 font-tech text-xs text-destructive hover:text-destructive"
             onClick={() => {
-              // Clear all supports
               window.dispatchEvent(new CustomEvent('supports-clear-all'));
             }}
           >

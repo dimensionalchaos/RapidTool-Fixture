@@ -6,7 +6,6 @@ import { ThemeToggle } from "@/components/ThemeToggle";
 import ViewCube from "@/components/ViewCube";
 import VerticalToolbar from "@/components/VerticalToolbar";
 import ThreeDViewer from "@/components/3DViewer";
-import SupportsPanel from "@/components/Supports/SupportsPanel";
 import BooleanOperationsPanel from "@/components/BooleanOperationsPanel";
 import PartPropertiesAccordion from "@/components/PartPropertiesAccordion";
 import ContextOptionsPanel, { WorkflowStep, WORKFLOW_STEPS } from "@/components/ContextOptionsPanel";
@@ -21,6 +20,8 @@ import {
   OptimizeStepContent,
   ExportStepContent
 } from "@/components/ContextOptionsPanel/steps";
+import { SupportType } from "@/components/ContextOptionsPanel/steps/SupportsStepContent";
+import { AnySupport } from "@/components/Supports/types";
 import UnitsDialog from "@/modules/FileImport/components/UnitsDialog";
 import MeshOptimizationDialog from "@/modules/FileImport/components/MeshOptimizationDialog";
 import { useFileProcessing } from "@/modules/FileImport/hooks/useFileProcessing";
@@ -126,8 +127,6 @@ interface AppShellProps {
 const AppShell = forwardRef<AppShellHandle, AppShellProps>(
   ({ children, onLogout, onToggleDesignMode, designMode = false, isProcessing: externalProcessing = false, fileStats, currentFile }, ref) => {
     // UI State
-    // UI State
-    const [isSupportsOpen, setIsSupportsOpen] = useState(false);
     const [isCavityOpen, setIsCavityOpen] = useState(false);
     const [isContextPanelCollapsed, setIsContextPanelCollapsed] = useState(false);
     const [isPropertiesCollapsed, setIsPropertiesCollapsed] = useState(false);
@@ -161,8 +160,8 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
 
     // Support placement state
     const [isPlacementMode, setIsPlacementMode] = useState(false);
-    const [supports, setSupports] = useState<Array<{ id: string; type: string; height: number; position: { x: number; y: number; z: number } }>>([]);
-    const [supportHeight, setSupportHeight] = useState(20);
+    const [supports, setSupports] = useState<AnySupport[]>([]);
+    const [selectedSupportType, setSelectedSupportType] = useState<SupportType>('cylindrical');
     const [selectedSupportId, setSelectedSupportId] = useState<string | null>(null);
 
     // Cavity state
@@ -362,20 +361,22 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
       setActiveStep(step);
       
       // Close any open panels when changing steps
-      setIsSupportsOpen(false);
       setIsCavityOpen(false);
+      
+      // Cancel placement mode when leaving supports step
+      if (step !== 'supports' && isPlacementMode) {
+        setIsPlacementMode(false);
+        window.dispatchEvent(new Event('supports-cancel-placement'));
+      }
       
       // Trigger step-specific events
       switch (step) {
-        case 'supports':
-          window.dispatchEvent(new CustomEvent('open-supports-dialog'));
-          break;
         case 'cavity':
           window.dispatchEvent(new CustomEvent('open-cavity-dialog'));
           setTimeout(() => window.dispatchEvent(new CustomEvent('request-cavity-context')), 0);
           break;
       }
-    }, []);
+    }, [isPlacementMode]);
 
     const handleResetSession = () => {
       // Reset all session state - like starting fresh
@@ -385,13 +386,13 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
       setCavityBaseMesh(null);
       setCavityTools([]);
       setIsCavityOpen(false);
-      setIsSupportsOpen(false);
       setInternalFile(null);
       setFileError(null);
       setActiveStep('import');
       setCompletedSteps([]);
       setSupports([]);
       setIsPlacementMode(false);
+      setSelectedSupportId(null);
       
       // Dispatch events to reset the 3D scene and clear the file
       window.dispatchEvent(new CustomEvent('viewer-reset'));
@@ -441,9 +442,11 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
       if (!completedSteps.includes('baseplates')) {
         setCompletedSteps(prev => [...prev, 'baseplates']);
       }
-      // Also cancel any ongoing supports placement and close panel
-      setIsSupportsOpen(false);
-      window.dispatchEvent(new Event('supports-cancel-placement'));
+      // Cancel any ongoing supports placement
+      if (isPlacementMode) {
+        setIsPlacementMode(false);
+        window.dispatchEvent(new Event('supports-cancel-placement'));
+      }
     };
 
     const handleBaseplateRemoved = (basePlateId: string) => {
@@ -459,18 +462,20 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
         setActiveStep(toolId as WorkflowStep);
       }
 
+      // Cancel placement mode when leaving supports
+      if (toolId !== 'supports' && isPlacementMode) {
+        setIsPlacementMode(false);
+        window.dispatchEvent(new Event('supports-cancel-placement'));
+      }
+
       switch (toolId) {
         case 'import':
           // Just switch to import step, don't open file picker automatically
           return;
         case 'baseplates':
-          // Close supports and cancel placement if active
-          setIsSupportsOpen(false);
-          window.dispatchEvent(new Event('supports-cancel-placement'));
           return;
         case 'supports':
-          setIsSupportsOpen(true);
-          window.dispatchEvent(new CustomEvent('open-supports-dialog'));
+          // Supports is now handled by context panel, no floating dialog needed
           return;
         case 'cavity':
           window.dispatchEvent(new CustomEvent('open-cavity-dialog'));
@@ -503,12 +508,8 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
       return () => window.removeEventListener('create-baseplate', handleBaseplateCreated as EventListener);
     }, []);
 
-    // Listen for supports dialog open event
-    React.useEffect(() => {
-      const onOpenSupports = () => setIsSupportsOpen(true);
-      window.addEventListener('open-supports-dialog', onOpenSupports as EventListener);
-      return () => window.removeEventListener('open-supports-dialog', onOpenSupports as EventListener);
-    }, []);
+    // Listen for supports dialog open event - no longer needed as we use context panel
+    // Remove floating panel, placement mode is controlled via context panel
 
     // Listen for cavity (boolean ops) open event
     React.useEffect(() => {
@@ -528,17 +529,74 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
       return () => window.removeEventListener('cavity-context', onCavityContext as EventListener);
     }, []);
 
-    // Record support creations to undo stack
+    // Sync supports from 3D scene - listen for support-created and support-updated events
     React.useEffect(() => {
       const onSupportCreated = (e: CustomEvent) => {
-        const support = e.detail;
+        const support = e.detail as AnySupport;
+        setSupports(prev => {
+          // Check if it's an update (existing ID)
+          const existingIndex = prev.findIndex(s => s.id === support.id);
+          if (existingIndex >= 0) {
+            const updated = [...prev];
+            updated[existingIndex] = support;
+            return updated;
+          }
+          return [...prev, support];
+        });
+        
+        // Record to undo stack
         const state = { type: 'support-created', support };
         setUndoStack(prev => [...prev, state]);
         setRedoStack([]);
       };
+
+      const onSupportUpdated = (e: CustomEvent) => {
+        const support = e.detail as AnySupport;
+        setSupports(prev => prev.map(s => s.id === support.id ? support : s));
+      };
+
+      const onSupportDelete = (e: CustomEvent) => {
+        const supportId = e.detail as string;
+        setSupports(prev => prev.filter(s => s.id !== supportId));
+        if (selectedSupportId === supportId) {
+          setSelectedSupportId(null);
+        }
+      };
+
+      const onSupportsClearAll = () => {
+        setSupports([]);
+        setSelectedSupportId(null);
+      };
+
       window.addEventListener('support-created', onSupportCreated as EventListener);
-      return () => window.removeEventListener('support-created', onSupportCreated as EventListener);
+      window.addEventListener('support-updated', onSupportUpdated as EventListener);
+      window.addEventListener('support-delete', onSupportDelete as EventListener);
+      window.addEventListener('supports-clear-all', onSupportsClearAll);
+
+      return () => {
+        window.removeEventListener('support-created', onSupportCreated as EventListener);
+        window.removeEventListener('support-updated', onSupportUpdated as EventListener);
+        window.removeEventListener('support-delete', onSupportDelete as EventListener);
+        window.removeEventListener('supports-clear-all', onSupportsClearAll);
+      };
+    }, [selectedSupportId]);
+
+    // Handle support update from properties panel
+    const handleSupportUpdate = useCallback((support: AnySupport) => {
+      setSupports(prev => prev.map(s => s.id === support.id ? support : s));
+      // Dispatch to 3D scene
+      window.dispatchEvent(new CustomEvent('support-updated', { detail: support }));
     }, []);
+
+    // Handle support delete from properties panel
+    const handleSupportDelete = useCallback((id: string) => {
+      setSupports(prev => prev.filter(s => s.id !== id));
+      if (selectedSupportId === id) {
+        setSelectedSupportId(null);
+      }
+      // Dispatch to 3D scene
+      window.dispatchEvent(new CustomEvent('support-delete', { detail: id }));
+    }, [selectedSupportId]);
 
     // Expose methods via ref
     React.useImperativeHandle(ref, () => ({
@@ -546,6 +604,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
       resetView: handleResetSession,
       setViewOrientation: handleSetOrientation,
     }));
+
 
     return (
       <div className="h-screen flex flex-col bg-background overflow-hidden">
@@ -799,20 +858,17 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
                   {activeStep === 'supports' && (
                     <SupportsStepContent
                       hasBaseplate={!!currentBaseplate}
-                      supports={supports}
+                      supportsCount={supports.length}
                       isPlacementMode={isPlacementMode}
                       onTogglePlacementMode={() => {
                         setIsPlacementMode(!isPlacementMode);
-                        window.dispatchEvent(new CustomEvent('supports-toggle-placement', { detail: !isPlacementMode }));
                       }}
-                      onSupportSelect={setSelectedSupportId}
-                      onSupportDelete={(id) => {
-                        setSupports(prev => prev.filter(s => s.id !== id));
-                        window.dispatchEvent(new CustomEvent('support-delete', { detail: id }));
+                      onStartPlacement={(type) => {
+                        setSelectedSupportType(type);
+                        setIsPlacementMode(true);
                       }}
-                      selectedSupportId={selectedSupportId}
-                      supportHeight={supportHeight}
-                      onSupportHeightChange={setSupportHeight}
+                      selectedSupportType={selectedSupportType}
+                      onSupportTypeChange={setSelectedSupportType}
                     />
                   )}
                   {activeStep === 'cavity' && (
@@ -938,8 +994,16 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
 
             {!isPropertiesCollapsed && (
               <div className="p-4 flex-1 overflow-auto">
-                {/* Part Properties Accordion - File Details and Transform controls */}
-                <PartPropertiesAccordion hasModel={!!actualFile} currentFile={actualFile} />
+                {/* Part Properties Accordion - File Details, Transform controls, and Supports */}
+                <PartPropertiesAccordion 
+                  hasModel={!!actualFile} 
+                  currentFile={actualFile}
+                  supports={supports}
+                  selectedSupportId={selectedSupportId}
+                  onSupportSelect={setSelectedSupportId}
+                  onSupportUpdate={handleSupportUpdate}
+                  onSupportDelete={handleSupportDelete}
+                />
 
                 {/* Subtract Workpieces panel anchored here */}
                 {isCavityOpen && (
@@ -976,15 +1040,6 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
             <span>Powered by Three.js</span>
           </div>
         </footer>
-
-        {/* Supports Panel */}
-        <SupportsPanel
-          open={isSupportsOpen}
-          onClose={() => {
-            setIsSupportsOpen(false);
-            window.dispatchEvent(new Event('supports-cancel-placement'));
-          }}
-        />
 
         {/* Units Selection Dialog */}
         <UnitsDialog
