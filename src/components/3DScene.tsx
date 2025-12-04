@@ -1448,8 +1448,8 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       <pointLight position={[0, 10, 0]} intensity={0.3} />
       <pointLight position={[0, -10, 0]} intensity={0.3} />
 
-      {/* Environment */}
-      <Environment preset="warehouse" />
+      {/* Environment - background disabled to prevent texture regeneration issues */}
+      <Environment preset="warehouse" background={false} />
 
       {/* Center cross axes - sized based on model footprint */}
       <CenterCross length={centerCrossLength} />

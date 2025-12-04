@@ -21,9 +21,11 @@ const ViewCube: React.FC<ViewCubeProps> = ({ onViewChange, className = '', size 
   const edgeMaterialRef = useRef<THREE.LineBasicMaterial | null>(null);
   const arrowMatsRef = useRef<Record<string, THREE.MeshBasicMaterial>>({});
   const overlayRef = useRef<THREE.Group | null>(null);
+  const texturesRef = useRef<THREE.Texture[]>([]);
 
   useEffect(() => {
-
+    // Clear textures array on each effect run
+    texturesRef.current = [];
     
     if (!mountRef.current) return;
 
@@ -146,6 +148,7 @@ const ViewCube: React.FC<ViewCubeProps> = ({ onViewChange, className = '', size 
       texture.minFilter = THREE.LinearFilter;
       texture.magFilter = THREE.LinearFilter;
       texture.needsUpdate = true;
+      texturesRef.current.push(texture); // Track for disposal
       const spriteMaterial = new THREE.SpriteMaterial({ 
         map: texture, 
         transparent: true,
@@ -474,10 +477,21 @@ const ViewCube: React.FC<ViewCubeProps> = ({ onViewChange, className = '', size 
       renderer.domElement.removeEventListener('click', handleClick);
       renderer.domElement.removeEventListener('dblclick', handleDblClick);
       mountRef.current?.removeChild(renderer.domElement);
+      
+      // Dispose all textures to prevent WebGL immutable texture errors
+      texturesRef.current.forEach(texture => texture.dispose());
+      texturesRef.current = [];
+      
+      // Dispose all materials
+      Object.values(faceOverlayMatsRef.current).forEach(mat => mat.dispose());
+      Object.values(faceOutlineMatsRef.current).forEach(mat => mat.dispose());
+      Object.values(arrowMatsRef.current).forEach(mat => mat.dispose());
+      if (edgeMaterialRef.current) edgeMaterialRef.current.dispose();
+      
       renderer.dispose();
       window.removeEventListener('viewer-camera-changed', handleCameraChanged as EventListener);
     };
-  }, [onViewChange]);
+  }, [onViewChange, size]);
 
   // Hover styling: slightly darken edges; tint the hovered arrow only
   useEffect(() => {

@@ -202,6 +202,10 @@ export function useFileProcessing(): UseFileProcessingReturn {
       // const scale = getUnitScale(units);
       // geometry.scale(scale, scale, scale);
       
+      // Rotate geometry so Z is up (STL files often use Y-up convention)
+      // Rotate -90 degrees around X axis to convert from Y-up to Z-up
+      geometry.rotateX(-Math.PI / 2);
+
       // Ensure we have normals
       if (!geometry.attributes.normal) {
         geometry.computeVertexNormals();
