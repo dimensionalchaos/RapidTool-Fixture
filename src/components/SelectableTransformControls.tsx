@@ -14,7 +14,7 @@ interface SelectableTransformControlsProps {
 /**
  * A transform control system that:
  * 1. Double-click on mesh to show PivotControls gizmo (translate + rotate together)
- * 2. Click outside or Escape to deselect
+ * 2. Click X button or Escape to deselect
  */
 const SelectableTransformControls: React.FC<SelectableTransformControlsProps> = ({
   meshRef,
@@ -32,9 +32,9 @@ const SelectableTransformControls: React.FC<SelectableTransformControlsProps> = 
   // Track the last transform to detect changes
   const lastTransformRef = useRef<{ position: THREE.Vector3; rotation: THREE.Euler } | null>(null);
 
-  // Calculate mesh bounds
-  useEffect(() => {
-    if (!meshRef.current) return;
+  // Calculate mesh bounds continuously via useFrame
+  useFrame(() => {
+    if (!meshRef.current || !enabled) return;
     
     const mesh = meshRef.current;
     mesh.updateMatrixWorld(true);
@@ -47,26 +47,14 @@ const SelectableTransformControls: React.FC<SelectableTransformControlsProps> = 
     
     const radius = Math.max(size.x, size.y, size.z) / 2;
     
-    setBounds({ center, size, radius });
-  }, [meshRef.current]);
-
-  // Update bounds when mesh moves
-  useFrame(() => {
-    if (!meshRef.current || !enabled) return;
+    // Always update bounds - they might change due to transformations
+    if (!bounds || 
+        Math.abs(bounds.radius - radius) > 0.001 ||
+        bounds.center.distanceTo(center) > 0.001) {
+      setBounds({ center: center.clone(), size: size.clone(), radius });
+    }
     
-    const mesh = meshRef.current;
-    
-    // Update bounds periodically
-    const box = new THREE.Box3().setFromObject(mesh);
-    const center = new THREE.Vector3();
-    const size = new THREE.Vector3();
-    box.getCenter(center);
-    box.getSize(size);
-    const radius = Math.max(size.x, size.y, size.z) / 2;
-    
-    setBounds({ center, size, radius });
-    
-    // Track transform changes
+    // Track transform changes for parent component
     if (onTransformChange) {
       const currentTransform = {
         position: mesh.position.clone(),
@@ -99,38 +87,40 @@ const SelectableTransformControls: React.FC<SelectableTransformControlsProps> = 
     );
   }, [gl]);
 
-  // Check if mouse is over the mesh
+  // Check if mouse is over the mesh (for cursor changes)
   const isMouseOverMesh = useCallback((event: MouseEvent) => {
     if (!meshRef.current) return false;
+    
+    const mesh = meshRef.current;
+    mesh.updateMatrixWorld(true);
     
     const mouse = getMouseNDC(event);
     raycasterRef.current.setFromCamera(mouse, camera);
     
-    const intersects = raycasterRef.current.intersectObject(meshRef.current, true);
+    const intersects = raycasterRef.current.intersectObject(mesh, true);
     return intersects.length > 0;
   }, [meshRef, camera, getMouseNDC]);
 
-  // Handle double-click on canvas - check if it's on the mesh
+  // Handle double-click via custom event from the mesh itself (more reliable than canvas dblclick)
   useEffect(() => {
     if (!enabled) return;
     
-    const handleDoubleClick = (event: MouseEvent) => {
-      if (isActive) return; // Already active, ignore
+    const handleMeshDoubleClick = () => {
+      console.log('SelectableTransformControls: mesh-double-click event received, isActive:', isActive);
       
-      if (isMouseOverMesh(event)) {
-        console.log('Double-click on mesh detected - activating PivotControls');
-        setIsActive(true);
-        onSelectionChange?.(true);
+      if (isActive) {
+        console.log('SelectableTransformControls: Already active, ignoring');
+        return;
       }
+      
+      console.log('SelectableTransformControls: Activating gizmo');
+      setIsActive(true);
+      onSelectionChange?.(true);
     };
     
-    gl.domElement.addEventListener('dblclick', handleDoubleClick);
-    return () => gl.domElement.removeEventListener('dblclick', handleDoubleClick);
-  }, [gl, enabled, isActive, isMouseOverMesh, onSelectionChange]);
-
-  // Note: We don't auto-deselect on click outside anymore
-  // User must click the X button or press Escape to close the gizmo
-  // This allows free orbit controls while the gizmo is active
+    window.addEventListener('mesh-double-click', handleMeshDoubleClick);
+    return () => window.removeEventListener('mesh-double-click', handleMeshDoubleClick);
+  }, [enabled, isActive, onSelectionChange]);
 
   // Cursor change on hover over mesh (to indicate it's clickable)
   useEffect(() => {
@@ -177,23 +167,18 @@ const SelectableTransformControls: React.FC<SelectableTransformControlsProps> = 
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isActive, onSelectionChange]);
 
-  if (!enabled || !meshRef.current || !bounds) {
-    return <group ref={groupRef}>{children}</group>;
-  }
+  // Scale the gizmo based on model size
+  const gizmoScale = bounds ? Math.max(bounds.radius * 0.75, 25) : 50;
 
-  // Scale the gizmo to be visible - use a large fixed scale relative to the object
-  // The 'scale' prop in PivotControls is in world units, not a multiplier
-  const gizmoScale = Math.max(bounds.radius * 0.75, 25);
-
+  // Always render PivotControls to prevent children remounting (which resets camera)
+  // Use opacity/visibility and disable props to hide the gizmo when not active
   return (
     <group ref={groupRef}>
-      {/* Always render PivotControls to avoid unmounting children - use visible prop to show/hide gizmo */}
       <PivotControls
         scale={gizmoScale}
         lineWidth={4}
         depthTest={false}
         fixed={false}
-        visible={isActive}
         axisColors={['#ff4060', '#40ff60', '#4080ff']}
         hoveredColor="#ffff40"
         annotations={isActive}
@@ -204,11 +189,11 @@ const SelectableTransformControls: React.FC<SelectableTransformControlsProps> = 
         disableSliders={!isActive}
         disableRotations={!isActive}
         disableScaling={true}
+        visible={isActive}
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
         onDrag={(local, deltaL, world, deltaW) => {
-          // Report transform changes
-          if (onTransformChange && groupRef.current) {
+          if (onTransformChange) {
             const position = new THREE.Vector3();
             const quaternion = new THREE.Quaternion();
             const scale = new THREE.Vector3();
@@ -218,12 +203,11 @@ const SelectableTransformControls: React.FC<SelectableTransformControlsProps> = 
           }
         }}
       >
-        {/* The mesh to be transformed - always stays here */}
         {children}
       </PivotControls>
       
       {/* Small close button - only shown when active */}
-      {isActive && (
+      {isActive && bounds && (
         <Html
           position={[bounds.center.x + bounds.radius * 1.2, bounds.center.y + bounds.radius * 1.2, bounds.center.z]}
           center

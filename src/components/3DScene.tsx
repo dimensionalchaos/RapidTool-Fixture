@@ -181,39 +181,93 @@ const getProjectedSizeForOrientation = (bounds: BoundsSummary, orientation: View
   }
 };
 
-// Center cross axes component (lies on ground plane)
-function CenterCross({ length = 100, position = [0, -0.001, 0] }: { length?: number; position?: [number, number, number] }) {
-  const positions = useMemo(() => new Float32Array([
-    // X axis (red) along ground
-    -length, 0, 0,   length, 0, 0,
-    // Z axis (green) along ground depth
-    0, 0, -length,   0, 0, length,
-  ]), [length]);
+// Ground grid that scales with the model
+function ScalableGrid({ modelBounds }: { modelBounds: BoundsSummary | null }) {
+  const gridRef = useRef<THREE.Group>(null);
+  
+  // Calculate grid size based on model bounds
+  const gridConfig = useMemo(() => {
+    if (!modelBounds) {
+      // Default grid when no model loaded
+      return { size: 200, divisions: 20, majorDivisions: 4 };
+    }
+    
+    // Get the largest dimension of the model
+    const maxDim = Math.max(modelBounds.size.x, modelBounds.size.z);
+    
+    // Make grid about 20% larger than the model, rounded to a nice number
+    const rawSize = maxDim * 1.2;
+    
+    // Round to nearest nice value (10, 25, 50, 100, 250, 500, etc.)
+    const niceValues = [10, 25, 50, 100, 250, 500, 1000, 2500, 5000];
+    let gridSize = niceValues[0];
+    for (const val of niceValues) {
+      if (val >= rawSize) {
+        gridSize = val;
+        break;
+      }
+      gridSize = val;
+    }
+    
+    // Determine appropriate cell size (1mm, 5mm, 10mm, 25mm, 50mm, 100mm)
+    const cellSizes = [1, 5, 10, 25, 50, 100, 250, 500];
+    let cellSize = 10;
+    for (const cs of cellSizes) {
+      if (gridSize / cs <= 50) { // Aim for max ~50 divisions
+        cellSize = cs;
+        break;
+      }
+    }
+    
+    const divisions = Math.floor(gridSize / cellSize);
+    const majorDivisions = cellSize >= 100 ? 1 : (cellSize >= 25 ? 4 : 10);
+    
+    return { size: gridSize, divisions, majorDivisions, cellSize };
+  }, [modelBounds]);
 
-  const colors = useMemo(() => new Float32Array([
-    1, 0, 0,   1, 0, 0,  // Red for X
-    0, 1, 0,   0, 1, 0,  // Green for Z (projected)
-  ]), []);
+  // Create axis lines using useMemo to avoid recreation on every render
+  const xAxisLine = useMemo(() => {
+    const geometry = new THREE.BufferGeometry();
+    const positions = new Float32Array([
+      -gridConfig.size / 2, 0.01, 0,
+      gridConfig.size / 2, 0.01, 0
+    ]);
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    const material = new THREE.LineBasicMaterial({ color: 0xff4444 });
+    return new THREE.Line(geometry, material);
+  }, [gridConfig.size]);
+
+  const zAxisLine = useMemo(() => {
+    const geometry = new THREE.BufferGeometry();
+    const positions = new Float32Array([
+      0, 0.01, -gridConfig.size / 2,
+      0, 0.01, gridConfig.size / 2
+    ]);
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    const material = new THREE.LineBasicMaterial({ color: 0x44ff44 });
+    return new THREE.Line(geometry, material);
+  }, [gridConfig.size]);
 
   return (
-    <group position={position} frustumCulled={false}>
-      <lineSegments renderOrder={1000}>
-        <bufferGeometry>
-          <bufferAttribute
-            attach="attributes-position"
-            count={positions.length / 3}
-            array={positions}
-            itemSize={3}
-          />
-          <bufferAttribute
-            attach="attributes-color"
-            count={colors.length / 3}
-            array={colors}
-            itemSize={3}
-          />
-        </bufferGeometry>
-        <lineBasicMaterial vertexColors depthWrite={false} linewidth={1} />
-      </lineSegments>
+    <group ref={gridRef} position={[0, -0.01, 0]} frustumCulled={false}>
+      {/* Minor grid lines */}
+      <gridHelper 
+        args={[gridConfig.size, gridConfig.divisions, '#d0d0d0', '#e8e8e8']} 
+        rotation={[0, 0, 0]}
+      />
+      
+      {/* Major grid lines (every N cells) */}
+      <gridHelper 
+        args={[gridConfig.size, Math.floor(gridConfig.divisions / gridConfig.majorDivisions), '#a0a0a0', '#a0a0a0']} 
+        rotation={[0, 0, 0]}
+        position={[0, 0.001, 0]}
+      />
+      
+      {/* X axis (red) */}
+      <primitive object={xAxisLine} />
+      
+      {/* Z axis (green) */}
+      <primitive object={zAxisLine} />
     </group>
   );
 }
@@ -244,10 +298,6 @@ const getFootprintMetrics = (bounds: BoundsSummary | null) => {
   const halfLength = Math.max(longestHalfEdge + padding, longestHalfEdge + 5, longestHalfEdge * 1.5, 36);
 
   return { radius: longestHalfEdge, padding, halfLength };
-};
-
-const computeCrossHalfLength = (bounds: BoundsSummary | null) => {
-  return getFootprintMetrics(bounds).halfLength;
 };
 
 function lightenColor(hex: string, amount: number) {
@@ -395,14 +445,42 @@ function ModelMesh({ file, meshRef, dimensions, colorsMap, setColorsMap, onBound
     }
 
     const finalBox = new THREE.Box3().setFromObject(mesh);
-    const sphere = finalBox.getBoundingSphere(new THREE.Sphere());
+    
+    // Ensure geometry is centered on XZ and sits on Y=0
+    // We adjust the GEOMETRY, not the mesh position, so PivotControls works correctly
     const finalCenter = finalBox.getCenter(new THREE.Vector3());
-    const finalSize = finalBox.getSize(new THREE.Vector3());
+    const bottomY = finalBox.min.y;
+    
+    // If the model isn't centered/grounded, adjust the geometry directly
+    if (Math.abs(finalCenter.x) > 0.001 || Math.abs(finalCenter.z) > 0.001 || Math.abs(bottomY) > 0.001) {
+      // We need to adjust in local (unscaled) space, so divide by scale
+      const scaleX = mesh.scale.x || 1;
+      const scaleY = mesh.scale.y || 1;
+      const scaleZ = mesh.scale.z || 1;
+      
+      geometry.translate(
+        -finalCenter.x / scaleX,
+        -bottomY / scaleY,
+        -finalCenter.z / scaleZ
+      );
+      geometry.computeBoundingBox();
+      geometry.computeBoundingSphere();
+      if (geometry.attributes.position) {
+        geometry.attributes.position.needsUpdate = true;
+      }
+      mesh.updateMatrixWorld(true, true);
+    }
+    
+    // Recompute bounds after geometry adjustment
+    const adjustedBox = new THREE.Box3().setFromObject(mesh);
+    const sphere = adjustedBox.getBoundingSphere(new THREE.Sphere());
+    const adjustedCenter = adjustedBox.getCenter(new THREE.Vector3());
+    const finalSize = adjustedBox.getSize(new THREE.Vector3());
 
     onBoundsChange?.({
-      min: finalBox.min.clone(),
-      max: finalBox.max.clone(),
-      center: finalCenter,
+      min: adjustedBox.min.clone(),
+      max: adjustedBox.max.clone(),
+      center: adjustedCenter,
       size: finalSize,
       radius: sphere.radius,
       unitsScale: unitScale,
@@ -416,8 +494,35 @@ function ModelMesh({ file, meshRef, dimensions, colorsMap, setColorsMap, onBound
     }
   });
 
+  // Track clicks for manual double-click detection
+  const lastClickTimeRef = useRef<number>(0);
+  const DOUBLE_CLICK_DELAY = 300; // ms
+
   return (
-    <mesh ref={actualRef} geometry={file.mesh.geometry} material={file.mesh.material} />
+    <mesh 
+      ref={actualRef} 
+      geometry={file.mesh.geometry} 
+      material={file.mesh.material}
+      onClick={(e) => {
+        e.stopPropagation();
+        const now = Date.now();
+        const timeSinceLastClick = now - lastClickTimeRef.current;
+        
+        console.log('ModelMesh: Click detected, time since last:', timeSinceLastClick);
+        
+        if (timeSinceLastClick < DOUBLE_CLICK_DELAY) {
+          // This is a double-click
+          console.log('ModelMesh: Double-click detected! Dispatching event...');
+          window.dispatchEvent(new CustomEvent('mesh-double-click'));
+          lastClickTimeRef.current = 0; // Reset to prevent triple-click
+        } else {
+          lastClickTimeRef.current = now;
+        }
+      }}
+      onPointerOver={(e) => {
+        console.log('ModelMesh: Pointer over mesh');
+      }}
+    />
   );
 }
 
@@ -651,16 +756,6 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     window.addEventListener('cavity-apply', handleApply as EventListener);
     return () => window.removeEventListener('cavity-apply', handleApply as EventListener);
   }, []);
-
-  const centerCrossLength = React.useMemo(() => {
-    let len = computeCrossHalfLength(modelBounds);
-    if (basePlate) {
-      const halfPlate = Math.max((basePlate.width ?? 0) / 2, (basePlate.height ?? 0) / 2);
-      const pad = modelBounds ? getFootprintMetrics(modelBounds).padding : 10;
-      len = Math.max(len, halfPlate + pad);
-    }
-    return len;
-  }, [modelBounds, basePlate]);
 
   // Handle mouse events for drag and drop (disabled for now)
   const handlePointerMove = useCallback((event: any) => {
@@ -1274,8 +1369,8 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       {/* Environment - background disabled to prevent texture regeneration issues */}
       <Environment preset="warehouse" background={false} />
 
-      {/* Center cross axes - sized based on model footprint */}
-      <CenterCross length={centerCrossLength} />
+      {/* Scalable grid - sized based on model bounds */}
+      <ScalableGrid modelBounds={modelBounds} />
 
       {/* Base plate */}
       {basePlate && (
@@ -1394,9 +1489,16 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
         />
       )}
 
-      {/* Event handlers */}
+      {/* Event handlers - use a ref to disable raycasting so it doesn't block model clicks */}
       <mesh
-        position={[0, 0, 0]}
+        ref={(mesh) => {
+          if (mesh) {
+            // Disable raycasting on this helper mesh
+            mesh.raycast = () => {};
+          }
+        }}
+        position={[0, -100, 0]}
+        rotation={[-Math.PI / 2, 0, 0]}
         onPointerDown={() => {
           // Clicking on empty viewport should clear any active support edit overlay
           if (editingSupportRef.current || editingSupport) {
@@ -1409,7 +1511,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
         onPointerUp={handlePointerUp}
         visible={false}
       >
-        <planeGeometry args={[1000, 1000]} />
+        <planeGeometry args={[10000, 10000]} />
       </mesh>
 
       {/* Orbit Controls - allow rotation in both modes for better control */}
