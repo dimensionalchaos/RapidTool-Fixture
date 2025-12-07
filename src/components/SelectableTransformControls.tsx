@@ -393,16 +393,6 @@ const SelectableTransformControls: React.FC<SelectableTransformControlsProps> = 
     bounds ? Math.max(bounds.radius * 0.75, 25) : 50, 
     [bounds]
   );
-  
-  const closeButtonPosition = useMemo((): [number, number, number] | undefined => {
-    if (!bounds) return undefined;
-    // Position at the center of the gizmo (where the axes intersect)
-    return [
-      bounds.center.x, 
-      bounds.center.y, 
-      bounds.center.z
-    ];
-  }, [bounds]);
 
   // ============================================================================
   // Render
@@ -429,19 +419,19 @@ const SelectableTransformControls: React.FC<SelectableTransformControlsProps> = 
         onDragEnd={isActive ? handleDragEnd : undefined}
       >
         {children}
+        {/* Close button at gizmo center - inside PivotControls so it moves with gizmo */}
+        {isActive && (
+          <Html center style={{ pointerEvents: 'auto', userSelect: 'none' }}>
+            <button
+              onClick={deactivateGizmo}
+              className="w-6 h-6 flex items-center justify-center bg-slate-800/90 hover:bg-red-600 text-white rounded-full shadow-lg border border-slate-600 transition-colors text-xs"
+              title="Close (Esc)"
+            >
+              ✕
+            </button>
+          </Html>
+        )}
       </PivotControls>
-      
-      {isActive && closeButtonPosition && (
-        <Html position={closeButtonPosition} center style={{ pointerEvents: 'auto', userSelect: 'none' }}>
-          <button
-            onClick={deactivateGizmo}
-            className="w-6 h-6 flex items-center justify-center bg-slate-800/90 hover:bg-red-600 text-white rounded-full shadow-lg border border-slate-600 transition-colors text-xs"
-            title="Close (Esc)"
-          >
-            ✕
-          </button>
-        </Html>
-      )}
     </group>
   );
 };
