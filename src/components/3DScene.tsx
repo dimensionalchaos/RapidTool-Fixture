@@ -531,6 +531,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   onModelColorAssigned,
   partVisibility = new Map(),
   onPartVisibilityChange,
+  isDarkMode = false,
 }) => {
   const { camera, size } = useThree();
   const controlsRef = useRef<OrbitControlsImpl | null>(null);
@@ -2152,7 +2153,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       <Environment preset="warehouse" background={false} />
 
       {/* Scalable grid - sized based on combined model bounds (includes world positions) */}
-      <ScalableGrid modelBounds={modelBounds} />
+      <ScalableGrid modelBounds={modelBounds} isDarkMode={isDarkMode} />
 
       {/* Base plate */}
       {basePlate && (
