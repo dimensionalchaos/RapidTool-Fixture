@@ -235,6 +235,7 @@ const SelectableTransformControls: React.FC<SelectableTransformControlsProps> = 
       // Get bounds and emit events
       tempBox.setFromObject(meshRef.current);
       
+      // Let 3DScene handle the model-transform-updated emission after baseplate collision check
       onLiveTransformChange?.({ 
         position: bakedPosition, 
         rotation: bakedRotation, 
@@ -242,9 +243,8 @@ const SelectableTransformControls: React.FC<SelectableTransformControlsProps> = 
         pivotClosed: true 
       });
       
-      window.dispatchEvent(new CustomEvent('model-transform-updated', {
-        detail: { position: bakedPosition, rotation: bakedRotation, partId },
-      }));
+      // Note: We don't emit model-transform-updated here because 3DScene will do it
+      // after checking/adjusting for baseplate collision
       onTransformChange?.({ position: bakedPosition, rotation: bakedRotation });
     }
     
@@ -360,10 +360,12 @@ const SelectableTransformControls: React.FC<SelectableTransformControlsProps> = 
   // External transform updates (e.g., reset from UI)
   useEffect(() => {
     const handleSetTransform = (e: CustomEvent) => {
+      console.log('[SelectableTransformControls] set-model-transform received, isActive:', isActive, 'partId match:', partId === e.detail.partId);
       if (!meshRef.current || isActive) return;
       if (partId && e.detail.partId && e.detail.partId !== partId) return;
       
-      const { position, rotation } = e.detail;
+      console.log('[SelectableTransformControls] Applying position:', e.detail.position);
+      const { position, rotation, respectBaseplate } = e.detail;
       meshRef.current.position.copy(position);
       if (rotation instanceof THREE.Euler) {
         meshRef.current.rotation.copy(rotation);
@@ -371,6 +373,14 @@ const SelectableTransformControls: React.FC<SelectableTransformControlsProps> = 
         meshRef.current.rotation.set(rotation.x, rotation.y, rotation.z);
       }
       meshRef.current.updateMatrixWorld(true);
+      
+      // If respectBaseplate is set, dispatch event to check and lift above baseplate
+      if (respectBaseplate) {
+        window.dispatchEvent(new CustomEvent('check-baseplate-collision', {
+          detail: { partId: partId || e.detail.partId }
+        }));
+      }
+      
       emitTransformUpdate();
     };
 

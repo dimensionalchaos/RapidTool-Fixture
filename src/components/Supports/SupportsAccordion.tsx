@@ -42,7 +42,7 @@ const SupportsAccordion: React.FC<SupportsAccordionProps> = ({
   onSupportUpdate,
   onSupportDelete,
 }) => {
-  const [expandedItem, setExpandedItem] = useState<string | undefined>(undefined);
+  const [expandedItem, setExpandedItem] = useState<string>("");
 
   // Auto-expand newly selected support
   useEffect(() => {
@@ -331,7 +331,13 @@ const SupportsAccordion: React.FC<SupportsAccordionProps> = ({
           type="single" 
           collapsible
           value={expandedItem}
-          onValueChange={setExpandedItem}
+          onValueChange={(val) => {
+            setExpandedItem(val ?? "");
+            // Clear support selection when collapsed, similar to parts accordion
+            if (!val) {
+              onSupportSelect(null as unknown as string);
+            }
+          }}
           className="space-y-1"
         >
           {supports.map((support, index) => (
@@ -340,7 +346,7 @@ const SupportsAccordion: React.FC<SupportsAccordionProps> = ({
               value={support.id}
               className={`
                 border rounded-md transition-all
-                ${selectedSupportId === support.id ? 'border-primary bg-primary/5' : 'border-border/30'}
+                ${expandedItem === support.id ? 'border-primary bg-primary/5' : 'border-border/30'}
               `}
             >
               <AccordionTrigger 
@@ -362,6 +368,26 @@ const SupportsAccordion: React.FC<SupportsAccordionProps> = ({
                   <span className="text-[8px] text-muted-foreground ml-auto mr-2">
                     H: {support.height.toFixed(0)}mm
                   </span>
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      e.preventDefault();
+                      onSupportDelete(support.id);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.stopPropagation();
+                        e.preventDefault();
+                        onSupportDelete(support.id);
+                      }
+                    }}
+                    className="w-6 h-6 p-0 flex items-center justify-center rounded text-destructive hover:text-destructive hover:bg-destructive/10 cursor-pointer"
+                    title="Delete support"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                  </div>
                 </div>
               </AccordionTrigger>
               <AccordionContent className="px-2 pb-2">
@@ -381,15 +407,6 @@ const SupportsAccordion: React.FC<SupportsAccordionProps> = ({
                     >
                       <Move className="w-3 h-3 mr-1" />
                       Edit in 3D
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-6 w-6 p-0 text-destructive hover:text-destructive"
-                      onClick={() => onSupportDelete(support.id)}
-                      title="Delete support"
-                    >
-                      <Trash2 className="w-3 h-3" />
                     </Button>
                   </div>
                 </div>

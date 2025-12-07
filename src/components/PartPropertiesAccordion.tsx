@@ -9,10 +9,11 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { RotateCcw, Move, RotateCw, Box, X } from 'lucide-react';
+import { RotateCcw, Move, RotateCw, Box, Trash2, ArrowDownToLine } from 'lucide-react';
 import * as THREE from 'three';
 import { ProcessedFile } from '@/modules/FileImport/types';
 import SupportsAccordion from './Supports/SupportsAccordion';
+import BaseplateAccordion from './BaseplateAccordion';
 import { AnySupport } from './Supports/types';
 import PartThumbnail from './PartThumbnail';
 
@@ -29,6 +30,9 @@ interface PartPropertiesAccordionProps {
   onPartSelect?: (partId: string | null) => void;
   onRemovePart?: (partId: string) => void;
   onClearFile?: () => void;
+  baseplate?: { id: string; type: string; padding?: number; height?: number } | null;
+  onRemoveBaseplate?: () => void;
+  onUpdateBaseplate?: (updates: { padding?: number; height?: number }) => void;
   supports?: AnySupport[];
   selectedSupportId?: string | null;
   onSupportSelect?: (id: string | null) => void;
@@ -46,6 +50,9 @@ const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({
   onPartSelect,
   onRemovePart,
   onClearFile,
+  baseplate = null,
+  onRemoveBaseplate,
+  onUpdateBaseplate,
   supports = [],
   selectedSupportId = null,
   onSupportSelect,
@@ -168,6 +175,7 @@ const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({
   }, [importedParts, currentFile]);
 
   // Dispatch transform change to 3D scene for a specific part
+  // Always includes respectBaseplate flag to ensure parts stay above baseplate
   const dispatchTransformChange = useCallback((partId: string, newTransform: PartTransform) => {
     window.dispatchEvent(
       new CustomEvent('set-model-transform', {
@@ -183,6 +191,7 @@ const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({
             degToRad(newTransform.rotation.y),
             degToRad(newTransform.rotation.z)
           ),
+          respectBaseplate: true, // Always check and lift above baseplate if collision
         },
       })
     );
@@ -217,6 +226,7 @@ const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({
   }, [getPartTransform, dispatchTransformChange]);
 
   // Reset position to origin (0, 0, 0) for a specific part
+  // After reset, the part will be lifted if it collides with the baseplate
   const handleResetPosition = useCallback((partId: string) => {
     const currentTransform = getPartTransform(partId);
     const newTransform = {
@@ -237,6 +247,16 @@ const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({
     setPartTransforms(prev => new Map(prev).set(partId, newTransform));
     dispatchTransformChange(partId, newTransform);
   }, [getPartTransform, dispatchTransformChange]);
+
+  // Set part to baseplate - positions the part so its bottom touches the baseplate top
+  const handleSetToBaseplate = useCallback((partId: string) => {
+    // Dispatch event to 3DScene which has access to the mesh and baseplate
+    window.dispatchEvent(
+      new CustomEvent('set-part-to-baseplate', {
+        detail: { partId }
+      })
+    );
+  }, []);
 
   if (!hasModel) {
     return null;
@@ -275,12 +295,16 @@ const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({
                 const partColor = modelColors.get(part.metadata.name) || modelColor;
                 const cadPosition = getCadPosition(part.id);
                 const cadRotation = getCadRotation(part.id);
+                const isSelected = selectedPartId === part.id;
                 
                 return (
                   <AccordionItem 
                     key={part.id}
                     value={`part-${part.id}`}
-                    className="border rounded-md border-border/30"
+                    className={`
+                      border rounded-md transition-all
+                      ${isSelected ? 'border-primary bg-primary/5' : 'border-border/30'}
+                    `}
                   >
                     <AccordionTrigger className="py-1.5 px-2 text-xs font-tech hover:no-underline">
                       <div className="flex items-center gap-2 flex-1">
@@ -322,10 +346,10 @@ const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({
                                 }
                               }
                             }}
-                            className="w-6 h-6 p-0 flex items-center justify-center rounded text-muted-foreground hover:text-destructive hover:bg-destructive/10 cursor-pointer"
+                            className="w-6 h-6 p-0 flex items-center justify-center rounded text-destructive hover:text-destructive hover:bg-destructive/10 cursor-pointer"
                             title="Remove part"
                           >
-                            <X className="w-3 h-3" />
+                            <Trash2 className="w-3 h-3" />
                           </div>
                         )}
                       </div>
@@ -350,15 +374,28 @@ const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({
                               <Move className="w-2.5 h-2.5" />
                               Position (mm)
                             </Label>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => handleResetPosition(part.id)}
-                              className="h-5 px-1.5 text-[8px]"
-                              title="Reset position to zero"
-                            >
-                              <RotateCcw className="w-2.5 h-2.5" />
-                            </Button>
+                            <div className="flex items-center gap-1">
+                              {baseplate && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => handleSetToBaseplate(part.id)}
+                                  className="h-5 px-1.5 text-[8px]"
+                                  title="Set to baseplate (place on top of baseplate)"
+                                >
+                                  <ArrowDownToLine className="w-2.5 h-2.5" />
+                                </Button>
+                              )}
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => handleResetPosition(part.id)}
+                                className="h-5 px-1.5 text-[8px]"
+                                title="Reset position to zero"
+                              >
+                                <RotateCcw className="w-2.5 h-2.5" />
+                              </Button>
+                            </div>
                           </div>
                           <div className="grid grid-cols-3 gap-2 pl-1">
                             <div className="space-y-1">
@@ -453,6 +490,13 @@ const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({
           </AccordionContent>
         </AccordionItem>
       )}
+
+      {/* Baseplate Accordion */}
+      <BaseplateAccordion
+        baseplate={baseplate}
+        onRemoveBaseplate={onRemoveBaseplate}
+        onUpdateBaseplate={onUpdateBaseplate}
+      />
 
       {/* Supports Accordion */}
       <SupportsAccordion

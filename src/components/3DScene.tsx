@@ -187,41 +187,25 @@ const getProjectedSizeForOrientation = (bounds: BoundsSummary, orientation: View
 };
 
 // Ground grid that scales with the model and adapts to model position
-function ScalableGrid({ modelBounds, modelPosition }: { 
+function ScalableGrid({ modelBounds }: { 
   modelBounds: BoundsSummary | null;
-  modelPosition?: THREE.Vector3;
 }) {
   const gridRef = useRef<THREE.Group>(null);
   
-  // Calculate grid size based on model bounds AND current position
+  // Calculate grid size based on model bounds (which now include world positions)
   const gridConfig = useMemo(() => {
     if (!modelBounds) {
       // Default grid when no model loaded
       return { size: 200, divisions: 20, majorDivisions: 4 };
     }
     
-    // Get the largest dimension of the model
-    const modelMaxDim = Math.max(modelBounds.size.x, modelBounds.size.z);
+    // Calculate max extent from origin to any edge of the model bounds
+    // This ensures the grid covers all parts regardless of where they're positioned
+    const maxExtentX = Math.max(Math.abs(modelBounds.min.x), Math.abs(modelBounds.max.x));
+    const maxExtentZ = Math.max(Math.abs(modelBounds.min.z), Math.abs(modelBounds.max.z));
+    const maxExtent = Math.max(maxExtentX, maxExtentZ);
     
-    // Calculate how far the model extends from origin considering its position
-    let maxExtent = modelMaxDim * 0.6; // Half size + margin
-    
-    if (modelPosition) {
-      // Calculate the furthest point the model reaches from origin
-      const halfSizeX = modelBounds.size.x / 2;
-      const halfSizeZ = modelBounds.size.z / 2;
-      
-      // Max extent in each direction (from origin to model edge)
-      const extentPosX = Math.abs(modelPosition.x) + halfSizeX;
-      const extentNegX = Math.abs(modelPosition.x) + halfSizeX;
-      const extentPosZ = Math.abs(modelPosition.z) + halfSizeZ;
-      const extentNegZ = Math.abs(modelPosition.z) + halfSizeZ;
-      
-      // Take the maximum extent needed in any direction
-      maxExtent = Math.max(extentPosX, extentNegX, extentPosZ, extentNegZ);
-    }
-    
-    // Make grid large enough to cover the model at its position with 20% margin
+    // Make grid large enough to cover the extent with 20% margin
     const rawSize = maxExtent * 2 * 1.2;
     
     // Round to nearest nice value (10, 25, 50, 100, 250, 500, etc.)
@@ -249,7 +233,7 @@ function ScalableGrid({ modelBounds, modelPosition }: {
     const majorDivisions = cellSize >= 100 ? 1 : (cellSize >= 25 ? 4 : 10);
     
     return { size: gridSize, divisions, majorDivisions, cellSize };
-  }, [modelBounds, modelPosition]);
+  }, [modelBounds]);
 
   // Create axis lines using useMemo to avoid recreation on every render
   const xAxisLine = useMemo(() => {
@@ -590,41 +574,82 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   // Get the first part (for backward compatibility with single-file operations)
   const firstPart = importedParts.length > 0 ? importedParts[0] : null;
 
-  // Calculate combined bounds from all parts
-  useEffect(() => {
-    if (partBounds.size === 0) {
+  // Function to recalculate combined bounds from all mesh world positions
+  const recalculateCombinedBounds = useCallback(() => {
+    if (importedParts.length === 0) {
       setModelBounds(null);
       return;
     }
-    
-    // Combine all part bounds into one
+
     const combinedBox = new THREE.Box3();
-    partBounds.forEach((bounds) => {
-      combinedBox.expandByPoint(bounds.min);
-      combinedBox.expandByPoint(bounds.max);
+    let hasValidBounds = false;
+    let firstUnitsScale = 1;
+
+    // Calculate bounds from actual mesh world positions
+    importedParts.forEach((part, index) => {
+      const meshRef = modelMeshRefs.current.get(part.id);
+      const mesh = meshRef?.current;
+      if (mesh) {
+        mesh.updateMatrixWorld(true);
+        const box = new THREE.Box3().setFromObject(mesh);
+        if (!box.isEmpty()) {
+          combinedBox.union(box);
+          hasValidBounds = true;
+          if (index === 0) {
+            firstUnitsScale = partBounds.get(part.id)?.unitsScale ?? 1;
+          }
+        }
+      }
     });
-    
+
+    if (!hasValidBounds || combinedBox.isEmpty()) {
+      // Fall back to stored partBounds if meshes not ready
+      if (partBounds.size === 0) {
+        setModelBounds(null);
+        return;
+      }
+      partBounds.forEach((bounds) => {
+        combinedBox.expandByPoint(bounds.min);
+        combinedBox.expandByPoint(bounds.max);
+      });
+      const firstPartBounds = Array.from(partBounds.values())[0];
+      firstUnitsScale = firstPartBounds?.unitsScale ?? 1;
+    }
+
     if (combinedBox.isEmpty()) {
       setModelBounds(null);
       return;
     }
-    
+
     const center = combinedBox.getCenter(new THREE.Vector3());
     const combinedSize = combinedBox.getSize(new THREE.Vector3());
     const sphere = combinedBox.getBoundingSphere(new THREE.Sphere());
-    
-    // Use the first part's units scale for now
-    const firstPartBounds = Array.from(partBounds.values())[0];
-    
+
     setModelBounds({
       min: combinedBox.min.clone(),
       max: combinedBox.max.clone(),
       center,
       size: combinedSize,
       radius: sphere.radius,
-      unitsScale: firstPartBounds?.unitsScale ?? 1,
+      unitsScale: firstUnitsScale,
     });
-  }, [partBounds]);
+  }, [importedParts, partBounds]);
+
+  // Calculate combined bounds from all parts (initial load and partBounds changes)
+  useEffect(() => {
+    recalculateCombinedBounds();
+  }, [partBounds, recalculateCombinedBounds]);
+
+  // Recalculate bounds when any part is transformed
+  useEffect(() => {
+    const handleTransformUpdated = () => {
+      // Debounce slightly to batch rapid updates
+      recalculateCombinedBounds();
+    };
+
+    window.addEventListener('model-transform-updated', handleTransformUpdated as EventListener);
+    return () => window.removeEventListener('model-transform-updated', handleTransformUpdated as EventListener);
+  }, [recalculateCombinedBounds]);
 
   // Clean up stale partBounds entries when parts are removed
   useEffect(() => {
@@ -738,30 +763,32 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       // Mark that we're closing - ignore any further transforms until cleared
       pivotClosingRef.current = true;
       
-      // Check for baseplate collision and lift parts if needed
-      if (basePlate && selectedPartId) {
-        const baseplateTopY = basePlate.depth ?? 4;
+      // Emit the transform update first, then schedule collision check
+      // The collision check needs to happen AFTER SelectableTransformControls finishes
+      if (selectedPartId) {
         const partRef = modelMeshRefs.current.get(selectedPartId);
         if (partRef?.current) {
           partRef.current.updateMatrixWorld(true);
-          const partBox = new THREE.Box3().setFromObject(partRef.current);
-          const currentMinY = partBox.min.y;
+          partRef.current.getWorldPosition(tempVec);
           
-          // If part's bottom is below baseplate top, lift it
-          if (currentMinY < baseplateTopY) {
-            const offsetY = baseplateTopY - currentMinY;
-            partRef.current.position.y += offsetY;
-            partRef.current.updateMatrixWorld(true);
-            
-            // Emit updated transform
-            partRef.current.getWorldPosition(tempVec);
-            window.dispatchEvent(new CustomEvent('model-transform-updated', {
-              detail: {
-                position: tempVec.clone(),
-                rotation: partRef.current.rotation.clone(),
-                partId: selectedPartId,
-              },
-            }));
+          // Emit transform update immediately
+          window.dispatchEvent(new CustomEvent('model-transform-updated', {
+            detail: {
+              position: tempVec.clone(),
+              rotation: partRef.current.rotation.clone(),
+              partId: selectedPartId,
+            },
+          }));
+          
+          // Schedule collision check for after everything settles
+          // Use setTimeout to ensure it runs after the current call stack
+          if (basePlate) {
+            const partId = selectedPartId;
+            setTimeout(() => {
+              window.dispatchEvent(new CustomEvent('check-baseplate-collision-delayed', {
+                detail: { partId }
+              }));
+            }, 50); // Small delay to ensure all transforms are baked
           }
         }
       }
@@ -1532,7 +1559,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     return () => window.removeEventListener('create-baseplate', handleCreateBaseplate as EventListener);
   }, [importedParts, selectedPartId]);
 
-  // Handle base plate deselection/cancellation
+  // Handle base plate deselection/cancellation/update
   React.useEffect(() => {
     const handleDeselectBaseplate = (e: CustomEvent) => {
       const { basePlateId } = e.detail;
@@ -1546,14 +1573,107 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       setBasePlate(null);
     };
 
+    const handleUpdateBaseplate = (e: CustomEvent) => {
+      const { dimensions } = e.detail;
+      if (!basePlate) return;
+      
+      // Update baseplate with new dimensions
+      const updatedBaseplate = {
+        ...basePlate,
+        depth: dimensions?.height ?? basePlate.depth,
+        oversizeXY: dimensions?.padding ?? dimensions?.oversizeXY ?? basePlate.oversizeXY,
+      };
+      
+      // Recalculate width/height based on model bounds + new padding
+      if (basePlate.type === 'rectangular' || basePlate.type === 'convex-hull') {
+        const padding = updatedBaseplate.oversizeXY ?? 10;
+        
+        // Get combined bounding box
+        const box = new THREE.Box3();
+        importedParts.forEach(part => {
+          const ref = modelMeshRefs.current.get(part.id);
+          if (ref?.current) {
+            ref.current.updateMatrixWorld(true);
+            const partBox = new THREE.Box3().setFromObject(ref.current);
+            box.union(partBox);
+          }
+        });
+        
+        if (!box.isEmpty()) {
+          const size = box.getSize(new THREE.Vector3());
+          updatedBaseplate.width = size.x + padding * 2;
+          updatedBaseplate.height = size.z + padding * 2;
+        }
+      }
+      
+      // Get new baseplate top Y position
+      const baseplateTopY = updatedBaseplate.depth ?? 4;
+      
+      // Lift parts that would collide with the new baseplate height
+      importedParts.forEach(part => {
+        const ref = modelMeshRefs.current.get(part.id);
+        if (ref?.current) {
+          ref.current.updateMatrixWorld(true);
+          const mbox = new THREE.Box3().setFromObject(ref.current);
+          const currentMinY = mbox.min.y;
+          
+          // Only lift if model's bottom is below the baseplate's top surface (collision)
+          if (currentMinY < baseplateTopY) {
+            const offsetY = baseplateTopY - currentMinY;
+            // Move in world Y (global up direction)
+            ref.current.position.y += offsetY;
+            ref.current.updateMatrixWorld(true);
+          }
+        }
+      });
+      
+      // Update transform state for the selected part
+      if (selectedPartId) {
+        const selectedRef = modelMeshRefs.current.get(selectedPartId);
+        if (selectedRef?.current) {
+          selectedRef.current.getWorldPosition(tempVec);
+          setModelTransform({
+            position: tempVec.clone(),
+            rotation: selectedRef.current.rotation.clone(),
+            scale: selectedRef.current.scale.clone(),
+          });
+        }
+      }
+      
+      setBasePlate(updatedBaseplate);
+      
+      // Emit transform updates for all parts after lifting
+      importedParts.forEach(part => {
+        const ref = modelMeshRefs.current.get(part.id);
+        if (ref?.current) {
+          ref.current.getWorldPosition(tempVec);
+          window.dispatchEvent(new CustomEvent('model-transform-updated', {
+            detail: {
+              position: tempVec.clone(),
+              rotation: ref.current.rotation.clone(),
+              partId: part.id,
+            },
+          }));
+        }
+      });
+    };
+
+    const handleRemoveBaseplate = (e: CustomEvent) => {
+      setBasePlate(null);
+    };
+
     window.addEventListener('baseplate-deselected', handleDeselectBaseplate as EventListener);
     window.addEventListener('cancel-baseplate', handleCancelBaseplate as EventListener);
+    window.addEventListener('update-baseplate', handleUpdateBaseplate as EventListener);
+    window.addEventListener('remove-baseplate', handleRemoveBaseplate as EventListener);
 
     return () => {
       window.removeEventListener('baseplate-deselected', handleDeselectBaseplate as EventListener);
       window.removeEventListener('cancel-baseplate', handleCancelBaseplate as EventListener);
+      window.removeEventListener('update-baseplate', handleUpdateBaseplate as EventListener);
+      window.removeEventListener('remove-baseplate', handleRemoveBaseplate as EventListener);
     };
-  }, [basePlate]);
+  }, [basePlate, importedParts, selectedPartId]);
 
   // Update rectangular baseplate size and position when model transform changes
   // This recalculates dimensions based on new bounding box after gizmo closes
@@ -1566,6 +1686,8 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     if (basePlate.type === 'convex-hull') return;
     
     // Compute combined bounding box of all parts
+    // NOTE: The mesh's matrixWorld already includes the live pivot transform since the mesh
+    // is a child of the PivotControls group, so setFromObject gives us the correct live bounds.
     const box = new THREE.Box3();
     importedParts.forEach(part => {
       const ref = modelMeshRefs.current.get(part.id);
@@ -1577,14 +1699,6 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     });
     
     if (box.isEmpty()) return;
-    
-    // Apply live position delta if pivot is active
-    if (livePositionDelta) {
-      box.min.x += livePositionDelta.x;
-      box.max.x += livePositionDelta.x;
-      box.min.z += livePositionDelta.z;
-      box.max.z += livePositionDelta.z;
-    }
     
     // Expand the bounding box to include support footprints
     // Supports stay fixed, so use their actual positions
@@ -1628,6 +1742,139 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       } : null);
     }
   }, [modelTransform.position, modelTransform.rotation, basePlate?.type, supports, livePositionDelta]);
+
+  // Handle check-baseplate-collision event (triggered when position is reset from Properties panel)
+  // This lifts the part above the baseplate if there's a collision
+  React.useEffect(() => {
+    const handleCheckBaseplateCollision = (e: CustomEvent) => {
+      if (!basePlate) return;
+      
+      const { partId } = e.detail;
+      if (!partId) return;
+      
+      const partRef = modelMeshRefs.current.get(partId);
+      if (!partRef?.current) return;
+      
+      const baseplateTopY = basePlate.depth ?? 4;
+      
+      partRef.current.updateMatrixWorld(true);
+      const partBox = new THREE.Box3().setFromObject(partRef.current);
+      const currentMinY = partBox.min.y;
+      
+      // If part's bottom is below baseplate top, lift it
+      if (currentMinY < baseplateTopY) {
+        const offsetY = baseplateTopY - currentMinY;
+        partRef.current.position.y += offsetY;
+        partRef.current.updateMatrixWorld(true);
+        
+        // Emit updated transform so the Properties panel updates
+        partRef.current.getWorldPosition(tempVec);
+        window.dispatchEvent(new CustomEvent('model-transform-updated', {
+          detail: {
+            position: tempVec.clone(),
+            rotation: partRef.current.rotation.clone(),
+            partId: partId,
+          },
+        }));
+      }
+    };
+
+    window.addEventListener('check-baseplate-collision', handleCheckBaseplateCollision as EventListener);
+    return () => window.removeEventListener('check-baseplate-collision', handleCheckBaseplateCollision as EventListener);
+  }, [basePlate]);
+
+  // Handle delayed baseplate collision check - runs AFTER pivot controls finish baking transform
+  // This ensures the mesh position is stable before we check and adjust
+  React.useEffect(() => {
+    const handleDelayedCollisionCheck = (e: CustomEvent) => {
+      if (!basePlate) return;
+      
+      const { partId } = e.detail;
+      if (!partId) return;
+      
+      const partRef = modelMeshRefs.current.get(partId);
+      if (!partRef?.current) return;
+      
+      const baseplateTopY = basePlate.depth ?? 4;
+      
+      // Force update world matrix to get accurate bounds
+      partRef.current.updateMatrixWorld(true);
+      
+      // Get the world-space bounding box (accounts for rotation)
+      const partBox = new THREE.Box3().setFromObject(partRef.current);
+      const currentMinY = partBox.min.y;
+      
+      console.log('[Delayed Collision] Checking part:', partId);
+      console.log('[Delayed Collision] baseplateTopY:', baseplateTopY, 'currentMinY:', currentMinY);
+      
+      // If part's bottom is below baseplate top, lift it
+      if (currentMinY < baseplateTopY - 0.01) {
+        const offsetY = baseplateTopY - currentMinY;
+        console.log('[Delayed Collision] Need to lift by:', offsetY);
+        
+        partRef.current.position.y += offsetY;
+        partRef.current.updateMatrixWorld(true);
+        
+        console.log('[Delayed Collision] New position.y:', partRef.current.position.y);
+        
+        // Emit updated transform so Properties panel updates
+        partRef.current.getWorldPosition(tempVec);
+        window.dispatchEvent(new CustomEvent('model-transform-updated', {
+          detail: {
+            position: tempVec.clone(),
+            rotation: partRef.current.rotation.clone(),
+            partId: partId,
+          },
+        }));
+      } else {
+        console.log('[Delayed Collision] Part is already above baseplate');
+      }
+    };
+
+    window.addEventListener('check-baseplate-collision-delayed', handleDelayedCollisionCheck as EventListener);
+    return () => window.removeEventListener('check-baseplate-collision-delayed', handleDelayedCollisionCheck as EventListener);
+  }, [basePlate]);
+
+  // Handle set-part-to-baseplate event - positions part so its bottom touches baseplate top
+  React.useEffect(() => {
+    const handleSetPartToBaseplate = (e: CustomEvent) => {
+      if (!basePlate) return;
+      
+      const { partId } = e.detail;
+      if (!partId) return;
+      
+      const partRef = modelMeshRefs.current.get(partId);
+      if (!partRef?.current) return;
+      
+      const baseplateTopY = basePlate.depth ?? 4;
+      
+      partRef.current.updateMatrixWorld(true);
+      const partBox = new THREE.Box3().setFromObject(partRef.current);
+      const currentMinY = partBox.min.y;
+      
+      // Calculate offset to place part's bottom exactly on baseplate top
+      const offsetY = baseplateTopY - currentMinY;
+      
+      // Only move if there's actually a difference
+      if (Math.abs(offsetY) > 0.001) {
+        partRef.current.position.y += offsetY;
+        partRef.current.updateMatrixWorld(true);
+        
+        // Emit updated transform so the Properties panel updates
+        partRef.current.getWorldPosition(tempVec);
+        window.dispatchEvent(new CustomEvent('model-transform-updated', {
+          detail: {
+            position: tempVec.clone(),
+            rotation: partRef.current.rotation.clone(),
+            partId: partId,
+          },
+        }));
+      }
+    };
+
+    window.addEventListener('set-part-to-baseplate', handleSetPartToBaseplate as EventListener);
+    return () => window.removeEventListener('set-part-to-baseplate', handleSetPartToBaseplate as EventListener);
+  }, [basePlate]);
 
   // Handle transform mode toggle events
   React.useEffect(() => {
@@ -1817,8 +2064,8 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       {/* Environment - background disabled to prevent texture regeneration issues */}
       <Environment preset="warehouse" background={false} />
 
-      {/* Scalable grid - sized based on model bounds and position */}
-      <ScalableGrid modelBounds={modelBounds} modelPosition={modelTransform.position} />
+      {/* Scalable grid - sized based on combined model bounds (includes world positions) */}
+      <ScalableGrid modelBounds={modelBounds} />
 
       {/* Base plate */}
       {basePlate && (

@@ -465,6 +465,28 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
       window.dispatchEvent(new CustomEvent('remove-baseplate', { detail: { basePlateId } }));
     };
 
+    const handleBaseplateUpdate = (updates: { padding?: number; height?: number }) => {
+      if (!currentBaseplate) return;
+      
+      const updatedBaseplate = {
+        ...currentBaseplate,
+        ...updates
+      };
+      setCurrentBaseplate(updatedBaseplate);
+      
+      // Dispatch event to update baseplate in 3D scene
+      window.dispatchEvent(new CustomEvent('update-baseplate', { 
+        detail: { 
+          basePlateId: currentBaseplate.id,
+          dimensions: {
+            padding: updatedBaseplate.padding,
+            height: updatedBaseplate.height,
+            oversizeXY: updatedBaseplate.padding
+          }
+        } 
+      }));
+    };
+
     // Handle tool selection - now also updates active step
     const handleToolSelect = (toolId: string) => {
       // Update the active step in the context panel
@@ -852,14 +874,6 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
                       isProcessing={actualProcessing}
                       error={fileError}
                       onFileSelected={handleFileSelected}
-                      onRemovePart={(partId) => {
-                        setImportedParts(prev => prev.filter(p => p.id !== partId));
-                        if (selectedPartId === partId) {
-                          setSelectedPartId(null);
-                        }
-                        // Dispatch event to remove from 3D scene
-                        window.dispatchEvent(new CustomEvent('part-removed', { detail: partId }));
-                      }}
                     />
                   )}
                   {activeStep === 'baseplates' && (
@@ -1028,7 +1042,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
 
             {!isPropertiesCollapsed && (
               <div className="p-4 flex-1 overflow-auto">
-                {/* Part Properties Accordion - File Details, Transform controls, and Supports */}
+                {/* Part Properties Accordion - File Details, Transform controls, Baseplate, and Supports */}
                 <PartPropertiesAccordion 
                   hasModel={importedParts.length > 0} 
                   currentFile={actualFile}
@@ -1047,6 +1061,9 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
                     }
                     window.dispatchEvent(new CustomEvent('part-removed', { detail: partId }));
                   }}
+                  baseplate={currentBaseplate}
+                  onRemoveBaseplate={() => currentBaseplate && handleBaseplateRemoved(currentBaseplate.id)}
+                  onUpdateBaseplate={handleBaseplateUpdate}
                   supports={supports}
                   selectedSupportId={selectedSupportId}
                   onSupportSelect={setSelectedSupportId}

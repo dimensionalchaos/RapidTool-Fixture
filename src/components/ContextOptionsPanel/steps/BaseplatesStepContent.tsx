@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Slider } from '@/components/ui/slider';
 import { Label } from '@/components/ui/label';
-import { Square, Hexagon, Check, Trash2, AlertCircle, Settings2 } from 'lucide-react';
+import { Square, Hexagon, Check, AlertCircle, Settings2 } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 
 interface BaseplateType {
@@ -67,33 +67,17 @@ const BaseplatesStepContent: React.FC<BaseplatesStepContentProps> = ({
 
   return (
     <div className="p-4 space-y-4">
-      {/* Current Baseplate Status */}
+      {/* Current Baseplate Status - Small indicator */}
       {currentBaseplate && (
-        <Card className="tech-glass p-3 border-green-500/30 bg-green-500/5">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="w-8 h-8 rounded-md bg-green-500/10 flex items-center justify-center">
-                <Check className="w-4 h-4 text-green-500" />
-              </div>
-              <div>
-                <p className="text-sm font-tech font-semibold">Baseplate Active</p>
-                <p className="text-xs text-muted-foreground font-tech capitalize">
-                  {currentBaseplate.type} • {currentBaseplate.padding}mm padding • {currentBaseplate.height}mm height
-                </p>
-              </div>
-            </div>
-            {onRemoveBaseplate && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={onRemoveBaseplate}
-                className="text-destructive hover:text-destructive hover:bg-destructive/10"
-              >
-                <Trash2 className="w-4 h-4" />
-              </Button>
-            )}
-          </div>
-        </Card>
+        <div className="flex items-center gap-2 p-3 rounded-lg bg-green-500/10 border border-green-500/20">
+          <Check className="w-5 h-5 text-green-500" />
+          <span className="text-sm font-tech text-green-600">
+            Baseplate active
+          </span>
+          <span className="text-xs text-muted-foreground font-tech ml-auto">
+            View in Properties Panel →
+          </span>
+        </div>
       )}
 
       {/* Baseplate Type Selection */}

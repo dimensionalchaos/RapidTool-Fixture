@@ -148,9 +148,9 @@ const BasePlate: React.FC<BasePlateProps> = ({
             const xzPoints: Array<{x: number; z: number}> = [];
             const dedupe = new Set<string>();
             
-            // Get position delta from live transform (or zero if none)
-            const deltaX = livePositionDelta?.x ?? 0;
-            const deltaZ = livePositionDelta?.z ?? 0;
+            // NOTE: For convex-hull, we don't use livePositionDelta because the matrixWorld
+            // passed in from the mesh refs already includes the live pivot transform.
+            // The mesh is a child of the PivotControls group, so its matrixWorld is always current.
             
             // Process each geometry
             for (const geoInfo of geometriesToProcess) {
@@ -163,13 +163,11 @@ const BasePlate: React.FC<BasePlateProps> = ({
                 if (geoInfo.matrixWorld) {
                   v.applyMatrix4(geoInfo.matrixWorld);
                 }
-                // Apply live delta and project to XZ plane (the floor)
-                const finalX = v.x + deltaX;
-                const finalZ = v.z + deltaZ;
-                const key = `${Math.round(finalX * 100)}:${Math.round(finalZ * 100)}`;
+                // Project to XZ plane (the floor) - matrixWorld already has full world transform
+                const key = `${Math.round(v.x * 100)}:${Math.round(v.z * 100)}`;
                 if (!dedupe.has(key)) {
                   dedupe.add(key);
-                  xzPoints.push({ x: finalX, z: finalZ });
+                  xzPoints.push({ x: v.x, z: v.z });
                 }
               }
             }

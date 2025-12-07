@@ -1,10 +1,9 @@
 import React from 'react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Card } from '@/components/ui/card';
-import { AlertCircle, Check, X, FileBox } from 'lucide-react';
+import { AlertCircle, Check } from 'lucide-react';
 import FileDropzone from '@/modules/FileImport/components/FileDropzone';
 import { ProcessedFile } from '@/modules/FileImport/types';
-import { Button } from '@/components/ui/button';
 
 interface ImportStepContentProps {
   currentFile?: ProcessedFile | null;
@@ -12,7 +11,6 @@ interface ImportStepContentProps {
   isProcessing?: boolean;
   error?: string | null;
   onFileSelected: (file: File) => void;
-  onRemovePart?: (partId: string) => void;
 }
 
 const ImportStepContent: React.FC<ImportStepContentProps> = ({
@@ -20,8 +18,7 @@ const ImportStepContent: React.FC<ImportStepContentProps> = ({
   parts = [],
   isProcessing = false,
   error,
-  onFileSelected,
-  onRemovePart
+  onFileSelected
 }) => {
   const hasFile = !!currentFile || parts.length > 0;
   const displayParts = parts.length > 0 ? parts : (currentFile ? [currentFile] : []);
@@ -53,41 +50,9 @@ const ImportStepContent: React.FC<ImportStepContentProps> = ({
             </span>
           </div>
           
-          {/* Imported parts list */}
-          <div className="space-y-2">
-            <p className="text-xs text-muted-foreground font-tech font-semibold">
-              Imported Parts:
-            </p>
-            <div className="space-y-1 max-h-[150px] overflow-y-auto">
-              {displayParts.map((part) => (
-                <div 
-                  key={part.id}
-                  className="flex items-center justify-between gap-2 p-2 rounded bg-muted/30 border border-border"
-                >
-                  <div className="flex items-center gap-2 min-w-0">
-                    <FileBox className="w-4 h-4 text-primary shrink-0" />
-                    <span className="text-xs font-tech truncate">
-                      {part.metadata.name}
-                    </span>
-                  </div>
-                  {onRemovePart && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-6 w-6 p-0 hover:bg-destructive/20"
-                      onClick={() => onRemovePart(part.id)}
-                    >
-                      <X className="w-3 h-3" />
-                    </Button>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-          
           {/* Info about file location */}
           <p className="text-xs text-muted-foreground font-tech">
-            View part details in the <span className="text-primary">Properties Panel</span> on the right.
+            View and manage parts in the <span className="text-primary">Properties Panel</span> on the right.
           </p>
           
           {/* Additional file upload - one at a time */}
