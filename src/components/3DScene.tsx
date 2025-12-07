@@ -713,12 +713,28 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
 
   // Supports stay fixed - no live position tracking needed
   // Calculate all support footprint points for convex hull calculation
+  // Use a ref to cache the previous result and avoid recreating the array
+  const prevSupportHullPointsRef = useRef<Array<{x: number; z: number}>>([]);
   const supportHullPoints = useMemo(() => {
     const points: Array<{x: number; z: number}> = [];
     for (const support of supports) {
       const footprintPoints = getSupportFootprintPoints(support);
       points.push(...footprintPoints);
     }
+    
+    // Check if points are the same as before to avoid unnecessary updates
+    const prev = prevSupportHullPointsRef.current;
+    if (prev.length === points.length) {
+      let same = true;
+      for (let i = 0; i < points.length && same; i++) {
+        if (Math.abs(prev[i].x - points[i].x) > 0.001 || Math.abs(prev[i].z - points[i].z) > 0.001) {
+          same = false;
+        }
+      }
+      if (same) return prev; // Return the cached array to avoid triggering downstream updates
+    }
+    
+    prevSupportHullPointsRef.current = points;
     return points;
   }, [supports]);
 
@@ -731,11 +747,19 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   React.useEffect(() => {
     const updateTopY = () => {
       const mesh = basePlateMeshRef.current;
-      if (!mesh) { setBaseTopY(0); return; }
+      if (!mesh) { 
+        setBaseTopY(prev => prev === 0 ? prev : 0); 
+        return; 
+      }
       mesh.updateMatrixWorld(true);
       const box = new THREE.Box3().setFromObject(mesh);
-      if (box.isEmpty()) { setBaseTopY(0); return; }
-      setBaseTopY(box.max.y);
+      if (box.isEmpty()) { 
+        setBaseTopY(prev => prev === 0 ? prev : 0); 
+        return; 
+      }
+      const newTopY = box.max.y;
+      // Only update if the value actually changed (with small tolerance)
+      setBaseTopY(prev => Math.abs(prev - newTopY) < 0.001 ? prev : newTopY);
     };
     updateTopY();
     const id = setInterval(updateTopY, 250);
@@ -1804,18 +1828,11 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       const partBox = new THREE.Box3().setFromObject(partRef.current);
       const currentMinY = partBox.min.y;
       
-      console.log('[Delayed Collision] Checking part:', partId);
-      console.log('[Delayed Collision] baseplateTopY:', baseplateTopY, 'currentMinY:', currentMinY);
-      
       // If part's bottom is below baseplate top, lift it
       if (currentMinY < baseplateTopY - 0.01) {
         const offsetY = baseplateTopY - currentMinY;
-        console.log('[Delayed Collision] Need to lift by:', offsetY);
-        
         partRef.current.position.y += offsetY;
         partRef.current.updateMatrixWorld(true);
-        
-        console.log('[Delayed Collision] New position.y:', partRef.current.position.y);
         
         // Emit updated transform so Properties panel updates
         partRef.current.getWorldPosition(tempVec);
@@ -1826,8 +1843,6 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
             partId: partId,
           },
         }));
-      } else {
-        console.log('[Delayed Collision] Part is already above baseplate');
       }
     };
 

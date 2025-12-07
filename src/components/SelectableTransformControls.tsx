@@ -360,11 +360,9 @@ const SelectableTransformControls: React.FC<SelectableTransformControlsProps> = 
   // External transform updates (e.g., reset from UI)
   useEffect(() => {
     const handleSetTransform = (e: CustomEvent) => {
-      console.log('[SelectableTransformControls] set-model-transform received, isActive:', isActive, 'partId match:', partId === e.detail.partId);
       if (!meshRef.current || isActive) return;
       if (partId && e.detail.partId && e.detail.partId !== partId) return;
       
-      console.log('[SelectableTransformControls] Applying position:', e.detail.position);
       const { position, rotation, respectBaseplate } = e.detail;
       meshRef.current.position.copy(position);
       if (rotation instanceof THREE.Euler) {

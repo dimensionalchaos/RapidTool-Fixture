@@ -789,20 +789,52 @@ const SupportMesh: React.FC<SupportMeshProps> = ({ support, preview, baseTopY = 
 
   if (type === 'custom') {
     const { polygon, cornerRadius = 0 } = support as any;
-    console.log('Custom support rendering with cornerRadius:', cornerRadius);
-    const filletGeo = React.useMemo(() => createPolygonFilletGeometry(polygon, cornerRadius, effectiveFilletRadius, FILLET_SEGMENTS), [JSON.stringify(polygon), cornerRadius, effectiveFilletRadius]);
-    const geo = React.useMemo(() => {
-      const shape = new THREE.Shape();
-      const n = polygon.length;
-      
-      if (n < 3) {
-        return new THREE.BufferGeometry();
+    
+    // Memoize polygon string to avoid recalculating on every render
+    const polygonKey = React.useMemo(() => JSON.stringify(polygon), [polygon]);
+    
+    // Validate polygon before creating geometry
+    const validPolygon = React.useMemo(() => {
+      if (!Array.isArray(polygon) || polygon.length < 3) return null;
+      // Check for valid numeric coordinates
+      for (const pt of polygon) {
+        if (!Array.isArray(pt) || pt.length < 2 || !Number.isFinite(pt[0]) || !Number.isFinite(pt[1])) {
+          return null;
+        }
       }
+      return polygon as [number, number][];
+    }, [polygonKey]);
+    
+    // Clamp corner radius to a safe value
+    const safeCornerRadius = React.useMemo(() => {
+      if (!validPolygon || cornerRadius <= 0) return 0;
+      // Find minimum edge length to clamp corner radius
+      let minEdgeLen = Infinity;
+      for (let i = 0; i < validPolygon.length; i++) {
+        const curr = validPolygon[i];
+        const next = validPolygon[(i + 1) % validPolygon.length];
+        const len = Math.hypot(next[0] - curr[0], next[1] - curr[1]);
+        if (len < minEdgeLen) minEdgeLen = len;
+      }
+      // Corner radius should be at most half the shortest edge
+      return Math.max(0, Math.min(cornerRadius, minEdgeLen / 2 - 0.1));
+    }, [validPolygon, cornerRadius]);
+    
+    const filletGeo = React.useMemo(() => {
+      if (!validPolygon) return new THREE.BufferGeometry();
+      return createPolygonFilletGeometry(validPolygon, safeCornerRadius, effectiveFilletRadius, FILLET_SEGMENTS);
+    }, [validPolygon, safeCornerRadius, effectiveFilletRadius]);
+    
+    const geo = React.useMemo(() => {
+      if (!validPolygon) return new THREE.BufferGeometry();
+      
+      const shape = new THREE.Shape();
+      const n = validPolygon.length;
       
       // Mirror the Y coordinates to match the rotation direction
-      const workingPolygon: [number, number][] = polygon.map(([x, y]: [number, number]) => [x, -y]);
+      const workingPolygon: [number, number][] = validPolygon.map(([x, y]: [number, number]) => [x, -y]);
       
-      if (cornerRadius <= 0) {
+      if (safeCornerRadius <= 0) {
         // No rounding - simple polygon
         shape.moveTo(workingPolygon[0][0], workingPolygon[0][1]);
         for (let i = 1; i < n; i++) {
@@ -834,8 +866,8 @@ const SupportMesh: React.FC<SupportMeshProps> = ({ support, preview, baseTopY = 
             continue;
           }
           
-          // Always try to apply corner radius (for simple convex shapes)
-          const r = Math.min(cornerRadius, lenPrev / 2, lenNext / 2);
+          // Apply safe corner radius
+          const r = Math.min(safeCornerRadius, lenPrev / 2, lenNext / 2);
           
           const dirPrev = [toPrev[0] / lenPrev, toPrev[1] / lenPrev];
           const dirNext = [toNext[0] / lenNext, toNext[1] / lenNext];
@@ -869,7 +901,7 @@ const SupportMesh: React.FC<SupportMeshProps> = ({ support, preview, baseTopY = 
       e.rotateX(-Math.PI / 2);
       // Extrude upward (positive Y direction)
       return e;
-    }, [JSON.stringify(polygon), cornerRadius, bodyHeight]);
+    }, [validPolygon, safeCornerRadius, bodyHeight]);
     
     return (
       <group onClick={handleSelect}>
