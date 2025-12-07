@@ -192,7 +192,7 @@ export function useViewer(
     sceneRef.current = scene;
     console.log('Scene created:', scene);
 
-    // Camera (orthographic default to match FixtureMate-like view)
+    // Camera (orthographic default to match ToolWorks-like view)
     let camera: THREE.Camera;
     if (config.cameraType === 'orthographic') {
       const aspect = rect.width / rect.height;

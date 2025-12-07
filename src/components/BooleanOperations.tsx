@@ -5,7 +5,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import {
-  GitMerge,
+  SquaresSubtract,
   GitBranch,
   Minus,
   Plus,
@@ -77,7 +77,7 @@ const BooleanOperations: React.FC<BooleanOperationsProps> = ({
     <Card className="w-80">
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          <GitMerge className="w-4 h-4" />
+          <SquaresSubtract className="w-4 h-4" />
           Boolean Operations
         </CardTitle>
       </CardHeader>

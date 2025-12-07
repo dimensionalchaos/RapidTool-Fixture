@@ -6,11 +6,11 @@ import { Progress } from '@/components/ui/progress';
 import {
   Upload,
   Grid3X3,
-  Boxes,
-  GitMerge,
-  Wrench,
-  Tag,
-  Drill,
+  Cuboid,
+  SquaresSubtract,
+  Pin,
+  Type,
+  CircleDashed,
   Scissors,
   DownloadCloud,
   ChevronRight,
@@ -67,7 +67,7 @@ const WORKFLOW_STEPS: StepConfig[] = [
     id: 'supports',
     label: 'Supports',
     description: 'Create support structures',
-    icon: Boxes,
+    icon: Cuboid,
     helpText: [
       'Click on the baseplate to place supports',
       'Drag to adjust support height',
@@ -78,7 +78,7 @@ const WORKFLOW_STEPS: StepConfig[] = [
     id: 'cavity',
     label: 'Cavity',
     description: 'Subtract workpiece geometry',
-    icon: GitMerge,
+    icon: SquaresSubtract,
     helpText: [
       'Select the fixture component as base',
       'Choose workpieces to subtract',
@@ -89,7 +89,7 @@ const WORKFLOW_STEPS: StepConfig[] = [
     id: 'clamps',
     label: 'Clamps',
     description: 'Add clamping mechanisms',
-    icon: Wrench,
+    icon: Pin,
     helpText: [
       'Select from standard clamp components',
       'Position clamps around your workpiece',
@@ -100,7 +100,7 @@ const WORKFLOW_STEPS: StepConfig[] = [
     id: 'labels',
     label: 'Labels',
     description: 'Add identification labels',
-    icon: Tag,
+    icon: Type,
     helpText: [
       'Add version numbers and identifiers',
       'Position labels on visible surfaces',
@@ -111,7 +111,7 @@ const WORKFLOW_STEPS: StepConfig[] = [
     id: 'drill',
     label: 'Drill/Cutouts',
     description: 'Create holes and cutouts',
-    icon: Drill,
+    icon: CircleDashed,
     helpText: [
       'Select drill locations on surfaces',
       'Choose standard hole sizes',

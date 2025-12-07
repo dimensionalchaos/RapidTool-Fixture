@@ -10,7 +10,7 @@ import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Boxes, Trash2, Move, Maximize2, RotateCcw, Circle, Square, Triangle, Spline } from 'lucide-react';
+import { Cuboid, Trash2, Move, Maximize2, RotateCcw, Circle, Square, Triangle, Spline } from 'lucide-react';
 import { AnySupport, SupportType, RectSupport, CylSupport, ConicalSupport, CustomSupport } from './types';
 
 interface SupportsAccordionProps {
@@ -293,7 +293,7 @@ const SupportsAccordion: React.FC<SupportsAccordionProps> = ({
       <AccordionItem value="supports" className="border-border/50">
         <AccordionTrigger className="py-2 text-xs font-tech hover:no-underline">
           <div className="flex items-center gap-2 flex-1">
-            <Boxes className="w-3.5 h-3.5 text-primary" />
+            <Cuboid className="w-3.5 h-3.5 text-primary" />
             Supports
             <Badge variant="secondary" className="ml-auto font-tech text-[8px] h-4">
               0
@@ -302,7 +302,7 @@ const SupportsAccordion: React.FC<SupportsAccordionProps> = ({
         </AccordionTrigger>
         <AccordionContent className="pt-2">
           <Card className="tech-glass p-4 text-center">
-            <Boxes className="w-8 h-8 mx-auto text-muted-foreground/50 mb-2" />
+            <Cuboid className="w-8 h-8 mx-auto text-muted-foreground/50 mb-2" />
             <p className="text-xs text-muted-foreground font-tech">
               No supports placed yet
             </p>
@@ -319,7 +319,7 @@ const SupportsAccordion: React.FC<SupportsAccordionProps> = ({
     <AccordionItem value="supports" className="border-border/50">
       <AccordionTrigger className="py-2 text-xs font-tech hover:no-underline">
         <div className="flex items-center gap-2 flex-1">
-          <Boxes className="w-3.5 h-3.5 text-primary" />
+          <Cuboid className="w-3.5 h-3.5 text-primary" />
           Supports
           <Badge variant="secondary" className="ml-auto font-tech text-[8px] h-4">
             {supports.length}

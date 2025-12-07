@@ -6,7 +6,7 @@ import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
-import { Drill, AlertCircle, Circle, Square, Plus } from 'lucide-react';
+import { CircleDashed, AlertCircle, Circle, Square, Plus } from 'lucide-react';
 
 interface DrillStepContentProps {
   hasWorkpiece?: boolean;

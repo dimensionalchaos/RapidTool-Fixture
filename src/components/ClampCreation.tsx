@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import {
-  Wrench,
+  Pin,
   Settings,
   Triangle,
   Circle,
@@ -142,7 +142,7 @@ const ClampCreation: React.FC<ClampCreationProps> = ({
     <Card className="w-80">
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          <Wrench className="w-4 h-4" />
+          <Pin className="w-4 h-4" />
           Clamp Creation
         </CardTitle>
       </CardHeader>

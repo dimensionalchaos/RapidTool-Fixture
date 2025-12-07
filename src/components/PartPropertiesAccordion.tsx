@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { RotateCcw, Move, RotateCw, Box, Trash2, ArrowDownToLine, Eye, EyeOff } from 'lucide-react';
+import { RotateCcw, Move, RotateCw, Cog, Trash2, ArrowDownToLine, Eye, EyeOff } from 'lucide-react';
 import * as THREE from 'three';
 import { ProcessedFile } from '@/modules/FileImport/types';
 import SupportsAccordion from './Supports/SupportsAccordion';
@@ -276,7 +276,7 @@ const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({
         <AccordionItem value="parts" className="border-border/50">
           <AccordionTrigger className="py-2 text-xs font-tech hover:no-underline">
             <div className="flex items-center gap-2 flex-1">
-              <Box className="w-3.5 h-3.5 text-primary" />
+              <Cog className="w-3.5 h-3.5 text-primary" />
               Parts
               <Badge variant="secondary" className="ml-auto font-tech text-[8px] h-4">
                 {allParts.length}

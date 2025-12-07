@@ -5,8 +5,8 @@ import {
   Loader2,
   FileText,
   Settings,
-  Wrench,
-  GitMerge,
+  Pin,
+  SquaresSubtract,
   Scale,
   Download,
   Upload,
@@ -33,7 +33,7 @@ const LoadingIndicator: React.FC<LoadingIndicatorProps> = ({
       case 'cad-operation':
         return <Settings className="w-8 h-8" />;
       case 'boolean-operation':
-        return <GitMerge className="w-8 h-8" />;
+        return <SquaresSubtract className="w-8 h-8" />;
       case 'stl-editing':
         return <Scale className="w-8 h-8" />;
       case 'export':

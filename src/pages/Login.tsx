@@ -4,7 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Eye, EyeOff, Cpu, Zap, Lock } from "lucide-react";
+import { Eye, EyeOff, Aperture, Zap, Lock } from "lucide-react";
 
 interface LoginProps {
   onLogin: (credentials: { username: string; password: string }) => void;
@@ -29,10 +29,10 @@ const Login = ({ onLogin }: LoginProps) => {
     // Simulate authentication
     await new Promise(resolve => setTimeout(resolve, 1000));
     
-    if (credentials.username === "admin" && credentials.password === "fixturemate") {
+    if (credentials.username === "admin" && credentials.password === "toolworks") {
       onLogin(credentials);
     } else {
-      setError("Invalid credentials. Try admin/fixturemate");
+      setError("Invalid credentials. Try admin/toolworks");
       setIsLoading(false);
     }
   };
@@ -50,13 +50,13 @@ const Login = ({ onLogin }: LoginProps) => {
         {/* Logo Section */}
         <div className="text-center mb-8">
           <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-primary/10 border border-primary/20 backdrop-blur-sm mb-4">
-            <Cpu className="w-8 h-8 text-primary" />
+            <Aperture className="w-8 h-8 text-primary" />
           </div>
           <h1 className="text-3xl font-bold font-tech bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
-            FixtureMate
+            ToolWorks
           </h1>
           <p className="text-muted-foreground mt-1 font-tech text-sm">
-            Professional 3D Model Viewer
+            Automated Manufacturing Tool Designer
           </p>
         </div>
 
@@ -144,7 +144,7 @@ const Login = ({ onLogin }: LoginProps) => {
 
             <div className="mt-6 text-center">
               <p className="text-xs text-muted-foreground font-tech">
-                Demo credentials: <span className="text-primary">admin</span> / <span className="text-primary">fixturemate</span>
+                Demo credentials: <span className="text-primary">admin</span> / <span className="text-primary">toolworks</span>
               </p>
             </div>
           </CardContent>

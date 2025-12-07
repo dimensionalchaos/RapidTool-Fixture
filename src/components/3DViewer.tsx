@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { ProcessedFile } from "@/modules/FileImport/types";
 import ThreeDScene from './3DScene';
+import { useTheme } from 'next-themes';
 
 interface ThreeDViewerProps {
   currentFile: ProcessedFile | null;
@@ -16,6 +17,9 @@ const ThreeDViewer: React.FC<ThreeDViewerProps> = ({
   onComponentPlaced,
   onModelColorAssigned,
 }) => {
+  // Theme for 3D viewer background
+  const { resolvedTheme } = useTheme();
+  
   // Store multiple imported parts
   const [importedParts, setImportedParts] = useState<ProcessedFile[]>([]);
   const [selectedPartId, setSelectedPartId] = useState<string | null>(null);
@@ -86,6 +90,9 @@ const ThreeDViewer: React.FC<ThreeDViewerProps> = ({
 
   // Always use importedParts from event-based state for multi-part support
   const displayParts = importedParts;
+  
+  // Dark/light theme colors for the 3D viewer background
+  const viewerBackground = resolvedTheme === 'dark' ? '#1a1a2e' : '#ffffff';
 
   return (
     <div className="w-full h-full relative" onContextMenu={(e) => e.preventDefault()}>
@@ -102,7 +109,7 @@ const ThreeDViewer: React.FC<ThreeDViewerProps> = ({
           alpha: true,
           powerPreference: "high-performance"
         }}
-        style={{ background: 'white' }}
+        style={{ background: viewerBackground }}
         onContextMenu={(e) => e.preventDefault()}
       >
         <ThreeDScene

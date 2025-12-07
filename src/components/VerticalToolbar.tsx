@@ -3,11 +3,11 @@ import { Button } from "@/components/ui/button";
 import {
   Upload,
   Grid3X3,
-  Boxes,
-  GitMerge,
-  Wrench,
-  Tag,
-  Drill,
+  Cuboid,
+  SquaresSubtract,
+  Pin,
+  Type,
+  CircleDashed,
   Scissors,
   DownloadCloud
 } from "lucide-react";
@@ -26,11 +26,11 @@ const VerticalToolbar: React.FC<VerticalToolbarProps> = ({
   const tools = [
     { id: 'import', icon: Upload, label: 'Import', tooltip: 'Import Workpieces / Models' },
     { id: 'baseplates', icon: Grid3X3, label: 'Baseplates', tooltip: 'Choose From Different Baseplates' },
-    { id: 'supports', icon: Boxes, label: 'Supports', tooltip: 'Create Supports by Extruding a Sketch' },
-    { id: 'cavity', icon: GitMerge, label: 'Cavity', tooltip: 'Subtract Workpieces From Fixture Geometry' },
-    { id: 'clamps', icon: Wrench, label: 'Clamps', tooltip: 'Clamp Workpieces with Standard Components' },
-    { id: 'labels', icon: Tag, label: 'Labels', tooltip: 'Set Labels (e.g., Version Numbers)' },
-    { id: 'drill', icon: Drill, label: 'Drill/Cutouts', tooltip: 'Drill Holes or Remove Material' },
+    { id: 'supports', icon: Cuboid, label: 'Supports', tooltip: 'Create Supports by Extruding a Sketch' },
+    { id: 'cavity', icon: SquaresSubtract, label: 'Cavity', tooltip: 'Subtract Workpieces From Fixture Geometry' },
+    { id: 'clamps', icon: Pin, label: 'Clamps', tooltip: 'Clamp Workpieces with Standard Components' },
+    { id: 'labels', icon: Type, label: 'Labels', tooltip: 'Set Labels (e.g., Version Numbers)' },
+    { id: 'drill', icon: CircleDashed, label: 'Drill/Cutouts', tooltip: 'Drill Holes or Remove Material' },
     { id: 'optimize', icon: Scissors, label: 'Optimize', tooltip: 'Save Material and Print Faster' },
     { id: 'export', icon: DownloadCloud, label: 'Export', tooltip: 'Export Fixture for 3D Printing' }
   ];

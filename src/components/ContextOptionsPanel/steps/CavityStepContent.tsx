@@ -5,7 +5,7 @@ import { Slider } from '@/components/ui/slider';
 import { Label } from '@/components/ui/label';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
-import { GitMerge, AlertCircle, Minus, Box, Layers } from 'lucide-react';
+import { SquaresSubtract, AlertCircle, Minus, Box, Layers } from 'lucide-react';
 
 interface CavityStepContentProps {
   hasWorkpiece?: boolean;
@@ -139,7 +139,7 @@ const CavityStepContent: React.FC<CavityStepContentProps> = ({
             </>
           ) : (
             <>
-              <GitMerge className="w-4 h-4 mr-2" />
+              <SquaresSubtract className="w-4 h-4 mr-2" />
               Execute Subtraction
             </>
           )}

@@ -6,7 +6,7 @@ import { Separator } from '@/components/ui/separator';
 import { Slider } from '@/components/ui/slider';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { 
-  GitMerge, 
+  SquaresSubtract, 
   Minus, 
   Plus, 
   RotateCcw, 
@@ -178,7 +178,7 @@ const CSGOperations: React.FC<CSGOperationsProps> = ({
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center gap-2">
-            <GitMerge className="w-5 h-5 text-blue-600" />
+            <SquaresSubtract className="w-5 h-5 text-blue-600" />
             CSG Operations
           </CardTitle>
         </CardHeader>

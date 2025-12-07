@@ -3,7 +3,7 @@ import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Wrench, AlertCircle, Plus, GripVertical } from 'lucide-react';
+import { Pin, AlertCircle, Plus, GripVertical } from 'lucide-react';
 
 interface ClampType {
   id: string;
@@ -68,7 +68,7 @@ const ClampsStepContent: React.FC<ClampsStepContentProps> = ({
               onClick={() => onSelectClampType?.(clamp.id)}
             >
               <div className="flex items-center gap-3">
-                <Wrench className="w-4 h-4 text-muted-foreground" />
+                <Pin className="w-4 h-4 text-muted-foreground" />
                 <div className="flex-1">
                   <p className="text-sm font-tech font-medium">{clamp.name}</p>
                   <p className="text-xs text-muted-foreground font-tech">

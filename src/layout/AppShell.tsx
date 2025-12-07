@@ -37,7 +37,7 @@ import {
 } from "@/modules/FileImport/services/meshAnalysis";
 import * as THREE from 'three';
 import {
-  Cpu,
+  Aperture,
   Upload,
   Settings,
   Eye,
@@ -51,7 +51,7 @@ import {
   Move,
   Undo2,
   Redo2,
-  Wrench,
+  Pin,
   Box,
   LogOut,
   Zap
@@ -656,9 +656,9 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
           <div className="flex items-center gap-4">
             <div className="flex items-center gap-2">
               <div className="w-8 h-8 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center">
-                <Cpu className="w-4 h-4 text-primary" />
+                <Aperture className="w-4 h-4 text-primary" />
               </div>
-              <span className="font-tech font-semibold text-sm">FixtureMate</span>
+              <span className="font-tech font-semibold text-sm">ToolWorks</span>
             </div>
 
             <Separator orientation="vertical" className="h-6" />

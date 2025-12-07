@@ -22,6 +22,7 @@ interface ThreeDSceneProps {
   onModelColorAssigned?: (modelId: string, color: string) => void;
   partVisibility?: Map<string, boolean>;
   onPartVisibilityChange?: (partId: string, visible: boolean) => void;
+  isDarkMode?: boolean;
 }
 
 const computeDominantUpQuaternion = (geometry: THREE.BufferGeometry) => {
@@ -189,8 +190,9 @@ const getProjectedSizeForOrientation = (bounds: BoundsSummary, orientation: View
 };
 
 // Ground grid that scales with the model and adapts to model position
-function ScalableGrid({ modelBounds }: { 
+function ScalableGrid({ modelBounds, isDarkMode = false }: { 
   modelBounds: BoundsSummary | null;
+  isDarkMode?: boolean;
 }) {
   const gridRef = useRef<THREE.Group>(null);
   
@@ -264,13 +266,13 @@ function ScalableGrid({ modelBounds }: {
     <group ref={gridRef} position={[0, -0.01, 0]} frustumCulled={false}>
       {/* Minor grid lines */}
       <gridHelper 
-        args={[gridConfig.size, gridConfig.divisions, '#d0d0d0', '#e8e8e8']} 
+        args={[gridConfig.size, gridConfig.divisions, isDarkMode ? '#3a3a4a' : '#d0d0d0', isDarkMode ? '#2a2a3a' : '#e8e8e8']} 
         rotation={[0, 0, 0]}
       />
       
       {/* Major grid lines (every N cells) */}
       <gridHelper 
-        args={[gridConfig.size, Math.floor(gridConfig.divisions / gridConfig.majorDivisions), '#a0a0a0', '#a0a0a0']} 
+        args={[gridConfig.size, Math.floor(gridConfig.divisions / gridConfig.majorDivisions), isDarkMode ? '#4a4a5a' : '#a0a0a0', isDarkMode ? '#4a4a5a' : '#a0a0a0']} 
         rotation={[0, 0, 0]}
         position={[0, 0.001, 0]}
       />

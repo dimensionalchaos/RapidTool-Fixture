@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Label } from '@/components/ui/label';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Boxes, AlertCircle, MousePointer2, Square, Circle, Triangle, Spline } from 'lucide-react';
+import { Cuboid, AlertCircle, MousePointer2, Square, Circle, Triangle, Spline } from 'lucide-react';
 
 export type SupportType = 'rectangular' | 'cylindrical' | 'conical' | 'custom';
 
@@ -155,7 +155,7 @@ const SupportsStepContent: React.FC<SupportsStepContentProps> = ({
       <div className="pt-2 border-t border-border/50">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <Boxes className="w-4 h-4 text-muted-foreground" />
+            <Cuboid className="w-4 h-4 text-muted-foreground" />
             <span className="text-xs font-tech text-muted-foreground">
               Total Supports
             </span>

@@ -10,7 +10,7 @@ import {
   Box,
   Circle,
   Triangle,
-  Wrench,
+  Pin,
   Square,
   Grid3X3,
   Settings,
@@ -52,7 +52,7 @@ const EnhancedComponentLibrary: React.FC<EnhancedComponentLibraryProps> = ({
   const getCategoryIcon = (category: string) => {
     switch (category) {
       case 'support': return <Box className="w-4 h-4" />;
-      case 'clamp': return <Wrench className="w-4 h-4" />;
+      case 'clamp': return <Pin className="w-4 h-4" />;
       case 'baseplate': return <Square className="w-4 h-4" />;
       case 'fastener': return <Settings className="w-4 h-4" />;
       default: return <Circle className="w-4 h-4" />;
@@ -179,7 +179,7 @@ const EnhancedComponentLibrary: React.FC<EnhancedComponentLibraryProps> = ({
             Supports
           </TabsTrigger>
           <TabsTrigger value="clamps" className="text-xs">
-            <Wrench className="w-3 h-3 mr-1" />
+            <Pin className="w-3 h-3 mr-1" />
             Clamps
           </TabsTrigger>
           <TabsTrigger value="baseplates" className="text-xs">
