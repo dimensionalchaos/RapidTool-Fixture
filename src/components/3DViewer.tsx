@@ -118,6 +118,7 @@ const ThreeDViewer: React.FC<ThreeDViewerProps> = ({
           onPartSelected={setSelectedPartId}
           onModelColorAssigned={onModelColorAssigned}
           partVisibility={partVisibility}
+          isDarkMode={resolvedTheme === 'dark'}
         />
       </Canvas>
 
