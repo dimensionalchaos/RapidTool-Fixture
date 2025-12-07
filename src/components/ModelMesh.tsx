@@ -32,6 +32,16 @@ export interface ModelMeshProps {
   dimensions?: { x?: number; y?: number; z?: number };
   /** Callback when bounds are computed/updated */
   onBoundsChange?: (bounds: BoundsSummary) => void;
+  /** Callback when mesh is double-clicked */
+  onDoubleClick?: () => void;
+  /** Disable double-click interactions */
+  disableDoubleClick?: boolean;
+  /** Colors map for materials */
+  colorsMap?: Map<string, string>;
+  /** Callback to update colors */
+  setColorsMap?: (colors: Map<string, string>) => void;
+  /** Initial offset position */
+  initialOffset?: THREE.Vector3;
 }
 
 // ============================================================================
@@ -150,6 +160,9 @@ const ModelMesh: React.FC<ModelMeshProps> = ({
   meshRef,
   dimensions,
   onBoundsChange,
+  onDoubleClick,
+  disableDoubleClick = false,
+  // Note: colorsMap, setColorsMap, initialOffset are accepted but handled elsewhere
 }) => {
   const internalRef = useRef<THREE.Mesh>(null);
   const actualRef = meshRef || internalRef;
@@ -255,16 +268,19 @@ const ModelMesh: React.FC<ModelMeshProps> = ({
   const handleClick = useCallback((event: THREE.Event) => {
     (event as any).stopPropagation?.();
     
+    if (disableDoubleClick) return;
+    
     const now = Date.now();
     const timeSinceLastClick = now - lastClickTimeRef.current;
     
     if (timeSinceLastClick < DOUBLE_CLICK_THRESHOLD_MS) {
-      window.dispatchEvent(new CustomEvent(EVENTS.meshDoubleClick));
+      // Call the onDoubleClick prop if provided
+      onDoubleClick?.();
       lastClickTimeRef.current = 0; // Reset to prevent triple-click
     } else {
       lastClickTimeRef.current = now;
     }
-  }, []);
+  }, [disableDoubleClick, onDoubleClick]);
   
   return (
     <mesh

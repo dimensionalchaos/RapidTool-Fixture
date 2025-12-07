@@ -3,6 +3,10 @@ import { useThree, useFrame } from '@react-three/fiber';
 import { PivotControls, Html } from '@react-three/drei';
 import * as THREE from 'three';
 
+// ============================================================================
+// Types
+// ============================================================================
+
 interface TransformData {
   position: THREE.Vector3;
   rotation: THREE.Euler;
@@ -14,14 +18,25 @@ interface LiveTransformData extends TransformData {
 }
 
 interface SelectableTransformControlsProps {
+  /** Reference to the mesh being transformed */
   meshRef: React.RefObject<THREE.Mesh>;
+  /** Whether transform controls are enabled for this part */
   enabled: boolean;
+  /** Unique identifier for the part */
   partId?: string;
+  /** Callback when transform changes (on drag end or close) */
   onTransformChange?: (transform: TransformData) => void;
+  /** Callback when selection state changes */
   onSelectionChange?: (selected: boolean) => void;
+  /** Callback for live transform updates during drag */
   onLiveTransformChange?: (transform: LiveTransformData | null) => void;
+  /** Child elements (typically the mesh) */
   children?: React.ReactNode;
 }
+
+// ============================================================================
+// Constants & Reusable Objects
+// ============================================================================
 
 // Reusable THREE.js objects to avoid allocations in render loop
 const tempBox = new THREE.Box3();
@@ -30,18 +45,24 @@ const tempSize = new THREE.Vector3();
 const tempPosition = new THREE.Vector3();
 const tempQuaternion = new THREE.Quaternion();
 const tempEuler = new THREE.Euler();
-const tempMatrix = new THREE.Matrix4();
-const tempScale = new THREE.Vector3();
+
+// ============================================================================
+// Component
+// ============================================================================
 
 /**
- * Transform controls wrapper using @react-three/drei PivotControls.
+ * SelectableTransformControls - A wrapper for PivotControls with transform baking.
  * 
- * Key behavior:
- * - Double-click to activate gizmo (PivotControls starts at identity)
- * - User transforms the part using the gizmo
- * - On close: "bake" PivotControls transform into the mesh, reset PivotControls
- * - Mesh accumulates all transforms, PivotControls always starts fresh
- * - UI shows the mesh's actual accumulated transform
+ * Behavior:
+ * - Double-click a part to activate the gizmo
+ * - Gizmo axes are always world-aligned (not affected by part rotation)
+ * - On close: transforms are "baked" into the mesh, gizmo resets to identity
+ * - Supports multiple parts with proper isolation via partId
+ * 
+ * Transform Flow:
+ * 1. On activate: Move pivot to mesh world position, keep axes world-aligned
+ * 2. During drag: PivotControls applies transform, mesh stays at local origin
+ * 3. On deactivate: Capture world transform, hide gizmo, bake into mesh
  */
 const SelectableTransformControls: React.FC<SelectableTransformControlsProps> = ({
   meshRef,
@@ -56,27 +77,15 @@ const SelectableTransformControls: React.FC<SelectableTransformControlsProps> = 
   const [isActive, setIsActive] = useState(false);
   const [bounds, setBounds] = useState<{ center: THREE.Vector3; size: THREE.Vector3; radius: number } | null>(null);
   
-  // Key to force PivotControls remount (resets to identity matrix)
-  const [pivotKey, setPivotKey] = useState(0);
-  
-  // Ref to the PivotControls internal group for extracting its transform
   const pivotRef = useRef<THREE.Group>(null);
-  
   const raycasterRef = useRef(new THREE.Raycaster());
   const groupRef = useRef<THREE.Group>(null);
 
-  // Get the mesh's current local transform (what's stored on the mesh itself)
-  const getMeshLocalTransform = useCallback((): TransformData => {
-    if (!meshRef.current) {
-      return { position: new THREE.Vector3(), rotation: new THREE.Euler() };
-    }
-    return { 
-      position: meshRef.current.position.clone(), 
-      rotation: meshRef.current.rotation.clone() 
-    };
-  }, [meshRef]);
+  // ============================================================================
+  // Transform Helpers
+  // ============================================================================
 
-  // Get the mesh's world transform (includes PivotControls transform when active)
+  /** Get mesh's world transform (includes pivot transform when active) */
   const getWorldTransform = useCallback((): TransformData => {
     if (!meshRef.current) {
       return { position: new THREE.Vector3(), rotation: new THREE.Euler() };
@@ -91,7 +100,7 @@ const SelectableTransformControls: React.FC<SelectableTransformControlsProps> = 
     };
   }, [meshRef]);
 
-  // Emit transform update event (sends the mesh's world transform)
+  /** Emit transform update event */
   const emitTransformUpdate = useCallback(() => {
     if (!meshRef.current) return;
     const { position, rotation } = getWorldTransform();
@@ -102,43 +111,10 @@ const SelectableTransformControls: React.FC<SelectableTransformControlsProps> = 
     onTransformChange?.({ position, rotation });
   }, [meshRef, getWorldTransform, onTransformChange, partId]);
 
-  // Initial transform emit
-  useEffect(() => {
-    if (!meshRef.current) return;
-    const timer = setTimeout(emitTransformUpdate, 100);
-    return () => clearTimeout(timer);
-  }, [emitTransformUpdate]);
+  // ============================================================================
+  // Bounds Calculation
+  // ============================================================================
 
-  // Listen for external transform changes (e.g., reset position from UI)
-  useEffect(() => {
-    const handleExternalTransform = (e: CustomEvent) => {
-      const { position, rotation, partId: eventPartId } = e.detail;
-      
-      // Only handle events for this part
-      if (partId && eventPartId && eventPartId !== partId) return;
-      if (!partId && eventPartId) return;
-      
-      // Update mesh position/rotation directly (this is the "baked" transform)
-      if (meshRef.current) {
-        meshRef.current.position.copy(position);
-        meshRef.current.rotation.copy(rotation);
-        meshRef.current.updateMatrixWorld(true);
-      }
-      
-      // Force PivotControls to remount (resets to identity)
-      setPivotKey(k => k + 1);
-      
-      // Emit the transform update so UI stays in sync
-      setTimeout(() => {
-        emitTransformUpdate();
-      }, 50);
-    };
-    
-    window.addEventListener('set-model-transform', handleExternalTransform as EventListener);
-    return () => window.removeEventListener('set-model-transform', handleExternalTransform as EventListener);
-  }, [partId, emitTransformUpdate, meshRef]);
-
-  // Continuous bounds calculation
   useFrame(() => {
     if (!meshRef.current || !enabled) return;
     
@@ -161,7 +137,10 @@ const SelectableTransformControls: React.FC<SelectableTransformControlsProps> = 
     }
   });
 
-  // Mouse position helper
+  // ============================================================================
+  // Mouse Helpers
+  // ============================================================================
+
   const getMouseNDC = useCallback((event: MouseEvent): THREE.Vector2 => {
     const rect = gl.domElement.getBoundingClientRect();
     return new THREE.Vector2(
@@ -170,125 +149,42 @@ const SelectableTransformControls: React.FC<SelectableTransformControlsProps> = 
     );
   }, [gl]);
 
-  // Raycast check for hover
   const isMouseOverMesh = useCallback((event: MouseEvent): boolean => {
     if (!meshRef.current) return false;
     raycasterRef.current.setFromCamera(getMouseNDC(event), camera);
     return raycasterRef.current.intersectObject(meshRef.current, true).length > 0;
   }, [meshRef, camera, getMouseNDC]);
 
-  // Bake PivotControls transform into the mesh and reset PivotControls
-  // Returns a promise that resolves after the bake is complete
-  const bakeTransformAndReset = useCallback((): Promise<{ position: THREE.Vector3; rotation: THREE.Euler }> => {
-    return new Promise((resolve) => {
-      if (!meshRef.current || !pivotRef.current) {
-        resolve({ position: new THREE.Vector3(), rotation: new THREE.Euler() });
-        return;
-      }
-      
-      const mesh = meshRef.current;
-      const pivot = pivotRef.current;
-      
-      console.group('🔧 Bake Transform Debug');
-      console.log('Mesh BEFORE bake:');
-      console.log('  Local position:', mesh.position.toArray());
-      console.log('  Local rotation:', [mesh.rotation.x, mesh.rotation.y, mesh.rotation.z]);
-      console.log('  Mesh UUID:', mesh.uuid);
-      
-      mesh.updateMatrixWorld(true);
-      const worldPosBefore = new THREE.Vector3();
-      const worldQuatBefore = new THREE.Quaternion();
-      mesh.getWorldPosition(worldPosBefore);
-      mesh.getWorldQuaternion(worldQuatBefore);
-      console.log('  World position:', worldPosBefore.toArray());
-      console.log('  World quaternion:', worldQuatBefore.toArray());
-      
-      // The mesh's world transform ALREADY includes all PivotControls transforms
-      // Capture the world transform
-      const worldPosition = new THREE.Vector3();
-      const worldQuaternion = new THREE.Quaternion();
-      
-      mesh.getWorldPosition(worldPosition);
-      mesh.getWorldQuaternion(worldQuaternion);
-      
-      console.log('World transform to bake:');
-      console.log('  Position:', worldPosition.toArray());
-      console.log('  Quaternion:', worldQuaternion.toArray());
-      
-      // Store the world transform
-      const bakedPosition = worldPosition.clone();
-      const bakedQuaternion = worldQuaternion.clone();
-      const bakedEuler = new THREE.Euler().setFromQuaternion(bakedQuaternion);
-      
-      // NOW: Reset PivotControls matrix to identity WITHOUT using key (no remount)
-      // Then set mesh local = baked world
-      console.log('Resetting pivot matrix and applying baked transform...');
-      
-      // Reset pivot's matrix to identity
-      pivot.matrix.identity();
-      pivot.position.set(0, 0, 0);
-      pivot.rotation.set(0, 0, 0);
-      pivot.scale.set(1, 1, 1);
-      pivot.updateMatrix();
-      
-      // Set mesh local transform to the baked world transform
-      mesh.position.copy(bakedPosition);
-      mesh.rotation.copy(bakedEuler);
-      mesh.updateMatrix();
-      mesh.updateMatrixWorld(true);
-      
-      console.log('Mesh AFTER bake:');
-      console.log('  Local position:', mesh.position.toArray());
-      console.log('  Local rotation:', [mesh.rotation.x, mesh.rotation.y, mesh.rotation.z]);
-      console.log('  Mesh UUID:', mesh.uuid);
-      console.groupEnd();
-      
-      // Verify it sticks
-      requestAnimationFrame(() => {
-        if (meshRef.current) {
-          console.log('🔧 Verify after RAF - mesh position:', meshRef.current.position.toArray());
-          console.log('🔧 Verify after RAF - mesh UUID:', meshRef.current.uuid);
-        }
-      });
-      
-      resolve({ position: bakedPosition, rotation: bakedEuler });
-    });
-  }, [meshRef]);
+  // ============================================================================
+  // Gizmo Activation/Deactivation
+  // ============================================================================
 
-  // Activate gizmo
+  /** Activate gizmo - position at mesh center with world-aligned axes */
   const activateGizmo = useCallback(() => {
-    if (!meshRef.current) return;
+    if (!meshRef.current || !pivotRef.current) return;
     
-    // Position PivotControls at the mesh's current world center
-    // BUT keep pivot axes world-aligned (no rotation)
-    if (pivotRef.current) {
-      meshRef.current.updateMatrixWorld(true);
-      const meshWorldPos = new THREE.Vector3();
-      meshRef.current.getWorldPosition(meshWorldPos);
-      
-      // Get mesh's world rotation - we'll bake this into the mesh's local rotation
-      const meshWorldQuat = new THREE.Quaternion();
-      meshRef.current.getWorldQuaternion(meshWorldQuat);
-      const meshWorldEuler = new THREE.Euler().setFromQuaternion(meshWorldQuat);
-      
-      // Set pivot to mesh's world POSITION only - keep rotation at identity (world-aligned)
-      pivotRef.current.position.copy(meshWorldPos);
-      pivotRef.current.rotation.set(0, 0, 0);  // World-aligned axes!
-      pivotRef.current.updateMatrix();
-      
-      // Reset mesh position to origin, but KEEP its rotation
-      // This way the part's orientation is preserved in mesh.rotation
-      meshRef.current.position.set(0, 0, 0);
-      meshRef.current.rotation.copy(meshWorldEuler);  // Keep the rotation on the mesh
-      meshRef.current.updateMatrix();
-      meshRef.current.updateMatrixWorld(true);
-      
-      console.group('🟢 Pivot Controls ACTIVATED');
-      console.log('Part ID:', partId);
-      console.log('Pivot positioned at:', meshWorldPos.toArray(), '(world-aligned axes)');
-      console.log('Mesh rotation preserved:', [meshWorldEuler.x, meshWorldEuler.y, meshWorldEuler.z]);
-      console.groupEnd();
-    }
+    const mesh = meshRef.current;
+    const pivot = pivotRef.current;
+    
+    mesh.updateMatrixWorld(true);
+    
+    // Get mesh's current world transform
+    const meshWorldPos = new THREE.Vector3();
+    const meshWorldQuat = new THREE.Quaternion();
+    mesh.getWorldPosition(meshWorldPos);
+    mesh.getWorldQuaternion(meshWorldQuat);
+    const meshWorldEuler = new THREE.Euler().setFromQuaternion(meshWorldQuat);
+    
+    // Position pivot at mesh's world position, but keep axes world-aligned
+    pivot.position.copy(meshWorldPos);
+    pivot.rotation.set(0, 0, 0);
+    pivot.updateMatrix();
+    
+    // Reset mesh position to origin, preserve its rotation
+    mesh.position.set(0, 0, 0);
+    mesh.rotation.copy(meshWorldEuler);
+    mesh.updateMatrix();
+    mesh.updateMatrixWorld(true);
     
     // Notify other controls to close
     window.dispatchEvent(new CustomEvent('pivot-control-activated', { detail: { partId } }));
@@ -297,12 +193,12 @@ const SelectableTransformControls: React.FC<SelectableTransformControlsProps> = 
     onSelectionChange?.(true);
   }, [meshRef, onSelectionChange, partId]);
 
-  // Deactivate gizmo - bake transform into mesh and reset PivotControls
+  /** Deactivate gizmo - bake transform into mesh */
   const deactivateGizmo = useCallback(async () => {
     window.dispatchEvent(new CustomEvent('disable-orbit-controls', { detail: { disabled: false } }));
     gl.domElement.style.cursor = 'auto';
     
-    // Capture the transform BEFORE hiding (while pivot still has its transform)
+    // Capture world transform before hiding
     let bakedPosition = new THREE.Vector3();
     let bakedRotation = new THREE.Euler();
     
@@ -314,36 +210,38 @@ const SelectableTransformControls: React.FC<SelectableTransformControlsProps> = 
       bakedRotation.setFromQuaternion(worldQuat);
     }
     
-    // Hide the pivot controls FIRST to avoid visual jump to origin
+    // Hide gizmo first to prevent visual jump
     setIsActive(false);
     onSelectionChange?.(false);
     
-    // Wait for React to re-render and hide the pivot
+    // Wait for React to hide the gizmo
     await new Promise(resolve => requestAnimationFrame(resolve));
     
+    // Bake transform into mesh
     if (meshRef.current && pivotRef.current) {
-      // Now reset pivot to origin (it's hidden, so no visual jump)
+      // Reset pivot to origin
       pivotRef.current.matrix.identity();
       pivotRef.current.position.set(0, 0, 0);
       pivotRef.current.rotation.set(0, 0, 0);
       pivotRef.current.scale.set(1, 1, 1);
       pivotRef.current.updateMatrix();
       
-      // Set mesh local transform to the captured world transform
+      // Apply baked transform to mesh
       meshRef.current.position.copy(bakedPosition);
       meshRef.current.rotation.copy(bakedRotation);
       meshRef.current.updateMatrix();
       meshRef.current.updateMatrixWorld(true);
       
-      console.log('🔧 deactivateGizmo - Bake complete, position:', bakedPosition.toArray());
-      
-      // Get bounds after bake
+      // Get bounds and emit events
       tempBox.setFromObject(meshRef.current);
       
-      // Notify about the final transform
-      onLiveTransformChange?.({ position: bakedPosition, rotation: bakedRotation, bounds: tempBox.clone(), pivotClosed: true });
+      onLiveTransformChange?.({ 
+        position: bakedPosition, 
+        rotation: bakedRotation, 
+        bounds: tempBox.clone(), 
+        pivotClosed: true 
+      });
       
-      // Emit update with the baked transform
       window.dispatchEvent(new CustomEvent('model-transform-updated', {
         detail: { position: bakedPosition, rotation: bakedRotation, partId },
       }));
@@ -353,14 +251,45 @@ const SelectableTransformControls: React.FC<SelectableTransformControlsProps> = 
     requestAnimationFrame(() => onLiveTransformChange?.(null));
   }, [gl, meshRef, onSelectionChange, onLiveTransformChange, onTransformChange, partId]);
 
+  // ============================================================================
+  // Drag Handlers
+  // ============================================================================
+
+  const handleDragStart = useCallback(() => {
+    window.dispatchEvent(new CustomEvent('disable-orbit-controls', { detail: { disabled: true } }));
+    gl.domElement.style.cursor = 'grabbing';
+  }, [gl]);
+
+  const handleDrag = useCallback(() => {
+    if (!meshRef.current || !onLiveTransformChange) return;
+    const { position, rotation } = getWorldTransform();
+    tempBox.setFromObject(meshRef.current);
+    onLiveTransformChange({ position, rotation, bounds: tempBox.clone() });
+  }, [meshRef, onLiveTransformChange, getWorldTransform]);
+
+  const handleDragEnd = useCallback(() => {
+    window.dispatchEvent(new CustomEvent('disable-orbit-controls', { detail: { disabled: false } }));
+    gl.domElement.style.cursor = 'auto';
+    emitTransformUpdate();
+  }, [gl, emitTransformUpdate]);
+
+  // ============================================================================
+  // Event Listeners
+  // ============================================================================
+
+  // Initial transform emit
+  useEffect(() => {
+    if (!meshRef.current) return;
+    const timer = setTimeout(emitTransformUpdate, 100);
+    return () => clearTimeout(timer);
+  }, [emitTransformUpdate]);
+
   // Close when another pivot control is activated
   useEffect(() => {
     if (!isActive) return;
     
     const handleOtherActivated = (e: CustomEvent) => {
-      const activatedPartId = e.detail?.partId;
-      // If a different part was activated, close this one
-      if (activatedPartId !== partId) {
+      if (e.detail?.partId !== partId) {
         deactivateGizmo();
       }
     };
@@ -369,24 +298,26 @@ const SelectableTransformControls: React.FC<SelectableTransformControlsProps> = 
     return () => window.removeEventListener('pivot-control-activated', handleOtherActivated as EventListener);
   }, [isActive, partId, deactivateGizmo]);
 
-  // Double-click handler
+  // Double-click handler - listen regardless of enabled state
+  // The event from ModelMesh will trigger selection in 3DScene, then we activate
   useEffect(() => {
-    if (!enabled) return;
-    
     const handleMeshDoubleClick = (e: CustomEvent) => {
       if (isActive) return;
       const eventPartId = e.detail?.partId;
-      if (partId && eventPartId && eventPartId !== partId) return;
-      activateGizmo();
+      // Only activate if this event is for our part
+      if (partId && eventPartId === partId) {
+        activateGizmo();
+      }
     };
     
     window.addEventListener('mesh-double-click', handleMeshDoubleClick as EventListener);
     return () => window.removeEventListener('mesh-double-click', handleMeshDoubleClick as EventListener);
-  }, [enabled, isActive, activateGizmo, partId]);
+  }, [isActive, activateGizmo, partId]);
 
-  // Hover cursor
+  // Hover cursor - show pointer on ALL parts, not just enabled ones
   useEffect(() => {
-    if (!enabled || isActive) return;
+    // Don't show hover when gizmo is active (user is transforming)
+    if (isActive) return;
     
     const handleMouseMove = (event: MouseEvent) => {
       gl.domElement.style.cursor = isMouseOverMesh(event) ? 'pointer' : 'auto';
@@ -398,63 +329,6 @@ const SelectableTransformControls: React.FC<SelectableTransformControlsProps> = 
       gl.domElement.style.cursor = 'auto';
     };
   }, [gl, enabled, isActive, isMouseOverMesh]);
-
-  // Drag handlers
-  const handleDragStart = useCallback(() => {
-    console.log('🔵 Drag START');
-    if (meshRef.current) {
-      console.log('  Mesh local pos:', meshRef.current.position.toArray());
-      meshRef.current.updateMatrixWorld(true);
-      const wp = new THREE.Vector3();
-      meshRef.current.getWorldPosition(wp);
-      console.log('  Mesh world pos:', wp.toArray());
-    }
-    if (pivotRef.current) {
-      console.log('  PivotRef matrix:', pivotRef.current.matrix.elements.slice(0, 4), '...');
-    }
-    window.dispatchEvent(new CustomEvent('disable-orbit-controls', { detail: { disabled: true } }));
-    gl.domElement.style.cursor = 'grabbing';
-  }, [gl, meshRef]);
-
-  // Handle drag - emit live transform data
-  // Use a throttle to avoid too much console spam
-  const lastDragLogRef = useRef(0);
-  const handleDrag = useCallback(() => {
-    if (!meshRef.current) return;
-    const { position, rotation } = getWorldTransform();
-    
-    // Log every 500ms during drag
-    const now = Date.now();
-    if (now - lastDragLogRef.current > 500) {
-      console.log('🟡 Dragging - world pos:', position.toArray().map(v => v.toFixed(2)), 'rot:', [rotation.x.toFixed(2), rotation.y.toFixed(2), rotation.z.toFixed(2)]);
-      lastDragLogRef.current = now;
-    }
-    
-    if (onLiveTransformChange) {
-      tempBox.setFromObject(meshRef.current);
-      onLiveTransformChange({ position, rotation, bounds: tempBox.clone() });
-    }
-  }, [meshRef, onLiveTransformChange, getWorldTransform]);
-
-  const handleDragEnd = useCallback(() => {
-    console.log('🔵 Drag END');
-    if (meshRef.current) {
-      console.log('  Mesh local pos:', meshRef.current.position.toArray());
-      meshRef.current.updateMatrixWorld(true);
-      const wp = new THREE.Vector3();
-      const wq = new THREE.Quaternion();
-      meshRef.current.getWorldPosition(wp);
-      meshRef.current.getWorldQuaternion(wq);
-      console.log('  Mesh world pos:', wp.toArray());
-      console.log('  Mesh world quat:', wq.toArray());
-    }
-    if (pivotRef.current) {
-      console.log('  PivotRef matrix:', pivotRef.current.matrix.elements);
-    }
-    window.dispatchEvent(new CustomEvent('disable-orbit-controls', { detail: { disabled: false } }));
-    gl.domElement.style.cursor = 'auto';
-    emitTransformUpdate();
-  }, [gl, emitTransformUpdate, meshRef]);
 
   // Keyboard escape
   useEffect(() => {
@@ -483,7 +357,7 @@ const SelectableTransformControls: React.FC<SelectableTransformControlsProps> = 
     return () => document.removeEventListener('mousedown', handleDocumentClick, true);
   }, [isActive, gl.domElement, deactivateGizmo]);
 
-  // External transform updates
+  // External transform updates (e.g., reset from UI)
   useEffect(() => {
     const handleSetTransform = (e: CustomEvent) => {
       if (!meshRef.current || isActive) return;
@@ -511,13 +385,28 @@ const SelectableTransformControls: React.FC<SelectableTransformControlsProps> = 
     return () => window.removeEventListener('baseplate-moved-model', handler);
   }, [emitTransformUpdate]);
 
-  // Computed values
-  const gizmoScale = useMemo(() => bounds ? Math.max(bounds.radius * 0.75, 25) : 50, [bounds]);
+  // ============================================================================
+  // Computed Values
+  // ============================================================================
+
+  const gizmoScale = useMemo(() => 
+    bounds ? Math.max(bounds.radius * 0.75, 25) : 50, 
+    [bounds]
+  );
   
   const closeButtonPosition = useMemo((): [number, number, number] | undefined => {
     if (!bounds) return undefined;
-    return [bounds.center.x + bounds.radius * 1.2, bounds.center.y + bounds.radius * 1.2, bounds.center.z];
+    // Position at the center of the gizmo (where the axes intersect)
+    return [
+      bounds.center.x, 
+      bounds.center.y, 
+      bounds.center.z
+    ];
   }, [bounds]);
+
+  // ============================================================================
+  // Render
+  // ============================================================================
 
   return (
     <group ref={groupRef}>
