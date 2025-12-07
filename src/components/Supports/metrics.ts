@@ -18,85 +18,150 @@ export interface SupportMetrics {
 }
 
 const DEFAULT_MAX_RAY_HEIGHT = 2000;
+
+// Target spacing between sample points (in scene units, e.g., mm)
+const SAMPLE_SPACING = 5;
  
 const unitVecUp = new THREE.Vector3(0, 1, 0);
 const unitVecDown = new THREE.Vector3(0, -1, 0);
 
 const tempOrigin = new THREE.Vector3();
 
-export const getSupportSamples = (support: AnySupport): Array<[number, number]> => {
-  const { center } = support;
-  const samples: Array<[number, number]> = [[center.x, center.y]];
+// Generate samples along concentric circles for circular supports
+const generateCircleSamples = (centerX: number, centerZ: number, radius: number): Array<[number, number]> => {
+  const samples: Array<[number, number]> = [[centerX, centerZ]];
+  
+  if (radius < 0.5) return samples;
+  
+  // Determine number of rings based on radius and spacing
+  const numRings = Math.max(1, Math.ceil(radius / SAMPLE_SPACING));
+  
+  for (let ring = 1; ring <= numRings; ring++) {
+    const r = (ring / numRings) * radius;
+    // Circumference-based point count to maintain spacing
+    const circumference = 2 * Math.PI * r;
+    const numPoints = Math.max(4, Math.ceil(circumference / SAMPLE_SPACING));
+    
+    for (let i = 0; i < numPoints; i++) {
+      const angle = (i / numPoints) * Math.PI * 2;
+      samples.push([centerX + Math.cos(angle) * r, centerZ + Math.sin(angle) * r]);
+    }
+  }
+  
+  return samples;
+};
 
-  if (support.type === 'cylindrical') {
-    const r = Math.max(1, (support as any).radius as number);
-    const d = Math.SQRT1_2;
-    const spreads: Array<[number, number]> = [
-      [1, 0],
-      [-1, 0],
-      [0, 1],
-      [0, -1],
-      [d, d],
-      [d, -d],
-      [-d, d],
-      [-d, -d],
-    ];
-    spreads.forEach(([dx, dz]) => samples.push([center.x + dx * r, center.y + dz * r]));
-  } else if (support.type === 'rectangular') {
-    const width = (support as any).width as number;
-    const depth = (support as any).depth as number;
-    const hw = width / 2;
-    const hd = depth / 2;
-    const corners: Array<[number, number]> = [
-      [-hw, -hd],
-      [-hw, hd],
-      [hw, hd],
-      [hw, -hd],
-    ];
-    corners.forEach(([dx, dz]) => samples.push([center.x + dx, center.y + dz]));
-  } else if (support.type === 'conical') {
-    const r = Math.max(1, (support as any).baseRadius as number);
-    const d = Math.SQRT1_2;
-    const spreads: Array<[number, number]> = [
-      [1, 0],
-      [-1, 0],
-      [0, 1],
-      [0, -1],
-      [d, d],
-      [d, -d],
-      [-d, d],
-      [-d, -d],
-    ];
-    spreads.forEach(([dx, dz]) => samples.push([center.x + dx * r, center.y + dz * r]));
-  } else if (support.type === 'custom') {
-    const polygon = (support as any).polygon as Array<[number, number]>;
-    if (Array.isArray(polygon)) {
-      polygon.forEach(([x, z]) => samples.push([center.x + x, center.y + z]));
-      for (let i = 0; i < polygon.length; i++) {
-        const [ax, az] = polygon[i];
-        const [bx, bz] = polygon[(i + 1) % polygon.length];
-        samples.push([center.x + (ax + bx) / 2, center.y + (az + bz) / 2]);
-      }
-      const maxRadius = polygon.reduce((max, [x, z]) => Math.max(max, Math.hypot(x, z)), 0);
-      if (maxRadius > 0.5) {
-        const r = Math.max(1, maxRadius * 0.75);
-        const d = Math.SQRT1_2;
-        const dirs: Array<[number, number]> = [
-          [1, 0],
-          [-1, 0],
-          [0, 1],
-          [0, -1],
-          [d, d],
-          [d, -d],
-          [-d, d],
-          [-d, -d],
-        ];
-        dirs.forEach(([dx, dz]) => samples.push([center.x + dx * r, center.y + dz * r]));
+// Generate grid samples for rectangular supports
+const generateRectSamples = (centerX: number, centerZ: number, width: number, depth: number): Array<[number, number]> => {
+  const samples: Array<[number, number]> = [];
+  
+  const hw = width / 2;
+  const hd = depth / 2;
+  
+  // Determine grid resolution based on dimensions
+  const numX = Math.max(2, Math.ceil(width / SAMPLE_SPACING) + 1);
+  const numZ = Math.max(2, Math.ceil(depth / SAMPLE_SPACING) + 1);
+  
+  for (let ix = 0; ix < numX; ix++) {
+    const x = -hw + (ix / (numX - 1)) * width;
+    for (let iz = 0; iz < numZ; iz++) {
+      const z = -hd + (iz / (numZ - 1)) * depth;
+      samples.push([centerX + x, centerZ + z]);
+    }
+  }
+  
+  return samples;
+};
+
+// Generate samples for custom polygon using scanline approach
+const generatePolygonSamples = (centerX: number, centerZ: number, polygon: Array<[number, number]>): Array<[number, number]> => {
+  const samples: Array<[number, number]> = [[centerX, centerZ]];
+  
+  if (!polygon || polygon.length < 3) return samples;
+  
+  // Add vertices and edge midpoints
+  polygon.forEach(([x, z]) => samples.push([centerX + x, centerZ + z]));
+  for (let i = 0; i < polygon.length; i++) {
+    const [ax, az] = polygon[i];
+    const [bx, bz] = polygon[(i + 1) % polygon.length];
+    
+    // Add midpoint
+    samples.push([centerX + (ax + bx) / 2, centerZ + (az + bz) / 2]);
+    
+    // Add intermediate points for long edges
+    const edgeLen = Math.hypot(bx - ax, bz - az);
+    if (edgeLen > SAMPLE_SPACING * 2) {
+      const numIntermediate = Math.ceil(edgeLen / SAMPLE_SPACING) - 1;
+      for (let j = 1; j <= numIntermediate; j++) {
+        const t = j / (numIntermediate + 1);
+        samples.push([centerX + ax + t * (bx - ax), centerZ + az + t * (bz - az)]);
       }
     }
   }
-
+  
+  // Find bounding box of polygon
+  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+  polygon.forEach(([x, z]) => {
+    minX = Math.min(minX, x);
+    maxX = Math.max(maxX, x);
+    minZ = Math.min(minZ, z);
+    maxZ = Math.max(maxZ, z);
+  });
+  
+  // Point-in-polygon test using ray casting
+  const pointInPolygon = (px: number, pz: number): boolean => {
+    let inside = false;
+    for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+      const [xi, zi] = polygon[i];
+      const [xj, zj] = polygon[j];
+      if (((zi > pz) !== (zj > pz)) && (px < (xj - xi) * (pz - zi) / (zj - zi) + xi)) {
+        inside = !inside;
+      }
+    }
+    return inside;
+  };
+  
+  // Grid sample interior points
+  const width = maxX - minX;
+  const depth = maxZ - minZ;
+  const numX = Math.max(2, Math.ceil(width / SAMPLE_SPACING) + 1);
+  const numZ = Math.max(2, Math.ceil(depth / SAMPLE_SPACING) + 1);
+  
+  for (let ix = 1; ix < numX - 1; ix++) {
+    const x = minX + (ix / (numX - 1)) * width;
+    for (let iz = 1; iz < numZ - 1; iz++) {
+      const z = minZ + (iz / (numZ - 1)) * depth;
+      if (pointInPolygon(x, z)) {
+        samples.push([centerX + x, centerZ + z]);
+      }
+    }
+  }
+  
   return samples;
+};
+
+export const getSupportSamples = (support: AnySupport): Array<[number, number]> => {
+  const { center } = support;
+
+  if (support.type === 'cylindrical') {
+    const r = Math.max(1, (support as any).radius as number);
+    return generateCircleSamples(center.x, center.y, r);
+  } else if (support.type === 'rectangular') {
+    const width = (support as any).width as number;
+    const depth = (support as any).depth as number;
+    return generateRectSamples(center.x, center.y, width, depth);
+  } else if (support.type === 'conical') {
+    const r = Math.max(1, (support as any).baseRadius as number);
+    return generateCircleSamples(center.x, center.y, r);
+  } else if (support.type === 'custom') {
+    const polygon = (support as any).polygon as Array<[number, number]>;
+    if (Array.isArray(polygon)) {
+      return generatePolygonSamples(center.x, center.y, polygon);
+    }
+  }
+
+  // Fallback: just center
+  return [[center.x, center.y]];
 };
 
 const getRaycaster = (raycaster?: THREE.Raycaster) => {

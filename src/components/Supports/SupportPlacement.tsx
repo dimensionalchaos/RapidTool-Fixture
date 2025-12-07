@@ -1,6 +1,5 @@
 import React from 'react';
 import * as THREE from 'three';
-import { Html } from '@react-three/drei';
 import { AnySupport, SupportType, RectSupport, CylSupport, ConicalSupport } from './types';
 import { computeSupportMetrics as evaluateSupportMetrics } from './metrics';
 
@@ -172,14 +171,85 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
   const OutlinePreview: React.FC<{ s: AnySupport }> = ({ s }) => {
     const y = baseTopY + 0.02;
     const color = 0x2563eb;
+    const dashSize = 2;
+    const gapSize = 1.5;
+    
+    // Helper to create dashed line segments from a series of points
+    const createDashedSegments = (points: Array<{x: number, z: number}>, closed: boolean = true) => {
+      const dashSegments: number[] = [];
+      const numPoints = points.length;
+      const edgeCount = closed ? numPoints : numPoints - 1;
+      
+      for (let i = 0; i < edgeCount; i++) {
+        const p1 = points[i];
+        const p2 = points[(i + 1) % numPoints];
+        const dx = p2.x - p1.x;
+        const dz = p2.z - p1.z;
+        const length = Math.sqrt(dx * dx + dz * dz);
+        const dirX = dx / length;
+        const dirZ = dz / length;
+        
+        let dist = 0;
+        let drawing = true;
+        
+        while (dist < length) {
+          const segLen = drawing ? dashSize : gapSize;
+          const endDist = Math.min(dist + segLen, length);
+          
+          if (drawing) {
+            const startX = p1.x + dirX * dist;
+            const startZ = p1.z + dirZ * dist;
+            const endX = p1.x + dirX * endDist;
+            const endZ = p1.z + dirZ * endDist;
+            dashSegments.push(startX, y, startZ, endX, y, endZ);
+          }
+          
+          dist = endDist;
+          drawing = !drawing;
+        }
+      }
+      
+      return new Float32Array(dashSegments);
+    };
+    
+    // Helper to create dashed circle outline - traverses the entire circumference as one path
+    const createDashedCircle = (radius: number, segments: number = 64) => {
+      const dashSegments: number[] = [];
+      const circumference = 2 * Math.PI * radius;
+      let dist = 0;
+      let drawing = true;
+      
+      while (dist < circumference) {
+        const segLen = drawing ? dashSize : gapSize;
+        const endDist = Math.min(dist + segLen, circumference);
+        
+        if (drawing) {
+          const startAngle = (dist / circumference) * Math.PI * 2;
+          const endAngle = (endDist / circumference) * Math.PI * 2;
+          const startX = Math.cos(startAngle) * radius;
+          const startZ = Math.sin(startAngle) * radius;
+          const endX = Math.cos(endAngle) * radius;
+          const endZ = Math.sin(endAngle) * radius;
+          dashSegments.push(startX, y, startZ, endX, y, endZ);
+        }
+        
+        dist = endDist;
+        drawing = !drawing;
+      }
+      
+      return new Float32Array(dashSegments);
+    };
+    
     if (s.type === 'cylindrical') {
       const radius = (s as any).radius as number;
-      const thickness = Math.max(radius * 0.02, 0.6);
+      const dashPositions = createDashedCircle(radius);
       return (
-        <mesh position={[s.center.x, y, s.center.y]} rotation={[-Math.PI / 2, 0, 0]} renderOrder={999}>
-          <ringGeometry args={[Math.max(0.001, radius - thickness), radius + thickness, 64]} />
-          <meshBasicMaterial color={color} transparent opacity={0.9} side={THREE.DoubleSide} depthTest={false} depthWrite={false} />
-        </mesh>
+        <lineSegments position={[s.center.x, baseTopY, s.center.y]} renderOrder={1000}>
+          <bufferGeometry>
+            <bufferAttribute attach="attributes-position" count={dashPositions.length / 3} array={dashPositions} itemSize={3} />
+          </bufferGeometry>
+          <lineBasicMaterial color={color} depthTest={false} depthWrite={false} />
+        </lineSegments>
       );
     }
     if (s.type === 'rectangular') {
@@ -187,42 +257,45 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
       const depth = (s as any).depth as number;
       const hw = width / 2;
       const hd = depth / 2;
-      const positions = new Float32Array([
-        -hw, y, -hd,  hw, y, -hd,
-         hw, y, -hd,  hw, y,  hd,
-         hw, y,  hd, -hw, y,  hd,
-        -hw, y,  hd, -hw, y, -hd,
-      ]);
+      const points = [
+        { x: -hw, z: -hd },
+        { x: hw, z: -hd },
+        { x: hw, z: hd },
+        { x: -hw, z: hd }
+      ];
+      const dashPositions = createDashedSegments(points, true);
       return (
-        <lineSegments position={[s.center.x, baseTopY, s.center.y]} renderOrder={999}>
+        <lineSegments position={[s.center.x, baseTopY, s.center.y]} renderOrder={1000}>
           <bufferGeometry>
-            <bufferAttribute attach="attributes-position" count={positions.length / 3} array={positions} itemSize={3} />
+            <bufferAttribute attach="attributes-position" count={dashPositions.length / 3} array={dashPositions} itemSize={3} />
           </bufferGeometry>
-          <lineBasicMaterial color={color} linewidth={1} depthWrite={false} depthTest={false} />
+          <lineBasicMaterial color={color} depthTest={false} depthWrite={false} />
         </lineSegments>
       );
     }
     if (s.type === 'conical') {
       const radius = (s as any).baseRadius as number;
-      const thickness = Math.max(radius * 0.02, 0.6);
+      const dashPositions = createDashedCircle(radius);
       return (
-        <mesh position={[s.center.x, y, s.center.y]} rotation={[-Math.PI / 2, 0, 0]} renderOrder={999}>
-          <ringGeometry args={[Math.max(0.001, radius - thickness), radius + thickness, 64]} />
-          <meshBasicMaterial color={color} transparent opacity={0.9} side={THREE.DoubleSide} depthTest={false} depthWrite={false} />
-        </mesh>
+        <lineSegments position={[s.center.x, baseTopY, s.center.y]} renderOrder={1000}>
+          <bufferGeometry>
+            <bufferAttribute attach="attributes-position" count={dashPositions.length / 3} array={dashPositions} itemSize={3} />
+          </bufferGeometry>
+          <lineBasicMaterial color={color} depthTest={false} depthWrite={false} />
+        </lineSegments>
       );
     }
     if (s.type === 'custom') {
       const poly = (s as any).polygon as Array<[number, number]>;
-      const flat = poly.flatMap(([x, z]) => [x, y, z]);
-      const positions = new Float32Array([...flat, flat[0], flat[1], flat[2]]);
+      const points = poly.map(([x, z]) => ({ x, z }));
+      const dashPositions = createDashedSegments(points, true);
       return (
-        <lineLoop position={[s.center.x, baseTopY, s.center.y]} renderOrder={999}>
+        <lineSegments position={[s.center.x, baseTopY, s.center.y]} renderOrder={1000}>
           <bufferGeometry>
-            <bufferAttribute attach="attributes-position" count={positions.length / 3} array={positions} itemSize={3} />
+            <bufferAttribute attach="attributes-position" count={dashPositions.length / 3} array={dashPositions} itemSize={3} />
           </bufferGeometry>
-          <lineBasicMaterial color={color} linewidth={1} depthWrite={false} depthTest={false} />
-        </lineLoop>
+          <lineBasicMaterial color={color} depthTest={false} depthWrite={false} />
+        </lineSegments>
       );
     }
     return null;
@@ -671,39 +744,6 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
 
       {/* Custom drawing overlay */}
       <CustomPreview />
-
-      {/* HUD */}
-      {previewSupport && (
-        <Html
-          position={[
-            (previewSupport as any).center.x,
-            ((previewSupport as any).baseY ?? baseTopY) + previewSupport.height + 1.2,
-            (previewSupport as any).center.y
-          ]}
-          distanceFactor={3.2}
-        >
-          <div className="bg-black/70 text-white rounded-full shadow whitespace-nowrap" style={{ fontSize: '9px', padding: '1px 6px', border: '1px solid rgba(255,255,255,0.25)' }}>
-            {previewSupport.type === 'cylindrical' && (
-              <>R {(previewSupport as any).radius.toFixed(1)} mm  H {previewSupport.height.toFixed(1)} mm</>
-            )}
-            {previewSupport.type === 'rectangular' && (
-              <>W {(previewSupport as any).width.toFixed(1)} mm  D {(previewSupport as any).depth.toFixed(1)} mm  H {previewSupport.height.toFixed(1)} mm</>
-            )}
-            {previewSupport.type === 'conical' && (
-              <>Rb {(previewSupport as any).baseRadius.toFixed(1)}  Rt {(previewSupport as any).topRadius.toFixed(1)}  H {previewSupport.height.toFixed(1)} mm</>
-            )}
-            {previewSupport.type === 'custom' && (
-              <>Custom  H {previewSupport.height.toFixed(1)} mm</>
-            )}
-          </div>
-        </Html>
-      )}
-
-      {center && (
-        <Html position={[center.x, baseTopY + 0.01, center.y]}>
-          <div className="px-2 py-1 text-xs bg-primary text-white rounded shadow">Click to set center • Drag/Click again to set size • Esc to cancel</div>
-        </Html>
-      )}
     </>
   );
 };

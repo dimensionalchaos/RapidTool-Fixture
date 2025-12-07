@@ -20,6 +20,8 @@ interface ThreeDSceneProps {
   selectedPartId: string | null;
   onPartSelected: (partId: string | null) => void;
   onModelColorAssigned?: (modelId: string, color: string) => void;
+  partVisibility?: Map<string, boolean>;
+  onPartVisibilityChange?: (partId: string, visible: boolean) => void;
 }
 
 const computeDominantUpQuaternion = (geometry: THREE.BufferGeometry) => {
@@ -525,6 +527,8 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   selectedPartId,
   onPartSelected,
   onModelColorAssigned,
+  partVisibility = new Map(),
+  onPartVisibilityChange,
 }) => {
   const { camera, size } = useThree();
   const controlsRef = useRef<OrbitControlsImpl | null>(null);
@@ -949,6 +953,72 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       }, 100); // Small delay to ensure mesh is positioned
     }
   }, [importedParts.length]);
+
+  // Trigger baseplate recalculation when parts are added/removed
+  // This forces a re-render of the baseplate with updated geometries
+  // Also lifts parts above the baseplate after recalculation
+  const prevPartCountRef = useRef(importedParts.length);
+  useEffect(() => {
+    const prevCount = prevPartCountRef.current;
+    const currentCount = importedParts.length;
+    prevPartCountRef.current = currentCount;
+    
+    // Only trigger if we have a baseplate and parts were added
+    if (basePlate && currentCount > prevCount) {
+      // Delay to ensure new mesh refs are populated and baseplate is updated
+      const timeoutId = setTimeout(() => {
+        // Force baseplate to recalculate for convex-hull type
+        if (basePlate.type === 'convex-hull') {
+          setBasePlate(prev => prev ? { ...prev } : null);
+        }
+        
+        // After another short delay, lift any parts that collide with the baseplate
+        setTimeout(() => {
+          const baseplateMesh = basePlateMeshRef.current;
+          if (!baseplateMesh) return;
+          
+          baseplateMesh.updateMatrixWorld(true);
+          const baseplateBox = new THREE.Box3().setFromObject(baseplateMesh);
+          const baseplateTopY = baseplateBox.max.y;
+          
+          // Check each part and lift if needed
+          importedParts.forEach(part => {
+            const ref = modelMeshRefs.current.get(part.id);
+            if (ref?.current) {
+              ref.current.updateMatrixWorld(true);
+              const partBox = new THREE.Box3().setFromObject(ref.current);
+              const partBottomY = partBox.min.y;
+              
+              // If part's bottom is below baseplate top, lift it
+              if (partBottomY < baseplateTopY) {
+                const offsetY = baseplateTopY - partBottomY;
+                ref.current.position.y += offsetY;
+                ref.current.updateMatrixWorld(true);
+                
+                // Emit transform update
+                const tempVec = new THREE.Vector3();
+                ref.current.getWorldPosition(tempVec);
+                window.dispatchEvent(new CustomEvent('model-transform-updated', {
+                  detail: {
+                    position: tempVec.clone(),
+                    rotation: ref.current.rotation.clone(),
+                    partId: part.id,
+                  },
+                }));
+              }
+            }
+          });
+        }, 100);
+      }, 200);
+      return () => clearTimeout(timeoutId);
+    } else if (basePlate?.type === 'convex-hull' && prevCount !== currentCount) {
+      // Parts were removed - just recalculate baseplate
+      const timeoutId = setTimeout(() => {
+        setBasePlate(prev => prev ? { ...prev } : null);
+      }, 200);
+      return () => clearTimeout(timeoutId);
+    }
+  }, [importedParts.length, basePlate]);
 
   // Cavity context request/dispatch
   React.useEffect(() => {
@@ -2146,6 +2216,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       {importedParts.map((part, index) => {
         const partMeshRef = getPartMeshRef(part.id);
         const isSelected = selectedPartId === part.id;
+        const isVisible = partVisibility.get(part.id) !== false; // default to visible
         
         // Use stored offset if available, otherwise calculate and store new offset
         let initialOffset = partInitialOffsetsRef.current.get(part.id);
@@ -2160,26 +2231,30 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
           <SelectableTransformControls
             key={part.id}
             meshRef={partMeshRef}
-            enabled={isSelected}
+            enabled={isSelected && isVisible} // Disable controls when hidden
             partId={part.id}
-            onLiveTransformChange={isSelected ? handleLiveTransformChange : undefined}
+            onLiveTransformChange={isSelected && isVisible ? handleLiveTransformChange : undefined}
           >
-            <ModelMesh
-              file={part}
-              meshRef={partMeshRef}
-              dimensions={modelDimensions}
-              colorsMap={modelColors}
-              setColorsMap={setModelColors}
-              initialOffset={initialOffset}
-              onBoundsChange={(bounds) => {
-                setPartBounds(prev => new Map(prev).set(part.id, bounds));
-              }}
-              disableDoubleClick={placing.active || editingSupport !== null}
-              onDoubleClick={() => {
-                onPartSelected(part.id);
-                window.dispatchEvent(new CustomEvent('mesh-double-click', { detail: { partId: part.id } }));
-              }}
-            />
+            <group visible={isVisible}>
+              <ModelMesh
+                file={part}
+                meshRef={partMeshRef}
+                dimensions={modelDimensions}
+                colorsMap={modelColors}
+                setColorsMap={setModelColors}
+                initialOffset={initialOffset}
+                onBoundsChange={(bounds) => {
+                  setPartBounds(prev => new Map(prev).set(part.id, bounds));
+                }}
+                disableDoubleClick={placing.active || editingSupport !== null || !isVisible}
+                onDoubleClick={() => {
+                  if (isVisible) {
+                    onPartSelected(part.id);
+                    window.dispatchEvent(new CustomEvent('mesh-double-click', { detail: { partId: part.id } }));
+                  }
+                }}
+              />
+            </group>
           </SelectableTransformControls>
         );
       })}

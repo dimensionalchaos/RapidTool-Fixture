@@ -661,11 +661,6 @@ const SupportMesh: React.FC<SupportMeshProps> = ({ support, preview, baseTopY = 
   const bodyHeight = Math.max(0.1, height - effectiveFilletRadius);
   const bodyCenter = effectiveBaseY + effectiveFilletRadius + bodyHeight / 2;
 
-  const handleSelect = () => {
-    if (preview) return;
-    window.dispatchEvent(new CustomEvent('support-edit', { detail: support }));
-  };
-
   const mat = React.useMemo(() => materialFor(preview), [preview]);
 
   if (type === 'cylindrical') {
@@ -674,7 +669,7 @@ const SupportMesh: React.FC<SupportMeshProps> = ({ support, preview, baseTopY = 
     const filletGeo = React.useMemo(() => createCylindricalFilletGeometry(radius, effectiveFilletRadius, FILLET_SEGMENTS), [radius, effectiveFilletRadius]);
     
     return (
-      <group onClick={handleSelect}>
+      <group>
         <mesh geometry={filletGeo} position={[center.x, effectiveBaseY, center.y]} material={mat} />
         <group position={[center.x, bodyCenter, center.y]}>
           <mesh geometry={geo} material={mat} />
@@ -694,7 +689,7 @@ const SupportMesh: React.FC<SupportMeshProps> = ({ support, preview, baseTopY = 
     if (cornerRadius <= 0) {
       const geo = React.useMemo(() => new THREE.BoxGeometry(width, bodyHeight, depth), [width, bodyHeight, depth]);
       return (
-        <group onClick={handleSelect}>
+        <group>
           <mesh geometry={filletGeo} position={[center.x, effectiveBaseY, center.y]} rotation={[0, rotY, 0]} material={mat} />
           <group position={[center.x, bodyCenter, center.y]} rotation={[0, rotY, 0]}>
             <mesh geometry={geo} material={mat} />
@@ -728,7 +723,7 @@ const SupportMesh: React.FC<SupportMeshProps> = ({ support, preview, baseTopY = 
     }, [width, depth, cornerRadius, bodyHeight]);
     
     return (
-      <group onClick={handleSelect}>
+      <group>
         <mesh geometry={filletGeo} position={[center.x, effectiveBaseY, center.y]} rotation={[0, rotY, 0]} material={mat} />
         <group position={[center.x, effectiveBaseY + effectiveFilletRadius, center.y]} rotation={[0, rotY, 0]}>
           <mesh geometry={rrGeo} material={mat} />
@@ -774,7 +769,7 @@ const SupportMesh: React.FC<SupportMeshProps> = ({ support, preview, baseTopY = 
     const filletGeo = React.useMemo(() => createConicalFilletGeometry(baseRadius, topRadius, conicalBodyHeight, effectiveFilletRadius, FILLET_SEGMENTS), [baseRadius, topRadius, conicalBodyHeight, effectiveFilletRadius]);
     
     return (
-      <group onClick={handleSelect}>
+      <group>
         <mesh geometry={filletGeo} position={[center.x, effectiveBaseY, center.y]} material={mat} />
         <group position={[center.x, conicalBodyCenter, center.y]}>
           <mesh geometry={geo} material={mat} />
@@ -904,7 +899,7 @@ const SupportMesh: React.FC<SupportMeshProps> = ({ support, preview, baseTopY = 
     }, [validPolygon, safeCornerRadius, bodyHeight]);
     
     return (
-      <group onClick={handleSelect}>
+      <group>
         <mesh geometry={filletGeo} position={[center.x, effectiveBaseY, center.y]} rotation={[0, rotY, 0]} material={mat} />
         <group position={[center.x, effectiveBaseY + effectiveFilletRadius, center.y]} rotation={[0, rotY, 0]}>
           <mesh geometry={geo} material={mat} />

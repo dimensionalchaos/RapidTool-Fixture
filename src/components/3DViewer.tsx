@@ -19,6 +19,7 @@ const ThreeDViewer: React.FC<ThreeDViewerProps> = ({
   // Store multiple imported parts
   const [importedParts, setImportedParts] = useState<ProcessedFile[]>([]);
   const [selectedPartId, setSelectedPartId] = useState<string | null>(null);
+  const [partVisibility, setPartVisibility] = useState<Map<string, boolean>>(new Map());
 
   // Listen for part-imported events from the context panel (new multi-part system)
   useEffect(() => {
@@ -43,6 +44,7 @@ const ThreeDViewer: React.FC<ThreeDViewerProps> = ({
     const handleSessionReset = () => {
       setImportedParts([]);
       setSelectedPartId(null);
+      setPartVisibility(new Map());
     };
 
     const handlePartSelected = (e: CustomEvent<string>) => {
@@ -53,6 +55,16 @@ const ThreeDViewer: React.FC<ThreeDViewerProps> = ({
       const removedPartId = e.detail;
       setImportedParts(prev => prev.filter(p => p.id !== removedPartId));
       setSelectedPartId(prev => prev === removedPartId ? null : prev);
+      setPartVisibility(prev => {
+        const newMap = new Map(prev);
+        newMap.delete(removedPartId);
+        return newMap;
+      });
+    };
+
+    const handlePartVisibilityChanged = (e: CustomEvent<{ partId: string; visible: boolean }>) => {
+      const { partId, visible } = e.detail;
+      setPartVisibility(prev => new Map(prev).set(partId, visible));
     };
 
     window.addEventListener('part-imported', handlePartImported as EventListener);
@@ -60,6 +72,7 @@ const ThreeDViewer: React.FC<ThreeDViewerProps> = ({
     window.addEventListener('session-reset', handleSessionReset);
     window.addEventListener('part-selected', handlePartSelected as EventListener);
     window.addEventListener('part-removed', handlePartRemoved as EventListener);
+    window.addEventListener('part-visibility-changed', handlePartVisibilityChanged as EventListener);
 
     return () => {
       window.removeEventListener('part-imported', handlePartImported as EventListener);
@@ -67,6 +80,7 @@ const ThreeDViewer: React.FC<ThreeDViewerProps> = ({
       window.removeEventListener('session-reset', handleSessionReset);
       window.removeEventListener('part-selected', handlePartSelected as EventListener);
       window.removeEventListener('part-removed', handlePartRemoved as EventListener);
+      window.removeEventListener('part-visibility-changed', handlePartVisibilityChanged as EventListener);
     };
   }, []);
 
@@ -96,6 +110,7 @@ const ThreeDViewer: React.FC<ThreeDViewerProps> = ({
           selectedPartId={selectedPartId}
           onPartSelected={setSelectedPartId}
           onModelColorAssigned={onModelColorAssigned}
+          partVisibility={partVisibility}
         />
       </Canvas>
 

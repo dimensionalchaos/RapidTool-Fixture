@@ -143,6 +143,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
     // File Processing State (moved from FileImport)
     const [importedParts, setImportedParts] = useState<ProcessedFile[]>([]);
     const [selectedPartId, setSelectedPartId] = useState<string | null>(null);
+    const [partVisibility, setPartVisibility] = useState<Map<string, boolean>>(new Map());
     const [isProcessing, setIsProcessing] = useState(false);
     const [fileError, setFileError] = useState<string | null>(null);
     const [isUnitsDialogOpen, setIsUnitsDialogOpen] = useState(false);
@@ -1056,6 +1057,11 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
                   onClearFile={handleClearFile}
                   onRemovePart={(partId) => {
                     setImportedParts(prev => prev.filter(p => p.id !== partId));
+                    setPartVisibility(prev => {
+                      const newMap = new Map(prev);
+                      newMap.delete(partId);
+                      return newMap;
+                    });
                     if (selectedPartId === partId) {
                       setSelectedPartId(null);
                     }
@@ -1071,6 +1077,19 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
                   onSupportDelete={handleSupportDelete}
                   modelColor={actualFile ? modelColors.get(actualFile.metadata.name) : undefined}
                   modelColors={modelColors}
+                  partVisibility={partVisibility}
+                  onPartVisibilityChange={(partId, visible) => {
+                    setPartVisibility(prev => new Map(prev).set(partId, visible));
+                    // Deselect part if it's being hidden
+                    if (!visible && selectedPartId === partId) {
+                      setSelectedPartId(null);
+                      window.dispatchEvent(new CustomEvent('part-selected', { detail: null }));
+                    }
+                    // Dispatch event for 3D viewer
+                    window.dispatchEvent(new CustomEvent('part-visibility-changed', { 
+                      detail: { partId, visible } 
+                    }));
+                  }}
                 />
 
                 {/* Subtract Workpieces panel anchored here */}

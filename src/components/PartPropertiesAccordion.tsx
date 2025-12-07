@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { RotateCcw, Move, RotateCw, Box, Trash2, ArrowDownToLine } from 'lucide-react';
+import { RotateCcw, Move, RotateCw, Box, Trash2, ArrowDownToLine, Eye, EyeOff } from 'lucide-react';
 import * as THREE from 'three';
 import { ProcessedFile } from '@/modules/FileImport/types';
 import SupportsAccordion from './Supports/SupportsAccordion';
@@ -40,6 +40,8 @@ interface PartPropertiesAccordionProps {
   onSupportDelete?: (id: string) => void;
   modelColor?: string;
   modelColors?: Map<string, string>;
+  partVisibility?: Map<string, boolean>;
+  onPartVisibilityChange?: (partId: string, visible: boolean) => void;
 }
 
 const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({ 
@@ -59,7 +61,9 @@ const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({
   onSupportUpdate,
   onSupportDelete,
   modelColor,
-  modelColors = new Map()
+  modelColors = new Map(),
+  partVisibility = new Map(),
+  onPartVisibilityChange,
 }) => {
   // Map of partId -> transform (stores transforms for ALL parts)
   const [partTransforms, setPartTransforms] = useState<Map<string, PartTransform>>(new Map());
@@ -271,7 +275,7 @@ const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({
       {allParts.length > 0 && (
         <AccordionItem value="parts" className="border-border/50">
           <AccordionTrigger className="py-2 text-xs font-tech hover:no-underline">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-1">
               <Box className="w-3.5 h-3.5 text-primary" />
               Parts
               <Badge variant="secondary" className="ml-auto font-tech text-[8px] h-4">
@@ -322,21 +326,46 @@ const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({
                             {part.metadata.triangles?.toLocaleString()} tri • {part.metadata.units}
                           </p>
                         </div>
-                        {(onRemovePart || onClearFile) && (
-                          <div
-                            role="button"
-                            tabIndex={0}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              e.preventDefault();
-                              if (onRemovePart) {
-                                onRemovePart(part.id);
-                              } else if (onClearFile) {
-                                onClearFile();
-                              }
-                            }}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter' || e.key === ' ') {
+                        <div className="flex items-center gap-0.5">
+                          {/* Visibility toggle */}
+                          {onPartVisibilityChange && (
+                            <div
+                              role="button"
+                              tabIndex={0}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                e.preventDefault();
+                                const currentlyVisible = partVisibility.get(part.id) !== false; // default to visible
+                                onPartVisibilityChange(part.id, !currentlyVisible);
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                  e.stopPropagation();
+                                  e.preventDefault();
+                                  const currentlyVisible = partVisibility.get(part.id) !== false;
+                                  onPartVisibilityChange(part.id, !currentlyVisible);
+                                }
+                              }}
+                              className={`w-6 h-6 p-0 flex items-center justify-center rounded cursor-pointer transition-colors ${
+                                partVisibility.get(part.id) === false
+                                  ? 'text-muted-foreground hover:text-foreground hover:bg-muted'
+                                  : 'text-foreground hover:bg-muted'
+                              }`}
+                              title={partVisibility.get(part.id) === false ? "Show part" : "Hide part"}
+                            >
+                              {partVisibility.get(part.id) === false ? (
+                                <EyeOff className="w-3 h-3" />
+                              ) : (
+                                <Eye className="w-3 h-3" />
+                              )}
+                            </div>
+                          )}
+                          {/* Delete button */}
+                          {(onRemovePart || onClearFile) && (
+                            <div
+                              role="button"
+                              tabIndex={0}
+                              onClick={(e) => {
                                 e.stopPropagation();
                                 e.preventDefault();
                                 if (onRemovePart) {
@@ -344,14 +373,25 @@ const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({
                                 } else if (onClearFile) {
                                   onClearFile();
                                 }
-                              }
-                            }}
-                            className="w-6 h-6 p-0 flex items-center justify-center rounded text-destructive hover:text-destructive hover:bg-destructive/10 cursor-pointer"
-                            title="Remove part"
-                          >
-                            <Trash2 className="w-3 h-3" />
-                          </div>
-                        )}
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                  e.stopPropagation();
+                                  e.preventDefault();
+                                  if (onRemovePart) {
+                                    onRemovePart(part.id);
+                                  } else if (onClearFile) {
+                                    onClearFile();
+                                  }
+                                }
+                              }}
+                              className="w-6 h-6 p-0 flex items-center justify-center rounded text-destructive hover:text-destructive hover:bg-destructive/10 cursor-pointer"
+                              title="Remove part"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </AccordionTrigger>
                     <AccordionContent className="px-2 pb-2">

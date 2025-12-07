@@ -292,7 +292,7 @@ const SupportsAccordion: React.FC<SupportsAccordionProps> = ({
     return (
       <AccordionItem value="supports" className="border-border/50">
         <AccordionTrigger className="py-2 text-xs font-tech hover:no-underline">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-1">
             <Boxes className="w-3.5 h-3.5 text-primary" />
             Supports
             <Badge variant="secondary" className="ml-auto font-tech text-[8px] h-4">
@@ -318,7 +318,7 @@ const SupportsAccordion: React.FC<SupportsAccordionProps> = ({
   return (
     <AccordionItem value="supports" className="border-border/50">
       <AccordionTrigger className="py-2 text-xs font-tech hover:no-underline">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-1">
           <Boxes className="w-3.5 h-3.5 text-primary" />
           Supports
           <Badge variant="secondary" className="ml-auto font-tech text-[8px] h-4">
