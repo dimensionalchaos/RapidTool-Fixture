@@ -8,7 +8,8 @@ export interface SupportBase {
   center: THREE.Vector2; // on plate, units mm
   height: number; // mm
   baseY?: number; // local baseplate contact height in world units
-  rotationZ?: number; // radians, for rectangular/custom
+  rotationY?: number; // radians, rotation around vertical Y-axis
+  rotationZ?: number; // deprecated, use rotationY - kept for backwards compatibility
   contactOffset?: number; // mm gap reserved from model contact
 }
 

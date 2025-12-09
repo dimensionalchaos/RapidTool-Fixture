@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { ProcessedFile, FileMetadata, SUPPORTED_FORMATS } from '../types';
 
 interface UseFileProcessingReturn {
-  processFile: (file: File, units?: string) => Promise<ProcessedFile>;
+  processFile: (file: File, units?: string, preloadedArrayBuffer?: ArrayBuffer) => Promise<ProcessedFile>;
   isProcessing: boolean;
   error: string | null;
   clearError: () => void;
@@ -192,7 +192,7 @@ export function useFileProcessing(): UseFileProcessingReturn {
     };
   };
 
-  const processFile = useCallback(async (file: File, units: string = 'mm'): Promise<ProcessedFile> => {
+  const processFile = useCallback(async (file: File, units: string = 'mm', preloadedArrayBuffer?: ArrayBuffer): Promise<ProcessedFile> => {
     const startTime = performance.now();
     
     try {
@@ -202,8 +202,8 @@ export function useFileProcessing(): UseFileProcessingReturn {
       // Validate file
       validateFile(file);
       
-      // Read file as ArrayBuffer
-      const arrayBuffer = await file.arrayBuffer();
+      // Use preloaded ArrayBuffer if provided, otherwise read from file
+      const arrayBuffer = preloadedArrayBuffer || await file.arrayBuffer();
       
       // Parse geometry based on file type
       let geometry: THREE.BufferGeometry;

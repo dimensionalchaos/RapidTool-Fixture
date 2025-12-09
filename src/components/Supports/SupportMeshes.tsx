@@ -1,22 +1,33 @@
-import React from 'react';
+import React, { useRef, useCallback } from 'react';
 import * as THREE from 'three';
+import { ThreeEvent } from '@react-three/fiber';
 import { AnySupport } from './types';
 
 interface SupportMeshProps {
   support: AnySupport;
   preview?: boolean;
   baseTopY?: number;
+  selected?: boolean;
+  onDoubleClick?: (supportId: string) => void;
 }
 
+// Double-click detection threshold in milliseconds
+const DOUBLE_CLICK_THRESHOLD_MS = 300;
+
+// Lighter blue color for selection (blue-300 for better contrast with gizmo)
+const SELECTION_COLOR = 0x93c5fd;
+
 // Use a non-metallic matte material for supports
-const materialFor = (preview?: boolean) =>
+const materialFor = (preview?: boolean, selected?: boolean) =>
   new THREE.MeshStandardMaterial({
-    color: preview ? 0x3b82f6 : 0x888888,
+    color: preview ? 0x3b82f6 : selected ? SELECTION_COLOR : 0x888888,
     transparent: !!preview,
     opacity: preview ? 0.5 : 1,
     metalness: 0.0,
     roughness: 0.7,
     side: THREE.DoubleSide,
+    emissive: selected ? SELECTION_COLOR : 0x000000,
+    emissiveIntensity: selected ? 0.2 : 0,
   });
 
 // Fillet parameters
@@ -649,10 +660,28 @@ const createRectangularFilletGeometry = (width: number, depthVal: number, corner
   return geometry;
 };
 
-const SupportMesh: React.FC<SupportMeshProps> = ({ support, preview, baseTopY = 0 }) => {
+const SupportMesh: React.FC<SupportMeshProps> = ({ support, preview, baseTopY = 0, selected, onDoubleClick }) => {
   const { type, height, center } = support as any;
-  const rotY = (support as any).rotationZ ?? 0;
+  const rotY = (support as any).rotationY ?? 0;
   const effectiveBaseY = (support as any).baseY ?? baseTopY;
+  
+  // Double-click detection
+  const lastClickTimeRef = useRef<number>(0);
+  
+  const handleClick = useCallback((event: ThreeEvent<MouseEvent>) => {
+    event.stopPropagation();
+    
+    const now = Date.now();
+    const timeSinceLastClick = now - lastClickTimeRef.current;
+    
+    if (timeSinceLastClick < DOUBLE_CLICK_THRESHOLD_MS) {
+      // Double-click detected
+      onDoubleClick?.(support.id);
+      lastClickTimeRef.current = 0; // Reset to prevent triple-click
+    } else {
+      lastClickTimeRef.current = now;
+    }
+  }, [support.id, onDoubleClick]);
   
   // Clamp fillet radius to not exceed support height (leave at least 0.1mm for body)
   const effectiveFilletRadius = Math.min(FILLET_RADIUS, Math.max(0, height - 0.1));
@@ -661,7 +690,7 @@ const SupportMesh: React.FC<SupportMeshProps> = ({ support, preview, baseTopY = 
   const bodyHeight = Math.max(0.1, height - effectiveFilletRadius);
   const bodyCenter = effectiveBaseY + effectiveFilletRadius + bodyHeight / 2;
 
-  const mat = React.useMemo(() => materialFor(preview), [preview]);
+  const mat = React.useMemo(() => materialFor(preview, selected), [preview, selected]);
 
   if (type === 'cylindrical') {
     const { radius } = support as any;
@@ -669,14 +698,10 @@ const SupportMesh: React.FC<SupportMeshProps> = ({ support, preview, baseTopY = 
     const filletGeo = React.useMemo(() => createCylindricalFilletGeometry(radius, effectiveFilletRadius, FILLET_SEGMENTS), [radius, effectiveFilletRadius]);
     
     return (
-      <group>
+      <group onClick={handleClick}>
         <mesh geometry={filletGeo} position={[center.x, effectiveBaseY, center.y]} material={mat} />
         <group position={[center.x, bodyCenter, center.y]}>
           <mesh geometry={geo} material={mat} />
-          <lineSegments renderOrder={2}>
-            <edgesGeometry args={[geo, 70]} />
-            <lineBasicMaterial color={0x9ca3af} depthTest={false} depthWrite={false} />
-          </lineSegments>
         </group>
       </group>
     );
@@ -689,14 +714,10 @@ const SupportMesh: React.FC<SupportMeshProps> = ({ support, preview, baseTopY = 
     if (cornerRadius <= 0) {
       const geo = React.useMemo(() => new THREE.BoxGeometry(width, bodyHeight, depth), [width, bodyHeight, depth]);
       return (
-        <group>
+        <group onClick={handleClick}>
           <mesh geometry={filletGeo} position={[center.x, effectiveBaseY, center.y]} rotation={[0, rotY, 0]} material={mat} />
           <group position={[center.x, bodyCenter, center.y]} rotation={[0, rotY, 0]}>
             <mesh geometry={geo} material={mat} />
-            <lineSegments renderOrder={2}>
-              <edgesGeometry args={[geo]} />
-              <lineBasicMaterial color={0x9ca3af} depthTest={false} depthWrite={false} />
-            </lineSegments>
           </group>
         </group>
       );
@@ -723,14 +744,10 @@ const SupportMesh: React.FC<SupportMeshProps> = ({ support, preview, baseTopY = 
     }, [width, depth, cornerRadius, bodyHeight]);
     
     return (
-      <group>
+      <group onClick={handleClick}>
         <mesh geometry={filletGeo} position={[center.x, effectiveBaseY, center.y]} rotation={[0, rotY, 0]} material={mat} />
         <group position={[center.x, effectiveBaseY + effectiveFilletRadius, center.y]} rotation={[0, rotY, 0]}>
           <mesh geometry={rrGeo} material={mat} />
-          <lineSegments renderOrder={2}>
-            <edgesGeometry args={[rrGeo, 45]} />
-            <lineBasicMaterial color={0x9ca3af} depthTest={false} depthWrite={false} />
-          </lineSegments>
         </group>
       </group>
     );
@@ -769,14 +786,10 @@ const SupportMesh: React.FC<SupportMeshProps> = ({ support, preview, baseTopY = 
     const filletGeo = React.useMemo(() => createConicalFilletGeometry(baseRadius, topRadius, conicalBodyHeight, effectiveFilletRadius, FILLET_SEGMENTS), [baseRadius, topRadius, conicalBodyHeight, effectiveFilletRadius]);
     
     return (
-      <group>
+      <group onClick={handleClick}>
         <mesh geometry={filletGeo} position={[center.x, effectiveBaseY, center.y]} material={mat} />
         <group position={[center.x, conicalBodyCenter, center.y]}>
           <mesh geometry={geo} material={mat} />
-          <lineSegments renderOrder={2}>
-            <edgesGeometry args={[geo, 70]} />
-            <lineBasicMaterial color={0x9ca3af} depthTest={false} depthWrite={false} />
-          </lineSegments>
         </group>
       </group>
     );
@@ -899,7 +912,7 @@ const SupportMesh: React.FC<SupportMeshProps> = ({ support, preview, baseTopY = 
     }, [validPolygon, safeCornerRadius, bodyHeight]);
     
     return (
-      <group>
+      <group onClick={handleClick}>
         <mesh geometry={filletGeo} position={[center.x, effectiveBaseY, center.y]} rotation={[0, rotY, 0]} material={mat} />
         <group position={[center.x, effectiveBaseY + effectiveFilletRadius, center.y]} rotation={[0, rotY, 0]}>
           <mesh geometry={geo} material={mat} />

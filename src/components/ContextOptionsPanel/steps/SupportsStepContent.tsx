@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Label } from '@/components/ui/label';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Cuboid, AlertCircle, MousePointer2, Square, Circle, Triangle, Spline } from 'lucide-react';
+import { Cuboid, AlertCircle, MousePointer2, Square, Circle, Triangle, Spline, Wand2, Trash2 } from 'lucide-react';
 
 export type SupportType = 'rectangular' | 'cylindrical' | 'conical' | 'custom';
 
@@ -175,25 +175,46 @@ const SupportsStepContent: React.FC<SupportsStepContentProps> = ({
           <Button
             variant="outline"
             size="sm"
-            className="flex-1 font-tech text-xs"
-            onClick={() => {
-              window.dispatchEvent(new CustomEvent('supports-auto-arrange'));
-            }}
-          >
-            Auto-Arrange
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
             className="flex-1 font-tech text-xs text-destructive hover:text-destructive"
             onClick={() => {
               window.dispatchEvent(new CustomEvent('supports-clear-all'));
             }}
           >
+            <Trash2 className="w-3 h-3 mr-1" />
             Clear All
           </Button>
         </div>
       )}
+
+      {/* Auto-Place Supports Section */}
+      <div className="pt-3 border-t border-border/50 space-y-3">
+        <Label className="text-xs font-tech text-muted-foreground uppercase tracking-wider">
+          Auto-Place Supports
+        </Label>
+        
+        <div className="space-y-2">
+          <Button
+            variant="default"
+            size="sm"
+            className="w-full font-tech text-xs"
+            onClick={() => {
+              window.dispatchEvent(new CustomEvent('supports-auto-place', {
+                detail: {
+                  // Using intelligent shape detection - no options needed
+                }
+              }));
+            }}
+          >
+            <Wand2 className="w-3 h-3 mr-1" />
+            Auto-Place Supports
+          </Button>
+          
+          <p className="text-[9px] text-muted-foreground font-tech">
+            Analyzes overhanging surfaces and automatically places supports.
+            Shape is intelligently selected: rectangular for elongated areas, cylindrical for circular areas, custom for irregular shapes.
+          </p>
+        </div>
+      </div>
     </div>
   );
 };

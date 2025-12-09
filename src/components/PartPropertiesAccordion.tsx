@@ -70,6 +70,16 @@ const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({
   
   // Track which parts we've initialized (to prevent re-requesting on every render)
   const initializedPartsRef = useRef<Set<string>>(new Set());
+  
+  // Track which main accordion section is open (parts, baseplate, supports)
+  const [openSection, setOpenSection] = useState<string>("parts");
+  
+  // Auto-switch to supports section when a support is selected (e.g., via double-click in 3D)
+  useEffect(() => {
+    if (selectedSupportId) {
+      setOpenSection("supports");
+    }
+  }, [selectedSupportId]);
 
   // Convert radians to degrees for display
   const radToDeg = (rad: number) => (rad * 180) / Math.PI;
@@ -270,7 +280,13 @@ const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({
   const allParts = importedParts.length > 0 ? importedParts : (currentFile ? [currentFile] : []);
 
   return (
-    <Accordion type="single" collapsible defaultValue="parts" className="w-full">
+    <Accordion 
+      type="single" 
+      collapsible 
+      value={openSection} 
+      onValueChange={(val) => setOpenSection(val ?? "")}
+      className="w-full"
+    >
       {/* Parts Accordion */}
       {allParts.length > 0 && (
         <AccordionItem value="parts" className="border-border/50">

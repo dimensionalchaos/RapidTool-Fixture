@@ -1,6 +1,6 @@
 import React, { useRef, useState, useCallback, useMemo, useEffect } from 'react';
 import { useThree, ThreeEvent } from '@react-three/fiber';
-import { Environment, OrbitControls as DreiOrbitControls, Html } from '@react-three/drei';
+import { OrbitControls as DreiOrbitControls, Html } from '@react-three/drei';
 import { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
 import BasePlate from "./BasePlate";
 import type { BasePlateConfig } from './BasePlate/types';
@@ -9,11 +9,13 @@ import SelectableTransformControls from './SelectableTransformControls';
 import * as THREE from 'three';
 import SupportPlacement from './Supports/SupportPlacement';
 import SupportMesh from './Supports/SupportMeshes';
-import SupportEditOverlay from './Supports/SupportEditOverlay';
+// SupportEditOverlay removed - supports are now moved via double-click gizmo
 import { SupportType, AnySupport } from './Supports/types';
 import { getSupportFootprintBounds, getSupportFootprintPoints } from './Supports/metrics';
+import { autoPlaceSupports } from './Supports/autoPlacement';
 import { CSGEngine } from '@/lib/csgEngine';
 import { createOffsetMesh, extractVertices } from '@/lib/offset/offsetMeshProcessor';
+import SupportTransformControls from './Supports/SupportTransformControls';
 
 interface ThreeDSceneProps {
   importedParts: ProcessedFile[];
@@ -23,6 +25,8 @@ interface ThreeDSceneProps {
   partVisibility?: Map<string, boolean>;
   onPartVisibilityChange?: (partId: string, visible: boolean) => void;
   isDarkMode?: boolean;
+  selectedSupportId?: string | null;
+  onSupportSelect?: (supportId: string | null) => void;
 }
 
 const computeDominantUpQuaternion = (geometry: THREE.BufferGeometry) => {
@@ -539,6 +543,32 @@ const ModelMesh = React.memo(function ModelMesh({
 });
 
 /**
+ * Debug component to visualize the computed perimeter as a line
+ */
+interface DebugPerimeterLineProps {
+  perimeter: Array<{ x: number; z: number }>;
+  y: number;
+}
+
+function DebugPerimeterLine({ perimeter, y }: DebugPerimeterLineProps) {
+  const lineObj = useMemo(() => {
+    const points: THREE.Vector3[] = [];
+    for (const p of perimeter) {
+      points.push(new THREE.Vector3(p.x, y, p.z));
+    }
+    // Close the loop
+    if (perimeter.length > 0) {
+      points.push(new THREE.Vector3(perimeter[0].x, y, perimeter[0].z));
+    }
+    const geometry = new THREE.BufferGeometry().setFromPoints(points);
+    const material = new THREE.LineBasicMaterial({ color: 0xff0000, linewidth: 2 });
+    return new THREE.Line(geometry, material);
+  }, [perimeter, y]);
+  
+  return <primitive object={lineObj} />;
+}
+
+/**
  * Component for placed fixture elements from the component library
  * Currently a placeholder for future fixture component functionality
  */
@@ -575,6 +605,8 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   partVisibility = new Map(),
   onPartVisibilityChange,
   isDarkMode = false,
+  selectedSupportId,
+  onSupportSelect,
 }) => {
   const { camera, size } = useThree();
   const controlsRef = useRef<OrbitControlsImpl | null>(null);
@@ -744,12 +776,16 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   const [supportsTrimPreview, setSupportsTrimPreview] = useState<THREE.Mesh[]>([]);
   const [supportsTrimProcessing, setSupportsTrimProcessing] = useState(false);
   
+  // Debug: perimeter visualization from auto-placement (disabled by default)
+  // Set DEBUG_SHOW_PERIMETER to true to enable red boundary line visualization
+  const DEBUG_SHOW_PERIMETER = false;
+  const [debugPerimeter, setDebugPerimeter] = useState<Array<{ x: number; z: number }> | null>(null);
+  
   // Cavity operations preview (for CSG operations)
   const [cavityPreview, setCavityPreview] = useState<THREE.Mesh | null>(null);
   
-  // Support editing state
+  // Support editing ref (kept for cleanup in event handlers)
   const editingSupportRef = useRef<AnySupport | null>(null);
-  const [editingSupport, setEditingSupport] = useState<AnySupport | null>(null);
   
   // Live transform state - when pivot controls are active, this tracks the model's live position/bounds
   const [liveTransform, setLiveTransform] = useState<{
@@ -1163,7 +1199,6 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       const { type, params } = e.detail || {};
       // exit any active support edit session when starting fresh placement
       editingSupportRef.current = null;
-      setEditingSupport(null);
 
       // Disable orbit controls during placement
       setOrbitControlsEnabled(false);
@@ -1182,7 +1217,6 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       updateCamera(prevOrientationRef.current, modelBounds);
       // Clear any editing state
       editingSupportRef.current = null;
-      setEditingSupport(null);
     };
     window.addEventListener('supports-start-placement', handleStartPlacement as EventListener);
     window.addEventListener('supports-cancel-placement', handleCancelPlacement as EventListener);
@@ -1190,27 +1224,6 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       window.removeEventListener('supports-start-placement', handleStartPlacement as EventListener);
       window.removeEventListener('supports-cancel-placement', handleCancelPlacement as EventListener);
     };
-  }, [currentOrientation, updateCamera, modelBounds]);
-
-  // Listen for click-to-edit on existing supports
-  React.useEffect(() => {
-    const handleSupportEdit = (e: CustomEvent) => {
-      const s = e.detail as AnySupport;
-      if (!s) return;
-
-      // Store support being edited and enter top view with handle-based overlay
-      editingSupportRef.current = s;
-      setEditingSupport(s);
-
-      // Remember previous view (for when we exit edit) but do NOT force top view;
-      // editing should work from whatever view the user is currently in.
-      prevOrientationRef.current = currentOrientation;
-      // Ensure placement controller is not active while editing
-      setPlacing({ active: false, type: null, initParams: {} });
-    };
-
-    window.addEventListener('support-edit', handleSupportEdit as EventListener);
-    return () => window.removeEventListener('support-edit', handleSupportEdit as EventListener);
   }, [currentOrientation, updateCamera, modelBounds]);
 
   const handleSupportCreate = useCallback((support: AnySupport) => {
@@ -1283,7 +1296,6 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
         if (editing) {
           const replaced = prev.map(p => (p.id === editing.id ? s : p));
           editingSupportRef.current = null;
-          setEditingSupport(null);
           return replaced;
         }
         return [...prev, s];
@@ -1306,14 +1318,12 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       // If we were editing this support, cancel the edit
       if (editingSupportRef.current?.id === supportId) {
         editingSupportRef.current = null;
-        setEditingSupport(null);
       }
     };
 
     const onSupportsClearAll = () => {
       setSupports([]);
       editingSupportRef.current = null;
-      setEditingSupport(null);
     };
 
     window.addEventListener('support-updated', onSupportUpdated as EventListener);
@@ -1326,6 +1336,84 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       window.removeEventListener('supports-clear-all', onSupportsClearAll);
     };
   }, []);
+
+  // Handle auto-place supports event
+  React.useEffect(() => {
+    const onAutoPlaceSupports = (e: CustomEvent) => {
+      if (!basePlate) {
+        console.warn('[3DScene] Cannot auto-place supports: no baseplate configured');
+        return;
+      }
+
+      const { supportType, overhangAngle, aspectRatioThreshold } = e.detail as {
+        supportType?: 'auto' | 'cylindrical' | 'rectangular' | 'custom';
+        overhangAngle?: number;
+        aspectRatioThreshold?: number;
+      };
+
+      // Collect all model meshes from refs
+      const meshes: THREE.Object3D[] = [];
+      modelMeshRefs.current.forEach((ref) => {
+        if (ref.current) {
+          meshes.push(ref.current);
+        }
+      });
+
+      if (meshes.length === 0) {
+        console.warn('[3DScene] Cannot auto-place supports: no model meshes found');
+        return;
+      }
+
+      const baseTopY = basePlate.depth ?? 4;
+
+      console.log('[3DScene] Auto-placing supports - type:', supportType, 
+        `(angle: ${overhangAngle ?? 45}°, aspectRatio: ${aspectRatioThreshold ?? 1.2})`);
+
+      // Call autoPlaceSupports with model targets for raycasting
+      // This ensures supports get proper heights (same as manual placement)
+      const result = autoPlaceSupports(
+        meshes, 
+        baseTopY, 
+        {
+          supportType: supportType || 'auto',
+          cornerRadius: 2,
+          contactOffset: 0,
+          overhangAngle: overhangAngle ?? 45,
+          aspectRatioThreshold: aspectRatioThreshold ?? 1.2,
+          clusterDistance: 15,
+          minClusterArea: 25,
+        },
+        meshes,  // modelTargets for raycasting
+        null     // baseTarget (baseplate mesh, if available)
+      );
+
+      console.log('[3DScene] Auto-placement result:', result.message, 
+        `- ${result.clustersFound} clusters, ${result.totalOverhangArea.toFixed(1)}mm² overhang area`);
+
+      // Store debug perimeter for visualization if debug mode is enabled
+      if (DEBUG_SHOW_PERIMETER && result.debugPerimeter && result.debugPerimeter.length > 2) {
+        setDebugPerimeter(result.debugPerimeter);
+      }
+
+      if (result.supports.length > 0) {
+        // Set supports locally in 3DScene
+        setSupports(result.supports);
+        
+        // Notify AppShell about the batch of new supports (single event to avoid duplicates)
+        window.dispatchEvent(new CustomEvent('supports-auto-placed', { 
+          detail: { 
+            supports: result.supports,
+            message: result.message 
+          } 
+        }));
+      } else {
+        console.warn('[3DScene] Auto-placement generated no supports:', result.message);
+      }
+    };
+
+    window.addEventListener('supports-auto-place', onAutoPlaceSupports as EventListener);
+    return () => window.removeEventListener('supports-auto-place', onAutoPlaceSupports as EventListener);
+  }, [basePlate]);
 
   // Undo/Redo handlers for supports
   React.useEffect(() => {
@@ -2116,7 +2204,6 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       setSupports([]);
       setSupportsTrimPreview([]);
       editingSupportRef.current = null;
-      setEditingSupport(null);
     };
 
     window.addEventListener('viewer-reset', handleViewReset as EventListener);
@@ -2188,14 +2275,14 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   return (
     <>
       {/* Lighting */}
-      <ambientLight intensity={0.6} />
-      <directionalLight position={[10, 10, 5]} intensity={0.8} />
-      <directionalLight position={[-10, -10, -5]} intensity={0.4} />
-      <pointLight position={[0, 10, 0]} intensity={0.3} />
+      {/* Scene Lighting - using direct lights instead of HDR environment to avoid memory issues */}
+      <ambientLight intensity={0.5} />
+      <directionalLight position={[10, 10, 5]} intensity={1.0} castShadow />
+      <directionalLight position={[-10, -10, -5]} intensity={0.5} />
+      <directionalLight position={[5, 15, -5]} intensity={0.6} />
+      <pointLight position={[0, 10, 0]} intensity={0.4} />
       <pointLight position={[0, -10, 0]} intensity={0.3} />
-
-      {/* Environment - background disabled to prevent texture regeneration issues */}
-      <Environment preset="warehouse" background={false} />
+      <hemisphereLight args={['#ffffff', '#444444', 0.6]} />
 
       {/* Scalable grid - sized based on combined model bounds (includes world positions) */}
       <ScalableGrid modelBounds={modelBounds} isDarkMode={isDarkMode} />
@@ -2294,7 +2381,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
                 onBoundsChange={(bounds) => {
                   setPartBounds(prev => new Map(prev).set(part.id, bounds));
                 }}
-                disableDoubleClick={placing.active || editingSupport !== null || !isVisible}
+                disableDoubleClick={placing.active || !isVisible}
                 onDoubleClick={() => {
                   if (isVisible) {
                     onPartSelected(part.id);
@@ -2319,30 +2406,71 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
 
       {/* Supports rendering */}
       {supportsTrimPreview.length === 0
-        ? supports.map((s) => <SupportMesh key={s.id} support={s} baseTopY={baseTopY} />)
+        ? supports.map((s) => (
+            <SupportMesh 
+              key={s.id} 
+              support={s} 
+              baseTopY={baseTopY}
+              selected={selectedSupportId === s.id}
+              onDoubleClick={(supportId) => {
+                onSupportSelect?.(supportId);
+                // Don't disable orbit controls here - let the gizmo handle it during drag
+                // This allows pan/tilt/zoom while gizmo is active (same as part gizmo)
+              }}
+            />
+          ))
         : supportsTrimPreview.map((mesh, idx) => <primitive key={`${mesh.uuid}-${idx}`} object={mesh} />)}
+      
+      {/* Support transform controls - XY plane only */}
+      {selectedSupportId && !placing.active && (
+        (() => {
+          const selectedSupport = supports.find(s => s.id === selectedSupportId);
+          if (!selectedSupport) return null;
+          return (
+            <SupportTransformControls
+              support={selectedSupport}
+              baseTopY={baseTopY}
+              onTransformChange={(newCenter, rotationY, height) => {
+                // Live update support position, rotation, and height
+                setSupports(prev => prev.map(s => {
+                  if (s.id === selectedSupportId) {
+                    const updates: Partial<AnySupport> = { center: newCenter };
+                    if (rotationY !== undefined) {
+                      (updates as any).rotationY = rotationY;
+                    }
+                    if (height !== undefined) {
+                      (updates as any).height = height;
+                    }
+                    return { ...s, ...updates } as AnySupport;
+                  }
+                  return s;
+                }));
+              }}
+              onTransformEnd={(newCenter, rotationY, height) => {
+                // Dispatch event for AppShell to update its state
+                const updatedSupport = supports.find(s => s.id === selectedSupportId);
+                if (updatedSupport) {
+                  const finalSupport: any = { ...updatedSupport, center: newCenter };
+                  if (rotationY !== undefined) {
+                    finalSupport.rotationY = rotationY;
+                  }
+                  if (height !== undefined) {
+                    finalSupport.height = height;
+                  }
+                  window.dispatchEvent(new CustomEvent('support-updated', { detail: finalSupport }));
+                }
+              }}
+              onDeselect={() => {
+                onSupportSelect?.(null);
+              }}
+            />
+          );
+        })()
+      )}
 
-      {/* Handle-based support editing overlay */}
-      {editingSupport && (
-        <SupportEditOverlay
-          support={editingSupport}
-          baseTopY={baseTopY}
-          onCommit={(updated) => {
-            setSupports(prev => prev.map(s => (s.id === updated.id ? updated : s)));
-            editingSupportRef.current = null;
-            setEditingSupport(null);
-            setOrbitControlsEnabled(true);
-            // Restore previous view after edit
-            setCurrentOrientation(prevOrientationRef.current);
-            updateCamera(prevOrientationRef.current, modelBounds);
-          }}
-          onCancel={() => {
-            editingSupportRef.current = null;
-            setEditingSupport(null);
-            setOrbitControlsEnabled(true);
-            setCurrentOrientation(prevOrientationRef.current);
-          }}
-        />
+      {/* Debug: Perimeter visualization (raycast silhouette) - controlled by DEBUG_SHOW_PERIMETER flag */}
+      {DEBUG_SHOW_PERIMETER && debugPerimeter && debugPerimeter.length > 2 && (
+        <DebugPerimeterLine perimeter={debugPerimeter} y={baseTopY + 0.5} />
       )}
 
       {/* Support placement controller */}
@@ -2380,11 +2508,14 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
         position={[0, -100, 0]}
         rotation={[-Math.PI / 2, 0, 0]}
         onPointerDown={() => {
-          // Clicking on empty viewport should clear any active support edit overlay
-          if (editingSupportRef.current || editingSupport) {
+          // Clicking on empty viewport should clear any active support edit ref
+          if (editingSupportRef.current) {
             editingSupportRef.current = null;
-            setEditingSupport(null);
             setOrbitControlsEnabled(true);
+          }
+          // Also deselect support when clicking empty area
+          if (selectedSupportId) {
+            onSupportSelect?.(null);
           }
         }}
         onPointerMove={handlePointerMove}

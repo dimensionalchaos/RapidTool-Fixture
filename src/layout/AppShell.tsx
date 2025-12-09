@@ -22,6 +22,7 @@ import {
 } from "@/components/ContextOptionsPanel/steps";
 import { SupportType } from "@/components/ContextOptionsPanel/steps/SupportsStepContent";
 import { AnySupport } from "@/components/Supports/types";
+import { autoPlaceSupports, AutoPlacementStrategy } from "@/components/Supports/autoPlacement";
 import UnitsDialog from "@/modules/FileImport/components/UnitsDialog";
 import MeshOptimizationDialog from "@/modules/FileImport/components/MeshOptimizationDialog";
 import { useFileProcessing } from "@/modules/FileImport/hooks/useFileProcessing";
@@ -829,11 +830,22 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
         setIsPlacementMode(false);
       };
 
+      // Handle batch auto-placement (replaces all supports)
+      const onSupportsAutoPlaced = (e: CustomEvent) => {
+        const { supports: newSupports } = e.detail as { supports: AnySupport[] };
+        if (newSupports && Array.isArray(newSupports)) {
+          setSupports(newSupports);
+          setSelectedSupportId(null);
+          console.log('[AppShell] Auto-placed', newSupports.length, 'supports');
+        }
+      };
+
       window.addEventListener('support-created', onSupportCreated as EventListener);
       window.addEventListener('support-updated', onSupportUpdated as EventListener);
       window.addEventListener('support-delete', onSupportDelete as EventListener);
       window.addEventListener('supports-clear-all', onSupportsClearAll);
       window.addEventListener('supports-cancel-placement', onCancelPlacement);
+      window.addEventListener('supports-auto-placed', onSupportsAutoPlaced as EventListener);
 
       return () => {
         window.removeEventListener('support-created', onSupportCreated as EventListener);
@@ -841,6 +853,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
         window.removeEventListener('support-delete', onSupportDelete as EventListener);
         window.removeEventListener('supports-clear-all', onSupportsClearAll);
         window.removeEventListener('supports-cancel-placement', onCancelPlacement);
+        window.removeEventListener('supports-auto-placed', onSupportsAutoPlaced as EventListener);
       };
     }, [selectedSupportId]);
 
@@ -1191,6 +1204,8 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
                   return newMap;
                 });
               }}
+              selectedSupportId={selectedSupportId}
+              onSupportSelect={setSelectedSupportId}
             />
 
             {/* Floating Tips Overlay */}

@@ -9,6 +9,8 @@ interface ThreeDViewerProps {
   isProcessing: boolean;
   onComponentPlaced?: (component: any, position: any) => void;
   onModelColorAssigned?: (modelId: string, color: string) => void;
+  selectedSupportId?: string | null;
+  onSupportSelect?: (supportId: string | null) => void;
 }
 
 const ThreeDViewer: React.FC<ThreeDViewerProps> = ({
@@ -16,6 +18,8 @@ const ThreeDViewer: React.FC<ThreeDViewerProps> = ({
   isProcessing,
   onComponentPlaced,
   onModelColorAssigned,
+  selectedSupportId,
+  onSupportSelect,
 }) => {
   // Theme for 3D viewer background
   const { resolvedTheme } = useTheme();
@@ -119,6 +123,8 @@ const ThreeDViewer: React.FC<ThreeDViewerProps> = ({
           onModelColorAssigned={onModelColorAssigned}
           partVisibility={partVisibility}
           isDarkMode={resolvedTheme === 'dark'}
+          selectedSupportId={selectedSupportId}
+          onSupportSelect={onSupportSelect}
         />
       </Canvas>
 

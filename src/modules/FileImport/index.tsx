@@ -44,6 +44,7 @@ const FileImport: React.FC<FileImportProps> = ({ onFileLoaded, isInCollapsiblePa
   }>({ isLoading: false });
 
   const pendingFileRef = useRef<File | null>(null);
+  const pendingArrayBufferRef = useRef<ArrayBuffer | null>(null);
   const { processFile, isProcessing: fileProcessing, error: fileError, clearError } = useFileProcessing();
 
   // Listen for session reset to clear internal state
@@ -59,6 +60,7 @@ const FileImport: React.FC<FileImportProps> = ({ onFileLoaded, isInCollapsiblePa
       setIsMeshProcessing(false);
       setPendingProcessedFile(null);
       pendingFileRef.current = null;
+      pendingArrayBufferRef.current = null;
     };
 
     window.addEventListener('session-reset', handleSessionReset);
@@ -75,23 +77,32 @@ const FileImport: React.FC<FileImportProps> = ({ onFileLoaded, isInCollapsiblePa
     resetView: () => {}
   } : useViewer(viewerContainerRef);
 
-  // Handle file selection
+  // Handle file selection - read file data immediately to avoid NotReadableError
   const handleFileSelected = useCallback(async (file: File) => {
     console.log('File selected:', file.name);
-    pendingFileRef.current = file;
-    setIsUnitsDialogOpen(true);
+    try {
+      // Read file data immediately to avoid stale file reference issues
+      const arrayBuffer = await file.arrayBuffer();
+      pendingFileRef.current = file;
+      pendingArrayBufferRef.current = arrayBuffer;
+      setIsUnitsDialogOpen(true);
+    } catch (err) {
+      console.error('Error reading file:', err);
+      setError('Failed to read file. Please try selecting the file again.');
+    }
   }, []);
 
   // Handle units selection
   const handleUnitsSelected = useCallback(async (units: string) => {
-    if (!pendingFileRef.current) return;
+    if (!pendingFileRef.current || !pendingArrayBufferRef.current) return;
 
     setIsUnitsDialogOpen(false);
     setIsProcessing(true);
     setError(null);
 
     try {
-      const processedFile = await processFile(pendingFileRef.current, units);
+      // Use the pre-loaded ArrayBuffer to avoid stale file reference issues
+      const processedFile = await processFile(pendingFileRef.current, units, pendingArrayBufferRef.current);
 
       if (processedFile) {
         // Run mesh analysis

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Accordion,
   AccordionContent,
@@ -10,7 +10,7 @@ import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Cuboid, Trash2, Move, Maximize2, RotateCcw, Circle, Square, Triangle, Spline } from 'lucide-react';
+import { Cuboid, Trash2, Maximize2, RotateCcw, Circle, Square, Triangle, Spline, Crosshair } from 'lucide-react';
 import { AnySupport, SupportType, RectSupport, CylSupport, ConicalSupport, CustomSupport } from './types';
 
 interface SupportsAccordionProps {
@@ -43,11 +43,19 @@ const SupportsAccordion: React.FC<SupportsAccordionProps> = ({
   onSupportDelete,
 }) => {
   const [expandedItem, setExpandedItem] = useState<string>("");
+  const supportRefs = useRef<Map<string, HTMLDivElement | null>>(new Map());
 
-  // Auto-expand newly selected support
+  // Auto-expand newly selected support and scroll into view
   useEffect(() => {
     if (selectedSupportId) {
       setExpandedItem(selectedSupportId);
+      // Scroll the support item into view with a slight delay for accordion animation
+      setTimeout(() => {
+        const element = supportRefs.current.get(selectedSupportId);
+        if (element) {
+          element.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+      }, 100);
     }
   }, [selectedSupportId]);
 
@@ -75,14 +83,27 @@ const SupportsAccordion: React.FC<SupportsAccordionProps> = ({
     window.dispatchEvent(new CustomEvent('support-updated', { detail: updatedSupport }));
   }, [onSupportUpdate]);
 
+  // Handle rotation change (Y-axis rotation in degrees for UI)
+  const handleRotationChange = useCallback((support: AnySupport, degrees: number) => {
+    const radians = (degrees * Math.PI) / 180;
+    const updatedSupport = { ...support, rotationY: radians };
+    onSupportUpdate(updatedSupport as AnySupport);
+    
+    // Dispatch update event for 3D scene
+    window.dispatchEvent(new CustomEvent('support-updated', { detail: updatedSupport }));
+  }, [onSupportUpdate]);
+
   // Render properties based on support type
   const renderSupportProperties = (support: AnySupport) => {
+    // Get rotation in degrees for display
+    const rotationDegrees = ((support.rotationY ?? 0) * 180) / Math.PI;
+    
     const baseProperties = (
       <div className="space-y-3">
         {/* Position */}
         <div className="space-y-2">
           <Label className="text-[8px] font-tech text-muted-foreground flex items-center gap-1">
-            <Move className="w-2.5 h-2.5" />
+            <Crosshair className="w-2.5 h-2.5" />
             Position (mm)
           </Label>
           <div className="grid grid-cols-2 gap-2">
@@ -124,6 +145,23 @@ const SupportsAccordion: React.FC<SupportsAccordionProps> = ({
             min="1"
           />
         </div>
+
+        {/* Rotation (only for rectangular/custom supports that can benefit from rotation) */}
+        {(support.type === 'rectangular' || support.type === 'custom') && (
+          <div className="space-y-2">
+            <Label className="text-[8px] font-tech text-muted-foreground flex items-center gap-1">
+              <RotateCcw className="w-2.5 h-2.5" />
+              Rotation (°)
+            </Label>
+            <Input
+              type="number"
+              value={rotationDegrees.toFixed(1)}
+              onChange={(e) => handleRotationChange(support, parseFloat(e.target.value) || 0)}
+              className="h-6 !text-[10px] font-mono"
+              step="5"
+            />
+          </div>
+        )}
       </div>
     );
 
@@ -344,9 +382,15 @@ const SupportsAccordion: React.FC<SupportsAccordionProps> = ({
             <AccordionItem 
               key={support.id} 
               value={support.id}
+              ref={(el) => supportRefs.current.set(support.id, el)}
               className={`
                 border rounded-md transition-all
-                ${expandedItem === support.id ? 'border-primary bg-primary/5' : 'border-border/30'}
+                ${selectedSupportId === support.id 
+                  ? 'border-primary bg-primary/10 ring-1 ring-primary/30' 
+                  : expandedItem === support.id 
+                    ? 'border-primary bg-primary/5' 
+                    : 'border-border/30'
+                }
               `}
             >
               <AccordionTrigger 
@@ -393,22 +437,6 @@ const SupportsAccordion: React.FC<SupportsAccordionProps> = ({
               <AccordionContent className="px-2 pb-2">
                 <div className="space-y-3">
                   {renderSupportProperties(support)}
-                  
-                  {/* Actions */}
-                  <div className="flex gap-2 pt-2 border-t border-border/30">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="flex-1 h-6 text-[10px] font-tech"
-                      onClick={() => {
-                        // Edit support - dispatch event for 3D scene
-                        window.dispatchEvent(new CustomEvent('support-edit', { detail: support }));
-                      }}
-                    >
-                      <Move className="w-3 h-3 mr-1" />
-                      Edit in 3D
-                    </Button>
-                  </div>
                 </div>
               </AccordionContent>
             </AccordionItem>
