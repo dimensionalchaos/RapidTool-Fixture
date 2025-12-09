@@ -2413,6 +2413,8 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
               baseTopY={baseTopY}
               selected={selectedSupportId === s.id}
               onDoubleClick={(supportId) => {
+                // Notify part gizmos to close
+                window.dispatchEvent(new CustomEvent('pivot-control-activated', { detail: { supportId } }));
                 onSupportSelect?.(supportId);
                 // Don't disable orbit controls here - let the gizmo handle it during drag
                 // This allows pan/tilt/zoom while gizmo is active (same as part gizmo)
