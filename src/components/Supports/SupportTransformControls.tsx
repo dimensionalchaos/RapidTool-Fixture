@@ -4,6 +4,11 @@
  * Transform controls for supports using PivotControls from @react-three/drei.
  * Allows XZ plane translation, Y-axis height adjustment, and Y-axis rotation.
  * Styled consistently with SelectableTransformControls for parts.
+ * 
+ * Uses the same pattern as SelectableTransformControls:
+ * - Place a reference object inside PivotControls
+ * - Let autoTransform handle visual movement
+ * - Read world transform from the reference object
  */
 
 import React, { useRef, useCallback, useEffect, useMemo } from 'react';
@@ -23,7 +28,6 @@ interface SupportTransformControlsProps {
 // Reusable THREE.js objects to avoid allocations
 const tempPosition = new THREE.Vector3();
 const tempQuaternion = new THREE.Quaternion();
-const tempScale = new THREE.Vector3();
 const tempEuler = new THREE.Euler();
 
 const SupportTransformControls: React.FC<SupportTransformControlsProps> = ({
@@ -35,10 +39,8 @@ const SupportTransformControls: React.FC<SupportTransformControlsProps> = ({
 }) => {
   const { gl } = useThree();
   const pivotRef = useRef<THREE.Group>(null);
+  const anchorRef = useRef<THREE.Mesh>(null);
   const isDraggingRef = useRef(false);
-  const initialCenterRef = useRef<THREE.Vector2 | null>(null);
-  const initialRotationRef = useRef<number>(0);
-  const initialHeightRef = useRef<number>(0);
   
   const center = (support as any).center as THREE.Vector2;
   const effectiveBaseY = (support as any).baseY ?? baseTopY;
@@ -54,52 +56,66 @@ const SupportTransformControls: React.FC<SupportTransformControlsProps> = ({
     return Math.max(supportRadius * 2, 25);
   }, [support]);
 
-  // Handle drag - extract transform from pivot matrix
-  const handleDrag = useCallback((localMatrix: THREE.Matrix4) => {
-    if (!initialCenterRef.current) return;
+  // Read world transform from the anchor mesh (inside PivotControls)
+  const getTransformFromAnchor = useCallback(() => {
+    if (!anchorRef.current) return null;
     
-    // Decompose the local matrix (relative transform from start)
-    localMatrix.decompose(tempPosition, tempQuaternion, tempScale);
+    anchorRef.current.updateMatrixWorld(true);
+    anchorRef.current.getWorldPosition(tempPosition);
+    anchorRef.current.getWorldQuaternion(tempQuaternion);
     tempEuler.setFromQuaternion(tempQuaternion, 'YXZ');
     
-    // The PivotControls gives us world-aligned deltas
-    // Simply add position deltas to initial position
-    const newCenter = new THREE.Vector2(
-      initialCenterRef.current.x + tempPosition.x,
-      initialCenterRef.current.y + tempPosition.z // Vector2.y = world Z
-    );
-    // Add rotation delta to initial rotation
-    const newRotationY = initialRotationRef.current + tempEuler.y;
-    // Add Y delta to initial height (with minimum constraint)
-    const newHeight = Math.max(1, initialHeightRef.current + tempPosition.y);
+    // Convert world position to support center (X, Z) and height delta (Y)
+    const newCenter = new THREE.Vector2(tempPosition.x, tempPosition.z);
+    const newRotationY = tempEuler.y;
     
-    onTransformChange(newCenter, newRotationY, newHeight);
-  }, [onTransformChange]);
+    // Height is derived from Y position change relative to initial gizmo position
+    // Y position = effectiveBaseY + height + 5 (gizmo offset)
+    // So: height = Y position - effectiveBaseY - 5
+    const newHeight = Math.max(1, tempPosition.y - effectiveBaseY - 5);
+    
+    return { center: newCenter, rotationY: newRotationY, height: newHeight };
+  }, [effectiveBaseY]);
 
-  // Drag handlers
+  // Handle drag - read transform from anchor mesh
+  const handleDrag = useCallback(() => {
+    if (!isDraggingRef.current) return;
+    
+    const transform = getTransformFromAnchor();
+    if (transform) {
+      onTransformChange(transform.center, transform.rotationY, transform.height);
+    }
+  }, [getTransformFromAnchor, onTransformChange]);
+
+  // Drag start
   const handleDragStart = useCallback(() => {
     isDraggingRef.current = true;
-    initialCenterRef.current = center.clone();
-    initialRotationRef.current = currentRotationY;
-    initialHeightRef.current = supportHeight;
     window.dispatchEvent(new CustomEvent('disable-orbit-controls', { detail: { disabled: true } }));
     gl.domElement.style.cursor = 'grabbing';
-  }, [gl, center, currentRotationY, supportHeight]);
+  }, [gl]);
 
+  // Drag end - emit final transform and reset pivot
   const handleDragEnd = useCallback(() => {
     isDraggingRef.current = false;
     window.dispatchEvent(new CustomEvent('disable-orbit-controls', { detail: { disabled: false } }));
     gl.domElement.style.cursor = 'auto';
     
-    // Emit final transform with current values
-    const currentCenter = (support as any).center as THREE.Vector2;
-    const rotationY = (support as any).rotationY ?? 0;
-    const height = (support as any).height ?? 10;
-    onTransformEnd(currentCenter, rotationY, height);
+    // Read final transform from anchor
+    const transform = getTransformFromAnchor();
+    if (transform) {
+      onTransformEnd(transform.center, transform.rotationY, transform.height);
+    }
     
-    initialCenterRef.current = null;
-    initialHeightRef.current = 0;
-  }, [gl, onTransformEnd, support]);
+    // Reset pivot to identity after drag ends
+    // The group position will update to new support position on next render
+    if (pivotRef.current) {
+      pivotRef.current.matrix.identity();
+      pivotRef.current.position.set(0, 0, 0);
+      pivotRef.current.rotation.set(0, 0, 0);
+      pivotRef.current.scale.set(1, 1, 1);
+      pivotRef.current.updateMatrix();
+    }
+  }, [gl, getTransformFromAnchor, onTransformEnd]);
 
   // Click outside to close - ONLY when clicking on UI elements, NOT on canvas
   useEffect(() => {
@@ -140,7 +156,7 @@ const SupportTransformControls: React.FC<SupportTransformControlsProps> = ({
   }, [onDeselect]);
 
   return (
-    <group position={[center.x, gizmoY, center.y]}>
+    <group position={[center.x, gizmoY, center.y]} rotation={[0, currentRotationY, 0]}>
       <PivotControls
         ref={pivotRef}
         scale={gizmoScale}
@@ -148,39 +164,37 @@ const SupportTransformControls: React.FC<SupportTransformControlsProps> = ({
         depthTest={false}
         fixed={false}
         visible={true}
-        // Enable all axes to show XZ planar control (the square)
-        // Y movement is ignored in the drag handler
         activeAxes={[true, true, true]}
         axisColors={['#ff4060', '#40ff60', '#4080ff']}
         hoveredColor="#ffff40"
         annotations={true}
         annotationsClass="pivot-annotation"
-        autoTransform={false}
+        autoTransform={true}
         disableScaling={true}
         disableSliders={true}
         onDrag={handleDrag}
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
       >
-        {/* Invisible anchor point - PivotControls needs a child */}
-        <mesh visible={false}>
+        {/* Anchor mesh - we read world transform from this */}
+        <mesh ref={anchorRef} visible={false}>
           <sphereGeometry args={[0.1]} />
         </mesh>
+        
+        {/* Close button at gizmo center */}
+        <Html center style={{ pointerEvents: 'auto', userSelect: 'none' }}>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onDeselect();
+            }}
+            className="w-6 h-6 flex items-center justify-center bg-slate-800/90 hover:bg-red-600 text-white rounded-full shadow-lg border border-slate-600 transition-colors text-xs"
+            title="Close (Esc)"
+          >
+            ✕
+          </button>
+        </Html>
       </PivotControls>
-      
-      {/* Close button at gizmo center */}
-      <Html center style={{ pointerEvents: 'auto', userSelect: 'none' }}>
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onDeselect();
-          }}
-          className="w-6 h-6 flex items-center justify-center bg-slate-800/90 hover:bg-red-600 text-white rounded-full shadow-lg border border-slate-600 transition-colors text-xs"
-          title="Close (Esc)"
-        >
-          ✕
-        </button>
-      </Html>
     </group>
   );
 };
