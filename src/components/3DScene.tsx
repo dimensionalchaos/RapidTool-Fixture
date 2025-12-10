@@ -1371,10 +1371,14 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
             // === Step 2: Smoothing (if enabled) ===
             if (shouldSmooth) {
               const iterations = settings.smoothingIterations ?? 5;
-              const method = settings.smoothingMethod ?? 'taubin';
-              const passBand = settings.smoothingPassBand ?? 0.1;
+              const method = settings.smoothingMethod ?? 'combined';
+              const alpha = settings.smoothingAlpha ?? 0.5;
+              const beta = settings.smoothingBeta ?? 0.5;
+              const gaussianIterations = settings.combinedGaussianIterations ?? 2;
+              const laplacianIterations = settings.combinedLaplacianIterations ?? 2;
+              const taubinIterations = settings.combinedTaubinIterations ?? 2;
               
-              console.log(`[3DScene] Applying ${method} smoothing (${iterations} iterations, passBand=${passBand})...`);
+              console.log(`[3DScene] Applying ${method} smoothing (${method === 'combined' ? `G:${gaussianIterations} L:${laplacianIterations} T:${taubinIterations}` : `${iterations} iterations`}, alpha=${alpha}, beta=${beta})...`);
               
               window.dispatchEvent(new CustomEvent('offset-mesh-preview-progress', {
                 detail: { current: 85, total: 100, stage: `Smoothing mesh (${method})...` }
@@ -1383,13 +1387,19 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
               // Yield to browser before smoothing
               await new Promise(resolve => setTimeout(resolve, 0));
               
-              // Use taubin-smooth library
+              // Use custom Taubin/HC/Combined smoothing
               const smoothingResult = await laplacianSmooth(
                 currentGeometry,
                 {
                   iterations,
                   method,
-                  passBand,
+                  lambda: 0.5,
+                  mu: -0.53,
+                  alpha,
+                  beta,
+                  gaussianIterations,
+                  laplacianIterations,
+                  taubinIterations,
                 },
                 (progressInfo) => {
                   console.log(`[3DScene] Smoothing: ${progressInfo.message}`);

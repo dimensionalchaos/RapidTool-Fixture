@@ -327,57 +327,158 @@ const CavityStepContent: React.FC<CavityStepContentProps> = ({
                     Method
                   </Label>
                   <select
-                    value={settings.smoothingMethod ?? 'taubin'}
+                    value={settings.smoothingMethod ?? 'combined'}
                     onChange={(e) => handleSettingChange('smoothingMethod', e.target.value)}
                     disabled={isProcessing}
                     className="w-full h-7 text-[10px] px-2 rounded border border-border bg-background"
                   >
-                    <option value="taubin">Taubin Smoothing</option>
+                    <option value="taubin">Taubin (λ|μ)</option>
+                    <option value="hc">HC Laplacian</option>
+                    <option value="combined">Combined (G→L→T)</option>
+                    <option value="gaussian">Gaussian Filter</option>
                   </select>
                 </div>
 
-                {/* Iterations */}
-                <div className="space-y-1">
-                  <div className="flex items-center justify-between">
-                    <Label className="text-[10px] font-tech text-muted-foreground">
-                      Iterations
-                    </Label>
-                    <span className="text-[10px] font-mono text-muted-foreground">
-                      {settings.smoothingIterations}
-                    </span>
+                {/* Iterations - only for non-combined methods */}
+                {settings.smoothingMethod !== 'combined' && (
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between">
+                      <Label className="text-[10px] font-tech text-muted-foreground">
+                        Iterations
+                      </Label>
+                      <span className="text-[10px] font-mono text-muted-foreground">
+                        {settings.smoothingIterations}
+                      </span>
+                    </div>
+                    <Slider
+                      value={[settings.smoothingIterations]}
+                      onValueChange={([value]) => handleSettingChange('smoothingIterations', value)}
+                      min={1}
+                      max={20}
+                      step={1}
+                      disabled={isProcessing}
+                    />
                   </div>
-                  <Slider
-                    value={[settings.smoothingIterations]}
-                    onValueChange={([value]) => handleSettingChange('smoothingIterations', value)}
-                    min={1}
-                    max={50}
-                    step={1}
-                    disabled={isProcessing}
-                  />
-                </div>
+                )}
 
-                {/* Pass Band */}
-                <div className="space-y-1">
-                  <div className="flex items-center justify-between">
+                {/* Combined method: Individual iteration controls */}
+                {settings.smoothingMethod === 'combined' && (
+                  <div className="space-y-2">
                     <Label className="text-[10px] font-tech text-muted-foreground">
-                      Pass Band
+                      Pass Iterations (G→L→T)
                     </Label>
-                    <span className="text-[10px] font-mono text-muted-foreground">
-                      {(settings.smoothingPassBand ?? 0.1).toFixed(2)}
-                    </span>
+                    
+                    {/* Gaussian iterations */}
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between">
+                        <Label className="text-[9px] font-tech text-muted-foreground/80">
+                          Gaussian
+                        </Label>
+                        <span className="text-[9px] font-mono text-muted-foreground">
+                          {settings.combinedGaussianIterations ?? 2}
+                        </span>
+                      </div>
+                      <Slider
+                        value={[settings.combinedGaussianIterations ?? 2]}
+                        onValueChange={([value]) => handleSettingChange('combinedGaussianIterations', value)}
+                        min={0}
+                        max={10}
+                        step={1}
+                        disabled={isProcessing}
+                      />
+                    </div>
+                    
+                    {/* Laplacian iterations */}
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between">
+                        <Label className="text-[9px] font-tech text-muted-foreground/80">
+                          Laplacian
+                        </Label>
+                        <span className="text-[9px] font-mono text-muted-foreground">
+                          {settings.combinedLaplacianIterations ?? 2}
+                        </span>
+                      </div>
+                      <Slider
+                        value={[settings.combinedLaplacianIterations ?? 2]}
+                        onValueChange={([value]) => handleSettingChange('combinedLaplacianIterations', value)}
+                        min={0}
+                        max={10}
+                        step={1}
+                        disabled={isProcessing}
+                      />
+                    </div>
+                    
+                    {/* Taubin iterations */}
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between">
+                        <Label className="text-[9px] font-tech text-muted-foreground/80">
+                          Taubin
+                        </Label>
+                        <span className="text-[9px] font-mono text-muted-foreground">
+                          {settings.combinedTaubinIterations ?? 2}
+                        </span>
+                      </div>
+                      <Slider
+                        value={[settings.combinedTaubinIterations ?? 2]}
+                        onValueChange={([value]) => handleSettingChange('combinedTaubinIterations', value)}
+                        min={0}
+                        max={10}
+                        step={1}
+                        disabled={isProcessing}
+                      />
+                    </div>
                   </div>
-                  <Slider
-                    value={[settings.smoothingPassBand ?? 0.1]}
-                    onValueChange={([value]) => handleSettingChange('smoothingPassBand', value)}
-                    min={0.01}
-                    max={1}
-                    step={0.01}
-                    disabled={isProcessing}
-                  />
-                  <p className="text-[8px] text-muted-foreground italic">
-                    Lower = smoother (more aggressive)
-                  </p>
-                </div>
+                )}
+
+                {/* Alpha (HC parameter) */}
+                {(settings.smoothingMethod === 'hc' || settings.smoothingMethod === 'combined') && (
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between">
+                      <Label className="text-[10px] font-tech text-muted-foreground">
+                        Alpha (shape)
+                      </Label>
+                      <span className="text-[10px] font-mono text-muted-foreground">
+                        {(settings.smoothingAlpha ?? 0.5).toFixed(2)}
+                      </span>
+                    </div>
+                    <Slider
+                      value={[settings.smoothingAlpha ?? 0.5]}
+                      onValueChange={([value]) => handleSettingChange('smoothingAlpha', value)}
+                      min={0}
+                      max={1}
+                      step={0.05}
+                      disabled={isProcessing}
+                    />
+                    <p className="text-[8px] text-muted-foreground italic">
+                      Higher = preserve original shape
+                    </p>
+                  </div>
+                )}
+
+                {/* Beta (HC parameter) */}
+                {(settings.smoothingMethod === 'hc' || settings.smoothingMethod === 'combined') && (
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between">
+                      <Label className="text-[10px] font-tech text-muted-foreground">
+                        Beta (smooth)
+                      </Label>
+                      <span className="text-[10px] font-mono text-muted-foreground">
+                        {(settings.smoothingBeta ?? 0.5).toFixed(2)}
+                      </span>
+                    </div>
+                    <Slider
+                      value={[settings.smoothingBeta ?? 0.5]}
+                      onValueChange={([value]) => handleSettingChange('smoothingBeta', value)}
+                      min={0}
+                      max={1}
+                      step={0.05}
+                      disabled={isProcessing}
+                    />
+                    <p className="text-[8px] text-muted-foreground italic">
+                      Higher = more smoothing correction
+                    </p>
+                  </div>
+                )}
               </div>
             )}
           </div>

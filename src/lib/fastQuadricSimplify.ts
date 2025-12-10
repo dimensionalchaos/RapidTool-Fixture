@@ -19,11 +19,30 @@ interface SimplifyModule {
 
 let moduleInstance: SimplifyModule | null = null;
 let moduleLoading: Promise<SimplifyModule> | null = null;
+let moduleAborted = false;
+
+/**
+ * Reset the module if it has aborted
+ */
+function resetModule() {
+  moduleInstance = null;
+  moduleLoading = null;
+  moduleAborted = false;
+  // Clean up global Module
+  if ((window as any).Module) {
+    delete (window as any).Module;
+  }
+}
 
 /**
  * Load the WASM module (singleton)
  */
 async function loadModule(): Promise<SimplifyModule> {
+  // If module previously aborted, reset it
+  if (moduleAborted) {
+    resetModule();
+  }
+  
   if (moduleInstance) return moduleInstance;
   if (moduleLoading) return moduleLoading;
 
@@ -31,7 +50,18 @@ async function loadModule(): Promise<SimplifyModule> {
     // Create Module object that Emscripten will use
     const Module: any = {
       print: (text: string) => console.log('[Simplify]', text),
-      printErr: (text: string) => console.warn('[Simplify]', text),
+      printErr: (text: string) => {
+        console.warn('[Simplify]', text);
+        // Check for abort
+        if (text.includes('Aborted') || text.includes('abort')) {
+          moduleAborted = true;
+        }
+      },
+      onAbort: (what: any) => {
+        console.error('[Simplify] WASM Aborted:', what);
+        moduleAborted = true;
+        moduleInstance = null;
+      },
       locateFile: (path: string) => {
         if (path.endsWith('.wasm')) {
           return '/fast-simplify.wasm';
@@ -244,13 +274,32 @@ export async function simplifyGeometry(
     
     onProgress?.('simplifying', 40, 'Running simplification...');
     
+    // Check if module was aborted
+    if (moduleAborted) {
+      throw new Error('WASM module was previously aborted, resetting...');
+    }
+    
     // Call the simplify function: simplify(input_path, ratio, output_path)
-    const result = module.ccall(
-      'simplify',
-      'number',
-      ['string', 'number', 'string'],
-      [inputFile, ratio, outputFile]
-    );
+    let result: number;
+    try {
+      result = module.ccall(
+        'simplify',
+        'number',
+        ['string', 'number', 'string'],
+        [inputFile, ratio, outputFile]
+      );
+    } catch (ccallError) {
+      // Module may have aborted during ccall
+      moduleAborted = true;
+      resetModule();
+      throw new Error(`WASM execution failed: ${ccallError instanceof Error ? ccallError.message : 'Unknown error'}`);
+    }
+    
+    // Check again after ccall in case it aborted
+    if (moduleAborted) {
+      resetModule();
+      throw new Error('WASM module aborted during simplification');
+    }
     
     if (result !== 0) {
       throw new Error(`Simplification failed with code ${result}`);
@@ -259,7 +308,17 @@ export async function simplifyGeometry(
     onProgress?.('reading', 80, 'Reading result...');
     
     // Read the output file
-    const outputData = module.FS_readFile(outputFile);
+    let outputData: Uint8Array;
+    try {
+      outputData = module.FS_readFile(outputFile);
+    } catch (readError) {
+      // Module may have aborted, or file doesn't exist
+      if (moduleAborted) {
+        resetModule();
+        throw new Error('WASM module aborted, cannot read output');
+      }
+      throw new Error(`Failed to read output file: ${readError instanceof Error ? readError.message : 'Unknown error'}`);
+    }
     
     onProgress?.('parsing', 90, 'Parsing simplified mesh...');
     
@@ -285,6 +344,12 @@ export async function simplifyGeometry(
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     console.error('Fast Quadric Simplification error:', error);
+    
+    // Reset module if it aborted
+    if (moduleAborted || errorMessage.includes('Aborted') || errorMessage.includes('abort')) {
+      resetModule();
+    }
+    
     return {
       success: false,
       geometry: null,

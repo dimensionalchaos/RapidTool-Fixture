@@ -15,10 +15,6 @@ export default defineConfig(({ mode }) => ({
       "@": path.resolve(__dirname, "./src"),
     },
   },
-  define: {
-    // Polyfill for Node.js global variable (needed by taubin-smooth)
-    global: 'globalThis',
-  },
   optimizeDeps: {
     exclude: ['manifold-3d'],
   },

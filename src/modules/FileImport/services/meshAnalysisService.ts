@@ -8,8 +8,6 @@
 import * as THREE from 'three';
 import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { simplifyGeometry } from '@/lib/fastQuadricSimplify';
-// @ts-ignore - taubin-smooth doesn't have types
-import taubinSmooth from 'taubin-smooth';
 
 // ============================================================================
 // Types & Interfaces
@@ -51,25 +49,31 @@ export interface SmoothingResult {
   success: boolean;
   geometry: THREE.BufferGeometry | null;
   iterations: number;
-  method?: 'taubin' | 'hc' | 'combined';
+  method?: 'taubin' | 'hc' | 'combined' | 'gaussian';
   error?: string;
 }
 
 export interface SmoothingOptions {
-  /** Number of iterations */
+  /** Number of iterations (used for non-combined methods) */
   iterations: number;
-  /** Smoothing method - note: taubin-smooth library only supports Taubin method */
-  method: 'taubin' | 'hc' | 'combined';
-  /** Pass band frequency (0-1, lower = smoother, default 0.1) */
-  passBand?: number;
-  /** Taubin lambda (shrink factor, 0-1) - legacy, use passBand instead */
+  /** Smoothing method */
+  method: 'taubin' | 'hc' | 'combined' | 'gaussian';
+  /** Taubin lambda (shrink factor, 0-1) */
   lambda?: number;
-  /** Taubin mu (inflate factor, negative) - legacy, use passBand instead */
+  /** Taubin mu (inflate factor, negative) */
   mu?: number;
-  /** HC alpha (original position weight, 0-1) - legacy, use passBand instead */
+  /** HC alpha (original position weight, 0-1) */
   alpha?: number;
-  /** HC beta (difference damping, 0-1) - legacy, use passBand instead */
+  /** HC beta (difference damping, 0-1) */
   beta?: number;
+  /** Gaussian sigma (standard deviation for weight falloff) */
+  sigma?: number;
+  /** Combined method: Gaussian pass iterations */
+  gaussianIterations?: number;
+  /** Combined method: Laplacian pass iterations */
+  laplacianIterations?: number;
+  /** Combined method: Taubin pass iterations */
+  taubinIterations?: number;
 }
 
 export interface ProcessingProgress {
@@ -446,34 +450,425 @@ export async function decimateMesh(
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown decimation error';
     console.error('Decimation error:', error);
+    
+    // Return the original geometry with a warning instead of failing completely
+    const positions = geometry.getAttribute('position');
+    const indices = geometry.index;
+    const originalTriangles = indices ? indices.count / 3 : positions.count / 3;
+    
+    console.warn('[decimateMesh] Decimation failed, returning original geometry');
     return {
-      success: false,
-      geometry: null,
-      originalTriangles: 0,
-      finalTriangles: 0,
+      success: true, // Mark as success but with no reduction
+      geometry: geometry.clone(),
+      originalTriangles,
+      finalTriangles: originalTriangles,
       reductionPercent: 0,
-      error: errorMessage,
+      error: `Decimation skipped: ${errorMessage}`,
     };
   }
 }
 
 // ============================================================================
-// Mesh Smoothing using taubin-smooth library
+// Mesh Smoothing - Custom Taubin/HC/Combined Implementation
 // ============================================================================
 
 /**
- * Performs mesh smoothing using the taubin-smooth library.
+ * Build vertex adjacency map for smoothing operations.
+ * For non-indexed geometry, we need to find vertices that share the same position
+ * and treat them as the same vertex for adjacency purposes.
  * 
- * This uses Mikola Lysenko's implementation of Taubin's mesh smoothing algorithm
- * which is fast, well-tested, and produces high-quality results.
+ * Returns:
+ * - adjacency: Map from vertex index to set of neighbor vertex indices
+ * - vertexGroups: Array where vertexGroups[i] contains all vertex indices that share the same position as vertex i
+ */
+function buildAdjacencyMap(
+  positions: Float32Array,
+  vertexCount: number,
+  triangleCount: number
+): { adjacency: Map<number, Set<number>>, vertexGroups: number[][] } {
+  // First, create a map from position key to list of vertex indices at that position
+  const positionToVertices = new Map<string, number[]>();
+  const vertexToPositionKey = new Map<number, string>();
+  
+  const precision = 6; // decimal places for position comparison
+  
+  for (let i = 0; i < vertexCount; i++) {
+    const x = positions[i * 3];
+    const y = positions[i * 3 + 1];
+    const z = positions[i * 3 + 2];
+    const key = `${x.toFixed(precision)},${y.toFixed(precision)},${z.toFixed(precision)}`;
+    
+    vertexToPositionKey.set(i, key);
+    
+    if (!positionToVertices.has(key)) {
+      positionToVertices.set(key, []);
+    }
+    positionToVertices.get(key)!.push(i);
+  }
+  
+  // Create vertexGroups array - for each vertex, store all vertices at the same position
+  const vertexGroups: number[][] = new Array(vertexCount);
+  for (let i = 0; i < vertexCount; i++) {
+    const posKey = vertexToPositionKey.get(i)!;
+    vertexGroups[i] = positionToVertices.get(posKey)!;
+  }
+  
+  // Build adjacency based on triangles, but use position keys to find all vertices at each position
+  const positionAdjacency = new Map<string, Set<string>>();
+  
+  // Initialize sets for each unique position
+  for (const key of positionToVertices.keys()) {
+    positionAdjacency.set(key, new Set());
+  }
+  
+  // For each triangle, add adjacency between positions
+  for (let t = 0; t < triangleCount; t++) {
+    const i0 = t * 3;
+    const i1 = t * 3 + 1;
+    const i2 = t * 3 + 2;
+    
+    const key0 = vertexToPositionKey.get(i0)!;
+    const key1 = vertexToPositionKey.get(i1)!;
+    const key2 = vertexToPositionKey.get(i2)!;
+    
+    // Add edges between positions (bidirectional)
+    if (key0 !== key1) {
+      positionAdjacency.get(key0)!.add(key1);
+      positionAdjacency.get(key1)!.add(key0);
+    }
+    if (key1 !== key2) {
+      positionAdjacency.get(key1)!.add(key2);
+      positionAdjacency.get(key2)!.add(key1);
+    }
+    if (key2 !== key0) {
+      positionAdjacency.get(key2)!.add(key0);
+      positionAdjacency.get(key0)!.add(key2);
+    }
+  }
+  
+  // Convert position adjacency back to vertex adjacency
+  // Each vertex gets neighbors from all vertices at neighboring positions
+  const adjacency = new Map<number, Set<number>>();
+  
+  for (let i = 0; i < vertexCount; i++) {
+    adjacency.set(i, new Set());
+  }
+  
+  for (let i = 0; i < vertexCount; i++) {
+    const posKey = vertexToPositionKey.get(i)!;
+    const neighborPosKeys = positionAdjacency.get(posKey)!;
+    
+    for (const neighborPosKey of neighborPosKeys) {
+      // Add all vertices at the neighboring position as neighbors
+      const neighborVertices = positionToVertices.get(neighborPosKey)!;
+      for (const nv of neighborVertices) {
+        adjacency.get(i)!.add(nv);
+      }
+    }
+  }
+  
+  return { adjacency, vertexGroups };
+}
+
+/**
+ * Single pass of Laplacian smoothing.
+ * Moves each vertex toward the centroid of its neighbors in XY plane only.
+ * Uses vertex groups to ensure all vertices at the same original position move together.
+ * Note: In Three.js Y is up, so we smooth X and Z (horizontal plane), preserving Y (vertical).
+ */
+function laplacianPass(
+  positions: Float32Array,
+  adjacency: Map<number, Set<number>>,
+  vertexGroups: number[][],
+  factor: number,
+  vertexCount: number
+): Float32Array {
+  const newPositions = new Float32Array(positions.length);
+  const processed = new Set<number>(); // Track which vertices we've processed (by their group's first vertex)
+  
+  for (let i = 0; i < vertexCount; i++) {
+    // Get the vertex group for this vertex
+    const group = vertexGroups[i];
+    const firstInGroup = group[0];
+    
+    // Skip if we already processed this group
+    if (processed.has(firstInGroup)) {
+      // Copy the already computed new position from the first vertex in the group
+      newPositions[i * 3] = newPositions[firstInGroup * 3];
+      newPositions[i * 3 + 1] = newPositions[firstInGroup * 3 + 1];
+      newPositions[i * 3 + 2] = newPositions[firstInGroup * 3 + 2];
+      continue;
+    }
+    
+    processed.add(firstInGroup);
+    
+    const x = positions[i * 3];
+    const y = positions[i * 3 + 1]; // Y is up in Three.js - preserve this
+    const z = positions[i * 3 + 2];
+    
+    const neighbors = adjacency.get(i);
+    if (!neighbors || neighbors.size === 0) {
+      // No neighbors, keep original position for all in group
+      for (const vi of group) {
+        newPositions[vi * 3] = x;
+        newPositions[vi * 3 + 1] = y;
+        newPositions[vi * 3 + 2] = z;
+      }
+      continue;
+    }
+    
+    // Calculate centroid of unique neighbor groups in XY plane (X and Z in Three.js)
+    const processedNeighborGroups = new Set<number>();
+    let cx = 0, cz = 0;
+    let count = 0;
+    
+    for (const ni of neighbors) {
+      const neighborGroup = vertexGroups[ni];
+      const neighborFirst = neighborGroup[0];
+      
+      // Only count each neighbor group once
+      if (!processedNeighborGroups.has(neighborFirst)) {
+        processedNeighborGroups.add(neighborFirst);
+        cx += positions[ni * 3];
+        // Skip Y (index + 1) - we don't smooth in vertical direction
+        cz += positions[ni * 3 + 2];
+        count++;
+      }
+    }
+    
+    if (count > 0) {
+      cx /= count;
+      cz /= count;
+      
+      // Move vertex toward centroid by factor - only in XY plane (X and Z)
+      const newX = x + factor * (cx - x);
+      const newZ = z + factor * (cz - z);
+      // Y (vertical) is preserved - no smoothing in up direction
+      
+      // Apply to all vertices in this group
+      for (const vi of group) {
+        newPositions[vi * 3] = newX;
+        newPositions[vi * 3 + 1] = y; // Preserve original Y (vertical)
+        newPositions[vi * 3 + 2] = newZ;
+      }
+    } else {
+      // No valid neighbors, keep original
+      for (const vi of group) {
+        newPositions[vi * 3] = x;
+        newPositions[vi * 3 + 1] = y;
+        newPositions[vi * 3 + 2] = z;
+      }
+    }
+  }
+  
+  return newPositions;
+}
+
+/**
+ * Taubin smoothing: alternates shrinking (λ) and inflating (μ) passes.
+ * This prevents excessive shrinkage that occurs with pure Laplacian smoothing.
+ */
+function taubinSmoothing(
+  positions: Float32Array,
+  adjacency: Map<number, Set<number>>,
+  vertexGroups: number[][],
+  iterations: number,
+  lambda: number,
+  mu: number,
+  vertexCount: number
+): Float32Array {
+  let current = positions;
+  
+  for (let iter = 0; iter < iterations; iter++) {
+    // Shrink pass (λ > 0)
+    current = laplacianPass(current, adjacency, vertexGroups, lambda, vertexCount);
+    // Inflate pass (μ < 0, so we use -mu to get positive inflation)
+    current = laplacianPass(current, adjacency, vertexGroups, mu, vertexCount);
+  }
+  
+  return current;
+}
+
+/**
+ * HC (Humphrey's Classes) Laplacian smoothing.
+ * Uses original positions as a constraint to preserve volume and features.
+ * 
+ * @param alpha - Weight of original position (0-1). Higher = more original shape preservation.
+ * @param beta - Weight of difference damping (0-1). Higher = more smoothing correction.
+ */
+function hcSmoothing(
+  positions: Float32Array,
+  originalPositions: Float32Array,
+  adjacency: Map<number, Set<number>>,
+  vertexGroups: number[][],
+  iterations: number,
+  alpha: number,
+  beta: number,
+  vertexCount: number
+): Float32Array {
+  let p: Float32Array = new Float32Array(positions); // Current positions
+  let q: Float32Array = new Float32Array(positions); // Previous positions
+  
+  for (let iter = 0; iter < iterations; iter++) {
+    // Step 1: Standard Laplacian smoothing to get q (already XY-only in laplacianPass)
+    const newQ = laplacianPass(p, adjacency, vertexGroups, 1.0, vertexCount);
+    q = newQ;
+    
+    // Step 2: Calculate b = q - (α * original + (1-α) * p) - only for X and Z
+    // Y (vertical) is not smoothed, so we don't need b for Y
+    const b = new Float32Array(vertexCount * 3);
+    for (let i = 0; i < vertexCount; i++) {
+      const idx = i * 3;
+      // X component
+      b[idx] = q[idx] - (alpha * originalPositions[idx] + (1 - alpha) * p[idx]);
+      // Y component - set to 0 since we don't smooth vertically
+      b[idx + 1] = 0;
+      // Z component
+      b[idx + 2] = q[idx + 2] - (alpha * originalPositions[idx + 2] + (1 - alpha) * p[idx + 2]);
+    }
+    
+    // Step 3: Compute average of b for neighbors and apply correction - only for X and Z
+    for (let i = 0; i < vertexCount; i++) {
+      const neighbors = adjacency.get(i);
+      if (!neighbors || neighbors.size === 0) {
+        p[i * 3] = q[i * 3] - b[i * 3];
+        // Y is preserved from q (which preserves from laplacianPass)
+        p[i * 3 + 1] = q[i * 3 + 1];
+        p[i * 3 + 2] = q[i * 3 + 2] - b[i * 3 + 2];
+        continue;
+      }
+      
+      // Average b of neighbors - only X and Z
+      let avgBx = 0, avgBz = 0;
+      for (const ni of neighbors) {
+        avgBx += b[ni * 3];
+        avgBz += b[ni * 3 + 2];
+      }
+      avgBx /= neighbors.size;
+      avgBz /= neighbors.size;
+      
+      // p = q - (β * b + (1-β) * avgB) - only for X and Z
+      const idx = i * 3;
+      p[idx] = q[idx] - (beta * b[idx] + (1 - beta) * avgBx);
+      // Y is preserved - no smoothing in vertical direction
+      p[idx + 1] = q[idx + 1];
+      p[idx + 2] = q[idx + 2] - (beta * b[idx + 2] + (1 - beta) * avgBz);
+    }
+  }
+  
+  return p;
+}
+
+/**
+ * Gaussian filter smoothing - weighted average based on distance in XY plane.
+ * Vertices closer to the center have more influence than farther ones.
+ * Produces smoother results than mean filter while preserving features better.
+ * 
+ * @param sigma - Standard deviation for Gaussian weight calculation (larger = more smoothing)
+ */
+function gaussianSmoothing(
+  positions: Float32Array,
+  adjacency: Map<number, Set<number>>,
+  vertexGroups: number[][],
+  iterations: number,
+  sigma: number,
+  vertexCount: number
+): Float32Array {
+  let current = new Float32Array(positions);
+  const sigma2 = 2 * sigma * sigma;
+  
+  for (let iter = 0; iter < iterations; iter++) {
+    const newPositions = new Float32Array(current.length);
+    const processed = new Set<number>();
+    
+    for (let i = 0; i < vertexCount; i++) {
+      const group = vertexGroups[i];
+      const firstInGroup = group[0];
+      
+      if (processed.has(firstInGroup)) {
+        newPositions[i * 3] = newPositions[firstInGroup * 3];
+        newPositions[i * 3 + 1] = newPositions[firstInGroup * 3 + 1];
+        newPositions[i * 3 + 2] = newPositions[firstInGroup * 3 + 2];
+        continue;
+      }
+      
+      processed.add(firstInGroup);
+      
+      const x = current[i * 3];
+      const y = current[i * 3 + 1]; // Y preserved (vertical)
+      const z = current[i * 3 + 2];
+      
+      const neighbors = adjacency.get(i);
+      if (!neighbors || neighbors.size === 0) {
+        for (const vi of group) {
+          newPositions[vi * 3] = x;
+          newPositions[vi * 3 + 1] = y;
+          newPositions[vi * 3 + 2] = z;
+        }
+        continue;
+      }
+      
+      // Gaussian-weighted average in XY plane
+      const processedNeighborGroups = new Set<number>();
+      let weightedSumX = x; // Self weight is 1.0
+      let weightedSumZ = z;
+      let totalWeight = 1.0;
+      
+      for (const ni of neighbors) {
+        const neighborGroup = vertexGroups[ni];
+        const neighborFirst = neighborGroup[0];
+        
+        if (!processedNeighborGroups.has(neighborFirst)) {
+          processedNeighborGroups.add(neighborFirst);
+          
+          const nx = current[ni * 3];
+          const nz = current[ni * 3 + 2];
+          
+          // Calculate distance in XY plane (X and Z in Three.js)
+          const dx = nx - x;
+          const dz = nz - z;
+          const distSq = dx * dx + dz * dz;
+          
+          // Gaussian weight based on distance
+          const weight = Math.exp(-distSq / sigma2);
+          
+          weightedSumX += nx * weight;
+          weightedSumZ += nz * weight;
+          totalWeight += weight;
+        }
+      }
+      
+      const newX = weightedSumX / totalWeight;
+      const newZ = weightedSumZ / totalWeight;
+      
+      for (const vi of group) {
+        newPositions[vi * 3] = newX;
+        newPositions[vi * 3 + 1] = y; // Preserve Y (vertical)
+        newPositions[vi * 3 + 2] = newZ;
+      }
+    }
+    
+    current = newPositions;
+  }
+  
+  return current;
+}
+
+/**
+ * Performs mesh smoothing using Taubin, HC, Combined, or Gaussian methods.
+ * All methods operate only in XY plane (X and Z in Three.js), preserving vertical (Y) positions.
+ * 
+ * Methods:
+ * - taubin: Alternates shrinking (λ) and inflating (μ) passes. Good basic smoothing.
+ * - hc: HC Laplacian uses original positions as constraint. Better at preserving volume.
+ * - combined: Gaussian → Laplacian → Taubin sequence. Best overall quality.
+ * - gaussian: Distance-weighted smoothing. Good for noise reduction.
  * 
  * @param geometry - The input BufferGeometry
  * @param options - Smoothing options or number of iterations (for backward compat)
- * @param lambdaOrProgress - Progress callback (backward compat)
+ * @param lambdaOrProgress - Lambda value or progress callback (backward compat)
  * @param onProgress - Optional progress callback
  * @returns SmoothingResult with the smoothed geometry
- * 
- * @see https://github.com/mikolalysenko/taubin-smooth
  */
 export async function laplacianSmooth(
   geometry: THREE.BufferGeometry,
@@ -488,7 +883,8 @@ export async function laplacianSmooth(
   if (typeof options === 'number') {
     opts = {
       iterations: options,
-      method: 'taubin',
+      method: 'combined',
+      lambda: typeof lambdaOrProgress === 'number' ? lambdaOrProgress : 0.5,
     };
     progressCb = typeof lambdaOrProgress === 'function' ? lambdaOrProgress : onProgress;
   } else {
@@ -498,113 +894,96 @@ export async function laplacianSmooth(
   
   const {
     iterations = 5,
-    passBand = 0.1, // taubin-smooth's passBand parameter (0-1, lower = more smoothing)
+    method = 'combined',
+    lambda = 0.5,
+    mu = -0.53, // Slightly larger than -lambda to prevent shrinkage
+    alpha = 0.5,
+    beta = 0.5,
+    sigma = 1.0, // Gaussian sigma for weight falloff
   } = opts;
   
   try {
-    reportProgress(progressCb, 'smoothing', 0, 'Starting Taubin smoothing...');
+    reportProgress(progressCb, 'smoothing', 0, `Starting ${method} smoothing...`);
     
     // Clone geometry to avoid modifying the original
-    let workGeometry = geometry.clone();
-    
-    // Convert to indexed geometry if not already
-    if (!workGeometry.index) {
-      workGeometry = mergeVertices(workGeometry);
-    }
-    
-    // If still no index, create one manually
-    if (!workGeometry.index) {
-      const posAttr = workGeometry.getAttribute('position');
-      const vertexCount = posAttr.count;
-      
-      const vertexMap = new Map<string, number>();
-      const uniquePositions: number[] = [];
-      const indexMap: number[] = [];
-      
-      for (let i = 0; i < vertexCount; i++) {
-        const x = posAttr.getX(i);
-        const y = posAttr.getY(i);
-        const z = posAttr.getZ(i);
-        const key = `${x.toFixed(6)},${y.toFixed(6)},${z.toFixed(6)}`;
-        
-        if (vertexMap.has(key)) {
-          indexMap.push(vertexMap.get(key)!);
-        } else {
-          const newIndex = uniquePositions.length / 3;
-          uniquePositions.push(x, y, z);
-          vertexMap.set(key, newIndex);
-          indexMap.push(newIndex);
-        }
-      }
-      
-      const indexedGeometry = new THREE.BufferGeometry();
-      indexedGeometry.setAttribute('position', new THREE.Float32BufferAttribute(uniquePositions, 3));
-      indexedGeometry.setIndex(indexMap);
-      workGeometry.dispose();
-      workGeometry = indexedGeometry;
-    }
-    
-    reportProgress(progressCb, 'smoothing', 10, 'Converting to taubin-smooth format...');
-    
+    const workGeometry = geometry.clone();
     const posAttr = workGeometry.getAttribute('position') as THREE.BufferAttribute;
-    const indexAttr = workGeometry.index!;
+    const positions = posAttr.array as Float32Array;
     const vertexCount = posAttr.count;
-    const triangleCount = indexAttr.count / 3;
+    const triangleCount = vertexCount / 3;
     
-    // Convert to taubin-smooth format
-    // positions: [[x,y,z], [x,y,z], ...]
-    // cells: [[i0,i1,i2], [i0,i1,i2], ...]
-    const positions: [number, number, number][] = [];
-    for (let i = 0; i < vertexCount; i++) {
-      positions.push([posAttr.getX(i), posAttr.getY(i), posAttr.getZ(i)]);
+    reportProgress(progressCb, 'smoothing', 10, 'Building adjacency map...');
+    
+    // Build adjacency map (handles non-indexed geometry by grouping vertices by position)
+    const { adjacency, vertexGroups } = buildAdjacencyMap(positions, vertexCount, triangleCount);
+    
+    reportProgress(progressCb, 'smoothing', 20, `Running ${method} smoothing (${iterations} iterations)...`);
+    
+    let smoothedPositions: Float32Array;
+    
+    switch (method) {
+      case 'taubin':
+        smoothedPositions = taubinSmoothing(
+          positions, adjacency, vertexGroups, iterations, lambda, mu, vertexCount
+        );
+        break;
+        
+      case 'hc':
+        smoothedPositions = hcSmoothing(
+          positions, new Float32Array(positions), adjacency, vertexGroups, iterations, alpha, beta, vertexCount
+        );
+        break;
+      
+      case 'gaussian':
+        smoothedPositions = gaussianSmoothing(
+          positions, adjacency, vertexGroups, iterations, sigma, vertexCount
+        );
+        break;
+        
+      case 'combined':
+      default:
+        // Combined: Gaussian → Laplacian → Taubin sequence
+        // Use individual iteration counts if provided, otherwise distribute from iterations
+        const gaussianIters = opts.gaussianIterations ?? Math.max(1, Math.floor(iterations / 3));
+        const laplacianIters = opts.laplacianIterations ?? Math.max(1, Math.floor(iterations / 3));
+        const taubinIters = opts.taubinIterations ?? Math.max(1, iterations - gaussianIters - laplacianIters);
+        
+        // Pass 1: Gaussian for initial noise reduction
+        reportProgress(progressCb, 'smoothing', 25, `Gaussian pass (${gaussianIters} iterations)...`);
+        let current = gaussianSmoothing(
+          positions, adjacency, vertexGroups, gaussianIters, sigma, vertexCount
+        );
+        
+        // Pass 2: Laplacian for smoothing
+        reportProgress(progressCb, 'smoothing', 50, `Laplacian pass (${laplacianIters} iterations)...`);
+        for (let i = 0; i < laplacianIters; i++) {
+          current = laplacianPass(current, adjacency, vertexGroups, lambda, vertexCount);
+        }
+        
+        // Pass 3: Taubin to prevent shrinkage
+        reportProgress(progressCb, 'smoothing', 75, `Taubin pass (${taubinIters} iterations)...`);
+        smoothedPositions = taubinSmoothing(
+          current, adjacency, vertexGroups, taubinIters, lambda, mu, vertexCount
+        );
+        break;
     }
     
-    const cells: [number, number, number][] = [];
-    for (let i = 0; i < triangleCount; i++) {
-      cells.push([
-        indexAttr.getX(i * 3),
-        indexAttr.getX(i * 3 + 1),
-        indexAttr.getX(i * 3 + 2)
-      ]);
-    }
-    
-    reportProgress(progressCb, 'smoothing', 20, `Running ${iterations} Taubin iterations...`);
-    
-    // Run taubin-smooth
-    // The library modifies positions in-place and returns them
-    const smoothedPositions = taubinSmooth(cells, positions, {
-      iters: iterations,
-      passBand: passBand,
-    });
-    
-    reportProgress(progressCb, 'smoothing', 80, 'Creating smoothed geometry...');
-    
-    // Convert back to THREE.js geometry
-    const newPositions = new Float32Array(vertexCount * 3);
-    for (let i = 0; i < vertexCount; i++) {
-      newPositions[i * 3] = smoothedPositions[i][0];
-      newPositions[i * 3 + 1] = smoothedPositions[i][1];
-      newPositions[i * 3 + 2] = smoothedPositions[i][2];
-    }
+    reportProgress(progressCb, 'smoothing', 90, 'Updating geometry...');
     
     // Update positions in geometry
-    posAttr.array.set(newPositions);
+    posAttr.array.set(smoothedPositions);
     posAttr.needsUpdate = true;
     
     // Recompute normals
     workGeometry.computeVertexNormals();
     
-    // Convert back to non-indexed for compatibility
-    const finalGeometry = workGeometry.toNonIndexed();
-    workGeometry.dispose();
-    
     reportProgress(progressCb, 'smoothing', 100, 'Smoothing complete');
     
     return {
       success: true,
-      geometry: finalGeometry,
+      geometry: workGeometry,
       iterations,
-      method: 'taubin',
+      method,
     };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown smoothing error';

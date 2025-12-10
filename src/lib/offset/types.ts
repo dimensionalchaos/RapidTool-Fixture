@@ -71,16 +71,20 @@ export interface CavitySettings {
   enableDecimation: boolean;
   /** Enable Taubin smoothing to remove jagged edges */
   enableSmoothing: boolean;
-  /** Number of smoothing iterations */
+  /** Number of smoothing iterations (for non-combined methods) */
   smoothingIterations: number;
-  /** Smoothing method: 'taubin', 'hc', or 'combined' */
-  smoothingMethod: 'taubin' | 'hc' | 'combined';
-  /** Taubin pass band frequency (0-1, lower = smoother) */
-  smoothingPassBand: number;
-  /** HC smoothing alpha parameter (0-1, higher = more original shape preservation) - legacy */
+  /** Smoothing method: 'taubin', 'hc', 'combined', or 'gaussian' */
+  smoothingMethod: 'taubin' | 'hc' | 'combined' | 'gaussian';
+  /** HC smoothing alpha parameter (0-1, higher = more original shape preservation) */
   smoothingAlpha: number;
-  /** HC smoothing beta parameter (0-1, higher = more smoothing) - legacy */
+  /** HC smoothing beta parameter (0-1, higher = more smoothing) */
   smoothingBeta: number;
+  /** Combined method: Gaussian pass iterations */
+  combinedGaussianIterations: number;
+  /** Combined method: Laplacian pass iterations */
+  combinedLaplacianIterations: number;
+  /** Combined method: Taubin pass iterations */
+  combinedTaubinIterations: number;
 }
 
 export const DEFAULT_CAVITY_SETTINGS: CavitySettings = {
@@ -94,9 +98,11 @@ export const DEFAULT_CAVITY_SETTINGS: CavitySettings = {
   previewOpacity: 0.3,
   enableDecimation: true,
   enableSmoothing: true,
-  smoothingIterations: 10,
-  smoothingMethod: 'taubin',
-  smoothingPassBand: 0.1,
+  smoothingIterations: 5,
+  smoothingMethod: 'combined',
   smoothingAlpha: 0.5,
   smoothingBeta: 0.5,
+  combinedGaussianIterations: 6,
+  combinedLaplacianIterations: 2,
+  combinedTaubinIterations: 2,
 };
