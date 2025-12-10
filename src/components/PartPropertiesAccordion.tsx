@@ -44,6 +44,8 @@ interface PartPropertiesAccordionProps {
   modelColors?: Map<string, string>;
   partVisibility?: Map<string, boolean>;
   onPartVisibilityChange?: (partId: string, visible: boolean) => void;
+  baseplateVisible?: boolean;
+  onBaseplateVisibilityChange?: (visible: boolean) => void;
   // Cavity settings (simplified - main controls in CavityStepContent)
   cavitySettings?: CavitySettings;
   isCavityProcessing?: boolean;
@@ -70,6 +72,8 @@ const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({
   modelColors = new Map(),
   partVisibility = new Map(),
   onPartVisibilityChange,
+  baseplateVisible = true,
+  onBaseplateVisibilityChange,
   // Cavity props (simplified)
   cavitySettings = DEFAULT_CAVITY_SETTINGS,
   isCavityProcessing = false,
@@ -562,6 +566,8 @@ const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({
         baseplate={baseplate}
         onRemoveBaseplate={onRemoveBaseplate}
         onUpdateBaseplate={onUpdateBaseplate}
+        visible={baseplateVisible}
+        onVisibilityChange={onBaseplateVisibilityChange}
       />
 
       {/* Supports Accordion */}

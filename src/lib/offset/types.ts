@@ -73,6 +73,12 @@ export interface CavitySettings {
   rotationXZ: number;
   /** Rotation around X axis in degrees (YZ plane) - derived from part */
   rotationYZ: number;
+  /** Fill holes in input mesh before heightmap generation */
+  fillHoles: boolean;
+  /** Verify mesh is watertight/manifold */
+  verifyManifold: boolean;
+  /** Use Manifold 3D for mesh optimization */
+  useManifold: boolean;
   /** Show cavity preview mesh */
   showPreview: boolean;
   /** Preview mesh opacity (0-1) */
@@ -86,6 +92,9 @@ export const DEFAULT_CAVITY_SETTINGS: CavitySettings = {
   simplifyRatio: 0.8,
   rotationXZ: 0,
   rotationYZ: 0,
+  fillHoles: true,
+  verifyManifold: true,
+  useManifold: true,
   showPreview: true,
-  previewOpacity: 0.35,
+  previewOpacity: 0.3,
 };

@@ -24,6 +24,7 @@ interface ThreeDSceneProps {
   onModelColorAssigned?: (modelId: string, color: string) => void;
   partVisibility?: Map<string, boolean>;
   onPartVisibilityChange?: (partId: string, visible: boolean) => void;
+  baseplateVisible?: boolean;
   isDarkMode?: boolean;
   selectedSupportId?: string | null;
   onSupportSelect?: (supportId: string | null) => void;
@@ -604,6 +605,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   onModelColorAssigned,
   partVisibility = new Map(),
   onPartVisibilityChange,
+  baseplateVisible = true,
   isDarkMode = false,
   selectedSupportId,
   onSupportSelect,
@@ -787,6 +789,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   // Offset mesh preview (for visualizing the cavity cutting brush before CSG)
   const [offsetMeshPreview, setOffsetMeshPreview] = useState<THREE.Mesh | null>(null);
   const [offsetMeshProcessing, setOffsetMeshProcessing] = useState(false);
+  const [showOffsetPreview, setShowOffsetPreview] = useState(true); // Controls visibility of the offset mesh preview
   
   // Modified support geometries (after cavity subtraction)
   // Map from support ID to modified BufferGeometry
@@ -839,17 +842,21 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   }
 
   // Ensure supports use the baseplate TOP surface, not bottom: compute baseTopY from world bbox
+  // When baseplate is not visible, use the configured depth value as fallback
   React.useEffect(() => {
     const updateTopY = () => {
       const mesh = basePlateMeshRef.current;
+      // Fallback to basePlate.depth when mesh is not visible
+      const fallbackTopY = basePlate?.depth ?? 4;
+      
       if (!mesh) { 
-        setBaseTopY(prev => prev === 0 ? prev : 0); 
+        setBaseTopY(prev => Math.abs(prev - fallbackTopY) < 0.001 ? prev : fallbackTopY); 
         return; 
       }
       mesh.updateMatrixWorld(true);
       const box = new THREE.Box3().setFromObject(mesh);
       if (box.isEmpty()) { 
-        setBaseTopY(prev => prev === 0 ? prev : 0); 
+        setBaseTopY(prev => Math.abs(prev - fallbackTopY) < 0.001 ? prev : fallbackTopY); 
         return; 
       }
       const newTopY = box.max.y;
@@ -859,7 +866,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     updateTopY();
     const id = setInterval(updateTopY, 250);
     return () => clearInterval(id);
-  }, []);
+  }, [basePlate?.depth]);
 
   // Supports stay fixed in world space - they don't move when model moves
   // The baseplate will expand to include both the model and the supports
@@ -1279,27 +1286,34 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
           offsetDistance: settings.offsetDistance,
           pixelsPerUnit: Math.min(safePPU, 2000 / span),
           simplifyRatio: settings.simplifyRatio,
+          rotationXZ: settings.rotationXZ,
+          rotationYZ: settings.rotationYZ,
+          fillHoles: settings.fillHoles,
+          verifyManifold: settings.verifyManifold,
+          useManifold: settings.useManifold,
         });
 
-        // Generate the offset mesh with manifold verification for better CSG results
+        // Generate the offset mesh with user settings
         const result = await createOffsetMesh(vertices, {
           offsetDistance: settings.offsetDistance ?? 0.5,
           pixelsPerUnit: Math.min(safePPU, 2000 / span),
           simplifyRatio: settings.simplifyRatio ?? 0.8,
-          verifyManifold: true, // Enable manifold verification for watertight mesh
-          fillHoles: true,
-          useManifold: true, // Use Manifold 3D for final mesh optimization
+          rotationXZ: settings.rotationXZ ?? 0,
+          rotationYZ: settings.rotationYZ ?? 0,
+          verifyManifold: settings.verifyManifold ?? true,
+          fillHoles: settings.fillHoles ?? true,
+          useManifold: settings.useManifold ?? true,
           progressCallback: (current, total, stage) => {
             console.log(`[OffsetMesh] ${stage}: ${current}/${total}`);
           },
         });
 
         if (result.geometry) {
-          // Create preview material - translucent magenta to distinguish from model
+          // Create preview material - translucent blue to match color scheme
           const previewMaterial = new THREE.MeshStandardMaterial({
-            color: 0xff00ff, // Magenta for visibility
+            color: 0x3b82f6, // Blue-500 for visibility
             transparent: true,
-            opacity: settings.previewOpacity ?? 0.35,
+            opacity: settings.previewOpacity ?? 0.3,
             side: THREE.DoubleSide,
             depthWrite: false,
             roughness: 0.5,
@@ -1355,12 +1369,18 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       setOffsetMeshPreview(null);
     };
 
+    const handleToggleOffsetPreview = (e: CustomEvent<{ visible: boolean }>) => {
+      setShowOffsetPreview(e.detail.visible);
+    };
+
     window.addEventListener('generate-offset-mesh-preview', handleGenerateOffsetMesh as EventListener);
     window.addEventListener('clear-offset-mesh-preview', handleClearOffsetMesh as EventListener);
+    window.addEventListener('toggle-offset-preview', handleToggleOffsetPreview as EventListener);
     
     return () => {
       window.removeEventListener('generate-offset-mesh-preview', handleGenerateOffsetMesh as EventListener);
       window.removeEventListener('clear-offset-mesh-preview', handleClearOffsetMesh as EventListener);
+      window.removeEventListener('toggle-offset-preview', handleToggleOffsetPreview as EventListener);
     };
   }, [importedParts, offsetMeshPreview]);
 
@@ -1840,12 +1860,12 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   }, [supports, baseTopY, buildSupportMesh]);
 
   // Handle cavity subtraction - cut supports with the offset mesh using three-bvh-csg
-  // Note: Baseplate is NOT cut - only supports are cut by the cavity
-  // The part was already moved UP and supports extended during offset mesh preview generation
+  // Strategy: Cut each support individually, but extend supports slightly below baseplate
+  // to ensure the bottom cap is fully embedded, giving the CSG cut solid faces to connect to
   React.useEffect(() => {
     const handleExecuteCavitySubtraction = async (e: CustomEvent) => {
       const { settings } = e.detail || {};
-      const clearanceTolerance = settings?.offsetDistance ?? 0.5; // Default 0.5mm clearance
+      const clearanceTolerance = settings?.offsetDistance ?? 0.5;
       
       if (!offsetMeshPreview) {
         console.warn('[3DScene] No offset mesh preview available for cavity subtraction');
@@ -1865,22 +1885,18 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
         return;
       }
 
-      // Use three-bvh-csg for more robust CSG operations
+      // Use three-bvh-csg for CSG operations
       const { Brush, Evaluator, SUBTRACTION } = await import('three-bvh-csg');
       const evaluator = new Evaluator();
-      
-      // Configure evaluator for better edge handling
-      evaluator.useGroups = false; // Don't track material groups
+      evaluator.useGroups = false;
 
       try {
-        // Get the offset mesh geometry in world space
-        // The offset mesh was generated at the NEW part position (after moving up)
-        const cutterGeometry = offsetMeshPreview.geometry.clone();
+        // Get the cutter (offset mesh) geometry in world space
+        let cutterGeometry = offsetMeshPreview.geometry.clone();
         offsetMeshPreview.updateMatrixWorld(true);
         cutterGeometry.applyMatrix4(offsetMeshPreview.matrixWorld);
         
-        // Ensure cutter geometry is clean for CSG
-        // Convert to indexed geometry if not already
+        // Prepare cutter geometry
         if (!cutterGeometry.index) {
           const posAttr = cutterGeometry.getAttribute('position');
           const vertexCount = posAttr.count;
@@ -1888,17 +1904,13 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
           for (let i = 0; i < vertexCount; i++) indices[i] = i;
           cutterGeometry.setIndex(new THREE.BufferAttribute(indices, 1));
         }
-        
-        // Ensure cutter has UVs (required by three-bvh-csg)
         if (!cutterGeometry.getAttribute('uv')) {
           const position = cutterGeometry.getAttribute('position');
           const uvArray = new Float32Array(position.count * 2);
           cutterGeometry.setAttribute('uv', new THREE.BufferAttribute(uvArray, 2));
         }
-        
         cutterGeometry.computeVertexNormals();
         
-        // Create the cutter brush once (reused for all operations)
         const cutterBrush = new Brush(cutterGeometry);
         cutterBrush.updateMatrixWorld();
 
@@ -1906,63 +1918,56 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
         let successCount = 0;
         let errorCount = 0;
 
-        // Process each support (baseplate is NOT cut)
-        // Supports already have extended heights from preview generation
+        // Process each support individually
         for (const support of supports) {
           try {
-            // Build the full support geometry including fillet, already in world space
-            const supportGeometry = buildFullSupportGeometry(support, baseTopY);
-              if (!supportGeometry) {
-                console.warn(`[3DScene] Could not build geometry for support ${support.id}`);
-                continue;
-              }
-              
-              // Ensure support geometry is indexed for CSG
-              if (!supportGeometry.index) {
-                const posAttr = supportGeometry.getAttribute('position');
-                const vertexCount = posAttr.count;
-                const indices = new Uint32Array(vertexCount);
-                for (let i = 0; i < vertexCount; i++) indices[i] = i;
-                supportGeometry.setIndex(new THREE.BufferAttribute(indices, 1));
-              }
-              
-              // Ensure support has UVs
-              if (!supportGeometry.getAttribute('uv')) {
-                const position = supportGeometry.getAttribute('position');
-                const uvArray = new Float32Array(position.count * 2);
-                supportGeometry.setAttribute('uv', new THREE.BufferAttribute(uvArray, 2));
-              }
-              
-              supportGeometry.computeVertexNormals();
-              
-              // Create support brush
-              const supportBrush = new Brush(supportGeometry);
-              supportBrush.updateMatrixWorld();
+            // Build support geometry at its actual position
+            const supportGeometry = buildFullSupportGeometry(support, baseTopY, false);
+            if (!supportGeometry) {
+              errorCount++;
+              continue;
+            }
+            
+            // Prepare support geometry for CSG
+            if (!supportGeometry.index) {
+              const posAttr = supportGeometry.getAttribute('position');
+              const vertexCount = posAttr.count;
+              const indices = new Uint32Array(vertexCount);
+              for (let i = 0; i < vertexCount; i++) indices[i] = i;
+              supportGeometry.setIndex(new THREE.BufferAttribute(indices, 1));
+            }
+            if (!supportGeometry.getAttribute('uv')) {
+              const position = supportGeometry.getAttribute('position');
+              const uvArray = new Float32Array(position.count * 2);
+              supportGeometry.setAttribute('uv', new THREE.BufferAttribute(uvArray, 2));
+            }
+            supportGeometry.computeVertexNormals();
+            
+            // Create support brush
+            const supportBrush = new Brush(supportGeometry);
+            supportBrush.updateMatrixWorld();
 
-              // Perform CSG subtraction: support - cutter
-              const resultBrush = evaluator.evaluate(supportBrush, cutterBrush, SUBTRACTION);
+            // Perform CSG subtraction: support - cutter
+            const resultBrush = evaluator.evaluate(supportBrush, cutterBrush, SUBTRACTION);
+            
+            if (resultBrush && resultBrush.geometry) {
+              const resultGeometry = resultBrush.geometry.clone();
+              resultGeometry.computeVertexNormals();
               
-              if (resultBrush && resultBrush.geometry) {
-                const resultGeometry = resultBrush.geometry.clone();
-                resultGeometry.computeVertexNormals();
-                
-                // Store the geometry in world space - we'll render it without transforms
-                newModifiedGeometries.set(support.id, resultGeometry);
-                successCount++;
-              } else {
-                console.warn(`[3DScene] CSG subtraction returned null for support ${support.id}`);
-                errorCount++;
-              }
-            } catch (err) {
-              console.error(`[3DScene] Error processing support ${support.id}:`, err);
+              newModifiedGeometries.set(support.id, resultGeometry);
+              successCount++;
+            } else {
               errorCount++;
             }
+          } catch (err) {
+            console.error(`[3DScene] Error processing support ${support.id}:`, err);
+            errorCount++;
           }
+        }
 
-        // Update state with new modified geometries
+        // Update state with modified geometries
         setModifiedSupportGeometries(newModifiedGeometries);
 
-        // Clear the preview mesh after successful subtraction
         if (successCount > 0) {
           setOffsetMeshPreview(null);
         }
@@ -2628,8 +2633,8 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       {/* Scalable grid - sized based on combined model bounds (includes world positions) */}
       <ScalableGrid modelBounds={modelBounds} isDarkMode={isDarkMode} />
 
-      {/* Base plate - baseplate is NOT cut during cavity subtraction, only supports are */}
-      {basePlate && (
+      {/* Base plate */}
+      {basePlate && baseplateVisible && (
         <BasePlate
           key={`baseplate-${basePlate.id}`}
           type={basePlate.type}
@@ -2747,9 +2752,11 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
 
       {/* Supports rendering */}
       {supportsTrimPreview.length === 0
-        ? supports.map((s) => {
-            // Check if this support has a modified geometry (from cavity subtraction)
-            const modifiedGeometry = modifiedSupportGeometries.get(s.id);
+        ? (() => {
+            // Render individual supports (with modified geometry if CSG-cut)
+            return supports.map((s) => {
+              // Check if this support has a modified geometry (from individual cavity subtraction)
+              const modifiedGeometry = modifiedSupportGeometries.get(s.id);
             
             if (modifiedGeometry) {
               // Render the modified geometry - it's already in world space from the CSG operation
@@ -2795,7 +2802,8 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
                 }}
               />
             );
-          })
+          });
+        })()
         : supportsTrimPreview.map((mesh, idx) => <primitive key={`${mesh.uuid}-${idx}`} object={mesh} />)}
       
       {/* Support transform controls - XY plane only */}
@@ -2846,7 +2854,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       )}
 
       {/* Offset mesh preview (cavity cutting brush visualization) */}
-      {offsetMeshPreview && (
+      {offsetMeshPreview && showOffsetPreview && (
         <primitive object={offsetMeshPreview} />
       )}
 
@@ -2941,24 +2949,6 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
             <div className="w-10 h-10 rounded-full border-4 border-sky-300 border-t-sky-600 animate-spin shadow-md bg-white/10" />
             <span className="text-[11px] font-medium text-sky-200 drop-shadow-sm">
               Trimming supports...
-            </span>
-          </div>
-        </Html>
-      )}
-
-      {/* Processing indicator for offset mesh preview generation */}
-      {offsetMeshProcessing && (
-        <Html
-          center
-          style={{
-            pointerEvents: 'none',
-            zIndex: 9999,
-          }}
-        >
-          <div className="flex flex-col items-center gap-2">
-            <div className="w-10 h-10 rounded-full border-4 border-purple-300 border-t-purple-600 animate-spin shadow-md bg-white/10" />
-            <span className="text-[11px] font-medium text-purple-200 drop-shadow-sm">
-              Generating cavity preview...
             </span>
           </div>
         </Html>

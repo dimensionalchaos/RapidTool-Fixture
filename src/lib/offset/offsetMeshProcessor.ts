@@ -83,7 +83,11 @@ export async function createOffsetMesh(vertices: Float32Array, options: any): Pr
     const startTime = performance.now();
     
     // Pre-calculate rotation parameters
-    const actualYZ = 180 - rotationYZ;
+    // Baseline: 180° around X-axis is needed for correct coordinate system alignment
+    // User rotationXZ/rotationYZ are deltas from this baseline (-90 to +90)
+    const baselineYZ = 180;
+    const actualYZ = baselineYZ + rotationYZ;
+    // Only apply rotation if there's any rotation to apply (baseline or user-specified)
     const needsRotation = rotationXZ !== 0 || actualYZ !== 0;
     
     try {
@@ -445,9 +449,9 @@ export function calculateResolution(boundingBox, pixelsPerUnit, offsetDistance) 
 // ============================================
 
 /**
- * Create a rotation matrix from XZ and actualYZ angles
- * @param {number} xzAngleDeg - Rotation around Y axis (degrees)
- * @param {number} actualYZ - Actual rotation around X axis (degrees, pre-calculated: 180-input)
+ * Create a rotation matrix for tilt adjustments
+ * @param {number} xzAngleDeg - Rotation around Z axis (degrees) - tilts left/right
+ * @param {number} actualYZ - Actual rotation around X axis (degrees) - tilts front/back
  * @returns {THREE.Matrix4} Rotation matrix
  */
 function createRotationMatrix(xzAngleDeg, actualYZ) {
@@ -458,11 +462,11 @@ function createRotationMatrix(xzAngleDeg, actualYZ) {
         return matrix; // Identity matrix
     }
     
-    // Rotation order: Y axis first (XZ plane), then X axis (YZ plane)
+    // Rotation order: Z axis first (left/right tilt), then X axis (front/back tilt)
     if (xzAngleDeg !== 0) {
-        const rotY = new THREE.Matrix4();
-        rotY.makeRotationY(xzAngleDeg * Math.PI / 180);
-        matrix.multiply(rotY);
+        const rotZ = new THREE.Matrix4();
+        rotZ.makeRotationZ(xzAngleDeg * Math.PI / 180);
+        matrix.multiply(rotZ);
     }
     
     if (actualYZ !== 0) {
@@ -476,8 +480,8 @@ function createRotationMatrix(xzAngleDeg, actualYZ) {
 
 /**
  * Create an inverse rotation matrix
- * @param {number} xzAngleDeg - Rotation around Y axis (degrees)
- * @param {number} actualYZ - Actual rotation around X axis (degrees)
+ * @param {number} xzAngleDeg - Rotation around Z axis (degrees) - tilts left/right
+ * @param {number} actualYZ - Actual rotation around X axis (degrees) - tilts front/back
  * @returns {THREE.Matrix4} Inverse rotation matrix
  */
 function createInverseRotationMatrix(xzAngleDeg, actualYZ) {
@@ -496,9 +500,9 @@ function createInverseRotationMatrix(xzAngleDeg, actualYZ) {
     }
     
     if (xzAngleDeg !== 0) {
-        const rotY = new THREE.Matrix4();
-        rotY.makeRotationY(-xzAngleDeg * Math.PI / 180);
-        matrix.multiply(rotY);
+        const rotZ = new THREE.Matrix4();
+        rotZ.makeRotationZ(-xzAngleDeg * Math.PI / 180);
+        matrix.multiply(rotZ);
     }
     
     return matrix;

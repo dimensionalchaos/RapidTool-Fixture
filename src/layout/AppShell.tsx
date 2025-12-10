@@ -148,6 +148,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
     const [importedParts, setImportedParts] = useState<ProcessedFile[]>([]);
     const [selectedPartId, setSelectedPartId] = useState<string | null>(null);
     const [partVisibility, setPartVisibility] = useState<Map<string, boolean>>(new Map());
+    const [baseplateVisible, setBaseplateVisible] = useState(true);
     const [isProcessing, setIsProcessing] = useState(false);
     const [fileError, setFileError] = useState<string | null>(null);
     const [isUnitsDialogOpen, setIsUnitsDialogOpen] = useState(false);
@@ -200,6 +201,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
     const [cavityClearance, setCavityClearance] = useState(0.5);
     const [cavitySettings, setCavitySettings] = useState<CavitySettings>(DEFAULT_CAVITY_SETTINGS);
     const [isCavityProcessing, setIsCavityProcessing] = useState(false);
+    const [isApplyingCavity, setIsApplyingCavity] = useState(false);
     const [hasCavityPreview, setHasCavityPreview] = useState(false);
 
     // Cavity settings handlers
@@ -231,17 +233,22 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
 
     const handleExecuteCavity = useCallback(() => {
       setIsCavityProcessing(true);
+      setIsApplyingCavity(true);
       window.dispatchEvent(new CustomEvent('execute-cavity-subtraction', { 
         detail: { settings: cavitySettings } 
       }));
       // Listen for completion
       const handleComplete = () => {
         setIsCavityProcessing(false);
+        setIsApplyingCavity(false);
         setHasCavityPreview(false);
         window.removeEventListener('cavity-subtraction-complete', handleComplete);
       };
       window.addEventListener('cavity-subtraction-complete', handleComplete);
-      setTimeout(() => setIsCavityProcessing(false), 60000);
+      setTimeout(() => {
+        setIsCavityProcessing(false);
+        setIsApplyingCavity(false);
+      }, 60000);
     }, [cavitySettings]);
 
     const handleOpenFilePicker = () => {
@@ -1169,6 +1176,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
                       onClearPreview={handleClearCavityPreview}
                       onExecuteCavity={handleExecuteCavity}
                       isProcessing={isCavityProcessing}
+                      isApplying={isApplyingCavity}
                       hasPreview={hasCavityPreview}
                     />
                   )}
@@ -1317,6 +1325,8 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
                   baseplate={currentBaseplate}
                   onRemoveBaseplate={() => currentBaseplate && handleBaseplateRemoved(currentBaseplate.id)}
                   onUpdateBaseplate={handleBaseplateUpdate}
+                  baseplateVisible={baseplateVisible}
+                  onBaseplateVisibilityChange={setBaseplateVisible}
                   supports={supports}
                   selectedSupportId={selectedSupportId}
                   onSupportSelect={setSelectedSupportId}

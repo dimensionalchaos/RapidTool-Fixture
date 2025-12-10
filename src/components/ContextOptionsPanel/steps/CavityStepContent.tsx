@@ -9,13 +9,11 @@ import { Switch } from '@/components/ui/switch';
 import { 
   AlertCircle, 
   Minus, 
-  Box, 
   Layers, 
   Eye, 
   EyeOff, 
   RefreshCw, 
   Settings2,
-  Loader2,
   ChevronDown,
   ChevronUp,
   SquaresSubtract
@@ -33,6 +31,7 @@ interface CavityStepContentProps {
   onClearPreview: () => void;
   onExecuteCavity: () => void;
   isProcessing?: boolean;
+  isApplying?: boolean;
   hasPreview?: boolean;
 }
 
@@ -47,6 +46,7 @@ const CavityStepContent: React.FC<CavityStepContentProps> = ({
   onClearPreview,
   onExecuteCavity,
   isProcessing = false,
+  isApplying = false,
   hasPreview = false,
 }) => {
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -118,16 +118,6 @@ const CavityStepContent: React.FC<CavityStepContentProps> = ({
         </Label>
         
         <div className="space-y-2">
-          {hasBaseplate && (
-            <Card className="tech-glass p-2">
-              <div className="flex items-center gap-2">
-                <Box className="w-4 h-4 text-blue-500" />
-                <span className="text-xs font-tech flex-1">Baseplate</span>
-                <Badge variant="default" className="text-[8px]">Ready</Badge>
-              </div>
-            </Card>
-          )}
-          
           {hasSupports && (
             <Card className="tech-glass p-2">
               <div className="flex items-center gap-2">
@@ -223,6 +213,94 @@ const CavityStepContent: React.FC<CavityStepContentProps> = ({
             />
           </div>
 
+          {/* Rotation XZ */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <Label className="text-[10px] font-tech text-muted-foreground">
+                Tilt Left/Right
+              </Label>
+              <span className="text-[10px] font-mono text-muted-foreground">
+                {settings.rotationXZ > 0 ? '+' : ''}{settings.rotationXZ}°
+              </span>
+            </div>
+            <Slider
+              value={[settings.rotationXZ]}
+              onValueChange={([value]) => handleSettingChange('rotationXZ', value)}
+              min={-90}
+              max={90}
+              step={5}
+              disabled={isProcessing}
+            />
+          </div>
+
+          {/* Rotation YZ */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <Label className="text-[10px] font-tech text-muted-foreground">
+                Tilt Front/Back
+              </Label>
+              <span className="text-[10px] font-mono text-muted-foreground">
+                {settings.rotationYZ > 0 ? '+' : ''}{settings.rotationYZ}°
+              </span>
+            </div>
+            <Slider
+              value={[settings.rotationYZ]}
+              onValueChange={([value]) => handleSettingChange('rotationYZ', value)}
+              min={-90}
+              max={90}
+              step={5}
+              disabled={isProcessing}
+            />
+          </div>
+
+          {/* Toggle Options */}
+          <div className="space-y-2 pt-2 border-t border-border/30">
+            {/* Fill Holes */}
+            <div className="flex items-center justify-between">
+              <Label className="text-[10px] font-tech text-muted-foreground">
+                Fill Holes
+              </Label>
+              <Switch
+                checked={settings.fillHoles}
+                onCheckedChange={(checked) => handleSettingChange('fillHoles', checked)}
+                disabled={isProcessing}
+              />
+            </div>
+            <p className="text-[8px] text-muted-foreground italic">
+              Repair holes in mesh before processing
+            </p>
+
+            {/* Watertight Check */}
+            <div className="flex items-center justify-between pt-1">
+              <Label className="text-[10px] font-tech text-muted-foreground">
+                Watertight Check
+              </Label>
+              <Switch
+                checked={settings.verifyManifold}
+                onCheckedChange={(checked) => handleSettingChange('verifyManifold', checked)}
+                disabled={isProcessing}
+              />
+            </div>
+            <p className="text-[8px] text-muted-foreground italic">
+              Verify mesh is manifold/watertight
+            </p>
+
+            {/* Mesh Optimization */}
+            <div className="flex items-center justify-between pt-1">
+              <Label className="text-[10px] font-tech text-muted-foreground">
+                Mesh Optimization
+              </Label>
+              <Switch
+                checked={settings.useManifold}
+                onCheckedChange={(checked) => handleSettingChange('useManifold', checked)}
+                disabled={isProcessing}
+              />
+            </div>
+            <p className="text-[8px] text-muted-foreground italic">
+              Use Manifold 3D for optimization
+            </p>
+          </div>
+
           {/* Reset Button */}
           <Button
             variant="outline"
@@ -246,54 +324,53 @@ const CavityStepContent: React.FC<CavityStepContentProps> = ({
           </Label>
           <Switch
             checked={settings.showPreview}
-            onCheckedChange={(checked) => handleSettingChange('showPreview', checked)}
+            onCheckedChange={(checked) => {
+              handleSettingChange('showPreview', checked);
+              // Dispatch event to toggle offset mesh visibility in 3DScene
+              window.dispatchEvent(new CustomEvent('toggle-offset-preview', { 
+                detail: { visible: checked } 
+              }));
+            }}
             disabled={isProcessing}
           />
         </div>
-
-        {settings.showPreview && (
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <Label className="text-[10px] font-tech text-muted-foreground">
-                Preview Opacity
-              </Label>
-              <span className="text-[10px] font-mono text-muted-foreground">
-                {Math.round(settings.previewOpacity * 100)}%
-              </span>
-            </div>
-            <Slider
-              value={[settings.previewOpacity]}
-              onValueChange={([value]) => handleSettingChange('previewOpacity', value)}
-              min={0.1}
-              max={1}
-              step={0.05}
-              disabled={isProcessing}
-            />
-          </div>
-        )}
       </div>
 
       {/* Action Buttons */}
       <div className="space-y-2 pt-2">
-        <Button
-          variant="outline"
-          size="sm"
-          className="w-full font-tech"
-          onClick={onGeneratePreview}
-          disabled={isProcessing}
-        >
-          {isProcessing ? (
-            <>
-              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-              Generating Preview...
-            </>
-          ) : (
-            <>
-              <RefreshCw className="w-4 h-4 mr-2" />
-              {hasPreview ? 'Regenerate Preview' : 'Generate Preview'}
-            </>
-          )}
-        </Button>
+        {isProcessing ? (
+          <Card className="tech-glass p-4 bg-primary/5 border-primary/30">
+            <div className="space-y-3">
+              <div className="flex items-center gap-3">
+                <div className="relative w-8 h-8">
+                  <div className="absolute inset-0 rounded-full border-2 border-primary/20" />
+                  <div className="absolute inset-0 rounded-full border-2 border-primary border-t-transparent animate-spin" />
+                </div>
+                <div className="flex-1">
+                  <p className="text-xs font-tech font-medium text-primary">
+                    {isApplying ? 'Applying Cavity' : 'Generating Preview'}
+                  </p>
+                  <p className="text-[10px] text-muted-foreground">
+                    {isApplying ? 'Cutting cavity from supports...' : 'Processing offset mesh...'}
+                  </p>
+                </div>
+              </div>
+              <div className="h-1.5 bg-primary/10 rounded-full overflow-hidden">
+                <div className="h-full bg-primary/60 rounded-full animate-pulse" style={{ width: '60%' }} />
+              </div>
+            </div>
+          </Card>
+        ) : (
+          <Button
+            variant="outline"
+            size="sm"
+            className="w-full font-tech"
+            onClick={onGeneratePreview}
+          >
+            <RefreshCw className="w-4 h-4 mr-2" />
+            {hasPreview ? 'Regenerate Preview' : 'Generate Preview'}
+          </Button>
+        )}
         
         {hasPreview && (
           <Button

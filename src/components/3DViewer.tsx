@@ -28,6 +28,7 @@ const ThreeDViewer: React.FC<ThreeDViewerProps> = ({
   const [importedParts, setImportedParts] = useState<ProcessedFile[]>([]);
   const [selectedPartId, setSelectedPartId] = useState<string | null>(null);
   const [partVisibility, setPartVisibility] = useState<Map<string, boolean>>(new Map());
+  const [baseplateVisible, setBaseplateVisible] = useState(true);
 
   // Listen for part-imported events from the context panel (new multi-part system)
   useEffect(() => {
@@ -75,12 +76,17 @@ const ThreeDViewer: React.FC<ThreeDViewerProps> = ({
       setPartVisibility(prev => new Map(prev).set(partId, visible));
     };
 
+    const handleBaseplateVisibilityChanged = (e: CustomEvent<{ visible: boolean }>) => {
+      setBaseplateVisible(e.detail.visible);
+    };
+
     window.addEventListener('part-imported', handlePartImported as EventListener);
     window.addEventListener('file-imported', handleFileImported as EventListener);
     window.addEventListener('session-reset', handleSessionReset);
     window.addEventListener('part-selected', handlePartSelected as EventListener);
     window.addEventListener('part-removed', handlePartRemoved as EventListener);
     window.addEventListener('part-visibility-changed', handlePartVisibilityChanged as EventListener);
+    window.addEventListener('baseplate-visibility-changed', handleBaseplateVisibilityChanged as EventListener);
 
     return () => {
       window.removeEventListener('part-imported', handlePartImported as EventListener);
@@ -89,6 +95,7 @@ const ThreeDViewer: React.FC<ThreeDViewerProps> = ({
       window.removeEventListener('part-selected', handlePartSelected as EventListener);
       window.removeEventListener('part-removed', handlePartRemoved as EventListener);
       window.removeEventListener('part-visibility-changed', handlePartVisibilityChanged as EventListener);
+      window.removeEventListener('baseplate-visibility-changed', handleBaseplateVisibilityChanged as EventListener);
     };
   }, []);
 
@@ -122,6 +129,7 @@ const ThreeDViewer: React.FC<ThreeDViewerProps> = ({
           onPartSelected={setSelectedPartId}
           onModelColorAssigned={onModelColorAssigned}
           partVisibility={partVisibility}
+          baseplateVisible={baseplateVisible}
           isDarkMode={resolvedTheme === 'dark'}
           selectedSupportId={selectedSupportId}
           onSupportSelect={onSupportSelect}

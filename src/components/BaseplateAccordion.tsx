@@ -7,7 +7,7 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Grid3X3, Square, Hexagon, Trash2, Maximize2, Move } from 'lucide-react';
+import { Grid3X3, Square, Hexagon, Trash2, Maximize2, Move, Eye, EyeOff } from 'lucide-react';
 
 interface BaseplateConfig {
   id: string;
@@ -20,18 +20,33 @@ interface BaseplateAccordionProps {
   baseplate: BaseplateConfig | null;
   onRemoveBaseplate?: () => void;
   onUpdateBaseplate?: (updates: Partial<BaseplateConfig>) => void;
+  visible?: boolean;
+  onVisibilityChange?: (visible: boolean) => void;
 }
 
 const BaseplateAccordion: React.FC<BaseplateAccordionProps> = ({
   baseplate,
   onRemoveBaseplate,
   onUpdateBaseplate,
+  visible = true,
+  onVisibilityChange,
 }) => {
   // Handle property changes
   const handlePropertyChange = useCallback((property: 'padding' | 'height', value: number) => {
     if (!baseplate || !onUpdateBaseplate) return;
     onUpdateBaseplate({ [property]: value });
   }, [baseplate, onUpdateBaseplate]);
+
+  // Handle visibility toggle
+  const handleVisibilityToggle = useCallback(() => {
+    if (onVisibilityChange) {
+      onVisibilityChange(!visible);
+      // Also dispatch event for 3D viewer
+      window.dispatchEvent(new CustomEvent('baseplate-visibility-changed', { 
+        detail: { visible: !visible } 
+      }));
+    }
+  }, [visible, onVisibilityChange]);
 
   // Empty state - no baseplate
   if (!baseplate) {
@@ -88,28 +103,62 @@ const BaseplateAccordion: React.FC<BaseplateAccordionProps> = ({
                   {baseplate.type === 'convex-hull' ? 'Convex Hull' : 'Rectangular'}
                 </p>
               </div>
-              {onRemoveBaseplate && (
-                <div
-                  role="button"
-                  tabIndex={0}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    e.preventDefault();
-                    onRemoveBaseplate();
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
+              <div className="flex items-center gap-0.5">
+                {/* Visibility toggle */}
+                {onVisibilityChange && (
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      e.preventDefault();
+                      handleVisibilityToggle();
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.stopPropagation();
+                        e.preventDefault();
+                        handleVisibilityToggle();
+                      }
+                    }}
+                    className={`w-6 h-6 p-0 flex items-center justify-center rounded cursor-pointer transition-colors ${
+                      !visible
+                        ? 'text-muted-foreground hover:text-foreground hover:bg-muted'
+                        : 'text-foreground hover:bg-muted'
+                    }`}
+                    title={visible ? "Hide baseplate" : "Show baseplate"}
+                  >
+                    {visible ? (
+                      <Eye className="w-3 h-3" />
+                    ) : (
+                      <EyeOff className="w-3 h-3" />
+                    )}
+                  </div>
+                )}
+                {/* Delete button */}
+                {onRemoveBaseplate && (
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    onClick={(e) => {
                       e.stopPropagation();
                       e.preventDefault();
                       onRemoveBaseplate();
-                    }
-                  }}
-                  className="w-6 h-6 p-0 flex items-center justify-center rounded text-destructive hover:text-destructive hover:bg-destructive/10 cursor-pointer"
-                  title="Remove baseplate"
-                >
-                  <Trash2 className="w-3 h-3" />
-                </div>
-              )}
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.stopPropagation();
+                        e.preventDefault();
+                        onRemoveBaseplate();
+                      }
+                    }}
+                    className="w-6 h-6 p-0 flex items-center justify-center rounded text-destructive hover:text-destructive hover:bg-destructive/10 cursor-pointer"
+                    title="Remove baseplate"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                  </div>
+                )}
+              </div>
             </div>
             
             {/* Properties */}
