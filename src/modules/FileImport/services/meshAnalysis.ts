@@ -1,7 +1,7 @@
 import * as THREE from 'three';
+import { simplifyGeometry } from '@/lib/fastQuadricSimplify';
 
-// Note: manifold-3d could be used for more advanced mesh operations in the future
-// For now, we use a custom implementation for mesh analysis, repair, and decimation
+// Note: Using Fast Quadric Mesh Simplification (WASM) for decimation
 
 export interface MeshAnalysisResult {
   isManifold: boolean;
@@ -292,8 +292,8 @@ export async function repairMesh(
 }
 
 /**
- * Decimate a mesh to reduce triangle count using edge collapse
- * Simple implementation that merges nearby vertices and removes small triangles
+ * Decimate a mesh to reduce triangle count using Fast Quadric Mesh Simplification (WASM)
+ * High-quality decimation that preserves mesh topology and surface detail
  */
 export async function decimateMesh(
   geometry: THREE.BufferGeometry,
@@ -304,8 +304,8 @@ export async function decimateMesh(
     onProgress?.({ stage: 'decimating', progress: 0, message: 'Starting mesh decimation...' });
     
     const positionAttr = geometry.getAttribute('position');
-    const positions = positionAttr.array as Float32Array;
-    const originalTriangles = positionAttr.count / 3;
+    const indices = geometry.index;
+    const originalTriangles = indices ? indices.count / 3 : positionAttr.count / 3;
     
     if (originalTriangles <= targetTriangles) {
       return {
@@ -317,123 +317,45 @@ export async function decimateMesh(
       };
     }
     
-    onProgress?.({ stage: 'decimating', progress: 10, message: 'Building vertex grid...' });
+    // Calculate target ratio
+    const targetRatio = targetTriangles / originalTriangles;
     
-    // Calculate decimation ratio
-    const ratio = targetTriangles / originalTriangles;
+    console.log(`[Decimation] Original: ${originalTriangles} triangles, Target: ${targetTriangles}, Ratio: ${targetRatio.toFixed(3)}`);
     
-    // Compute bounding box
-    geometry.computeBoundingBox();
-    const bbox = geometry.boundingBox!;
-    const size = new THREE.Vector3();
-    bbox.getSize(size);
-    
-    // Calculate grid cell size based on desired reduction
-    // More aggressive reduction = larger cells = more vertex merging
-    const cellSize = Math.max(size.x, size.y, size.z) * Math.pow(1 - ratio, 0.5) * 0.01;
-    
-    onProgress?.({ stage: 'decimating', progress: 20, message: 'Merging vertices...' });
-    
-    // Create a spatial hash grid for vertex merging
-    const vertexMap = new Map<string, number>();
-    const mergedPositions: number[] = [];
-    const indexMap = new Map<number, number>(); // original vertex index -> merged index
-    
-    const getGridKey = (x: number, y: number, z: number): string => {
-      const gx = Math.floor(x / cellSize);
-      const gy = Math.floor(y / cellSize);
-      const gz = Math.floor(z / cellSize);
-      return `${gx},${gy},${gz}`;
-    };
-    
-    // First pass: merge vertices
-    for (let i = 0; i < positionAttr.count; i++) {
-      const x = positions[i * 3];
-      const y = positions[i * 3 + 1];
-      const z = positions[i * 3 + 2];
-      
-      const key = getGridKey(x, y, z);
-      
-      if (vertexMap.has(key)) {
-        indexMap.set(i, vertexMap.get(key)!);
-      } else {
-        const newIndex = mergedPositions.length / 3;
-        mergedPositions.push(x, y, z);
-        vertexMap.set(key, newIndex);
-        indexMap.set(i, newIndex);
+    // Use Fast Quadric Mesh Simplification (WASM)
+    const result = await simplifyGeometry(geometry, {
+      ratio: targetRatio,
+      onProgress: (stage, percent, message) => {
+        // Map simplification progress to decimation progress
+        const mappedProgress = Math.round(percent * 0.9); // Leave 10% for final steps
+        onProgress?.({ stage: 'decimating', progress: mappedProgress, message });
       }
+    });
+    
+    if (!result.success || !result.geometry) {
+      throw new Error(result.error || 'Simplification failed');
     }
     
-    onProgress?.({ stage: 'decimating', progress: 50, message: 'Rebuilding triangles...' });
-    
-    // Second pass: rebuild triangles with merged vertices, removing degenerates
-    const newIndices: number[] = [];
-    const v0 = new THREE.Vector3();
-    const v1 = new THREE.Vector3();
-    const v2 = new THREE.Vector3();
-    const edge1 = new THREE.Vector3();
-    const edge2 = new THREE.Vector3();
-    const cross = new THREE.Vector3();
-    
-    for (let i = 0; i < originalTriangles; i++) {
-      const i0 = indexMap.get(i * 3)!;
-      const i1 = indexMap.get(i * 3 + 1)!;
-      const i2 = indexMap.get(i * 3 + 2)!;
-      
-      // Skip degenerate triangles (where vertices have been merged together)
-      if (i0 === i1 || i1 === i2 || i2 === i0) {
-        continue;
-      }
-      
-      // Check if triangle is degenerate (zero area)
-      v0.set(mergedPositions[i0 * 3], mergedPositions[i0 * 3 + 1], mergedPositions[i0 * 3 + 2]);
-      v1.set(mergedPositions[i1 * 3], mergedPositions[i1 * 3 + 1], mergedPositions[i1 * 3 + 2]);
-      v2.set(mergedPositions[i2 * 3], mergedPositions[i2 * 3 + 1], mergedPositions[i2 * 3 + 2]);
-      
-      edge1.subVectors(v1, v0);
-      edge2.subVectors(v2, v0);
-      cross.crossVectors(edge1, edge2);
-      
-      if (cross.lengthSq() < 1e-12) {
-        continue;
-      }
-      
-      newIndices.push(i0, i1, i2);
-    }
-    
-    onProgress?.({ stage: 'decimating', progress: 70, message: 'Creating optimized geometry...' });
-    
-    // Create indexed geometry
-    const decimatedGeometry = new THREE.BufferGeometry();
-    decimatedGeometry.setAttribute('position', new THREE.Float32BufferAttribute(mergedPositions, 3));
-    decimatedGeometry.setIndex(newIndices);
-    
-    onProgress?.({ stage: 'decimating', progress: 85, message: 'Recomputing normals...' });
-    
-    // Recompute normals
-    decimatedGeometry.computeVertexNormals();
-    
-    // Convert to non-indexed for consistency with original workflow
-    const nonIndexedGeometry = decimatedGeometry.toNonIndexed();
+    onProgress?.({ stage: 'decimating', progress: 95, message: 'Finalizing geometry...' });
     
     // Compute bounds tree if available
-    if (typeof (nonIndexedGeometry as any).computeBoundsTree === 'function') {
-      (nonIndexedGeometry as any).computeBoundsTree();
+    if (typeof (result.geometry as any).computeBoundsTree === 'function') {
+      (result.geometry as any).computeBoundsTree();
     }
     
     onProgress?.({ stage: 'decimating', progress: 100, message: 'Decimation complete' });
     
-    const finalTriangles = newIndices.length / 3;
-    const reductionPercent = ((originalTriangles - finalTriangles) / originalTriangles) * 100;
+    console.log(`[Decimation] Complete: ${result.originalTriangles} -> ${result.finalTriangles} triangles (${result.reductionPercent.toFixed(1)}% reduction)`);
     
     return {
       success: true,
-      decimatedGeometry: nonIndexedGeometry,
-      originalTriangles,
-      finalTriangles,
-      reductionPercent,
+      decimatedGeometry: result.geometry,
+      originalTriangles: result.originalTriangles,
+      finalTriangles: result.finalTriangles,
+      reductionPercent: result.reductionPercent,
     };
   } catch (error) {
+    console.error('[Decimation] Error:', error);
     return {
       success: false,
       decimatedGeometry: null,

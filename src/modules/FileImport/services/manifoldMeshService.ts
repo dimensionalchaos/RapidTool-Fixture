@@ -547,73 +547,40 @@ export async function repairAndDecimateMesh(
     // Step 2: Decimate if requested and (triangle count is above target OR forceDecimate is true)
     const shouldDecimate = options.decimate && (finalTriangles > targetTriangles || options.forceDecimate);
     if (shouldDecimate) {
-      onProgress?.({ stage: 'decimating', progress: 50, message: 'Starting decimation...' });
+      onProgress?.({ stage: 'decimating', progress: 50, message: 'Starting Fast Quadric decimation...' });
       await yieldToUI();
       
-      // First try Manifold3D decimation
-      let decimateResult = await decimateMeshWithManifold(
+      // Use Fast Quadric Mesh Simplification (WASM) - high quality QEM decimation
+      console.log('[ManifoldMeshService] Using Fast Quadric Mesh Simplification (WASM)...');
+      const fallbackResult = await fallbackDecimateMesh(
         currentGeometry,
         targetTriangles,
         (p) => {
           const mappedProgress = 50 + (p.progress * 0.4); // 50-90%
-          onProgress?.({ ...p, progress: mappedProgress });
-        },
-        options.forceDecimate // Pass force flag
+          onProgress?.({ stage: 'decimating', progress: mappedProgress, message: p.message || 'Decimating...' });
+        }
       );
       
-      // If Manifold fails, use fallback vertex clustering decimation
-      if (!decimateResult.success || !decimateResult.geometry) {
-        console.log('[ManifoldMeshService] Manifold decimation failed, trying fallback vertex clustering...');
-        onProgress?.({ stage: 'decimating', progress: 55, message: 'Using fallback decimation...' });
-        await yieldToUI();
-        
-        const fallbackResult = await fallbackDecimateMesh(
-          currentGeometry,
-          targetTriangles,
-          (p) => {
-            const mappedProgress = 55 + (p.progress * 0.35); // 55-90%
-            onProgress?.({ stage: 'decimating', progress: mappedProgress, message: p.message || 'Decimating...' });
-          }
-        );
-        
-        if (fallbackResult.success && fallbackResult.geometry) {
-          decimateResult = {
-            success: true,
-            geometry: fallbackResult.geometry,
-            originalTriangles: fallbackResult.originalTriangles,
-            finalTriangles: fallbackResult.finalTriangles,
-            reductionPercent: fallbackResult.reductionPercent,
-          };
-          actions.push('Used fallback vertex clustering (mesh was non-manifold)');
-          
-          // Try to repair the decimated mesh - it might be manifold now with fewer triangles
-          // Always attempt this if repair was requested, since the original repair failed
-          if (options.repair) {
-            console.log('[ManifoldMeshService] Attempting repair on decimated mesh (original was non-manifold)...');
-            onProgress?.({ stage: 'repairing', progress: 90, message: 'Repairing decimated mesh...' });
-            await yieldToUI();
-            
-            const postRepairResult = await repairMeshWithManifold(
-              fallbackResult.geometry,
-              (p) => {
-                const mappedProgress = 90 + (p.progress * 0.08); // 90-98%
-                onProgress?.({ ...p, progress: mappedProgress });
-              }
-            );
-            
-            if (postRepairResult.success && postRepairResult.geometry) {
-              // Use the repaired geometry
-              decimateResult.geometry = postRepairResult.geometry;
-              decimateResult.finalTriangles = postRepairResult.finalTriangles;
-              wasRepaired = true;
-              actions.push('Post-decimation repair successful (mesh is now manifold)');
-              console.log('[ManifoldMeshService] ✓ Post-decimation repair successful');
-            } else {
-              console.log('[ManifoldMeshService] Post-decimation repair failed:', postRepairResult.error);
-              actions.push('Post-decimation repair skipped (mesh still non-manifold)');
-            }
-          }
-        }
+      let decimateResult: ManifoldDecimationResult;
+      
+      if (fallbackResult.success && fallbackResult.geometry) {
+        decimateResult = {
+          success: true,
+          geometry: fallbackResult.geometry,
+          originalTriangles: fallbackResult.originalTriangles,
+          finalTriangles: fallbackResult.finalTriangles,
+          reductionPercent: fallbackResult.reductionPercent,
+        };
+        actions.push(`Fast Quadric decimation: ${fallbackResult.originalTriangles.toLocaleString()} → ${fallbackResult.finalTriangles.toLocaleString()} triangles`);
+      } else {
+        decimateResult = {
+          success: false,
+          geometry: null,
+          originalTriangles: finalTriangles,
+          finalTriangles: finalTriangles,
+          reductionPercent: 0,
+          error: fallbackResult.error || 'Fast Quadric decimation failed',
+        };
       }
       
       if (decimateResult.success && decimateResult.geometry) {
