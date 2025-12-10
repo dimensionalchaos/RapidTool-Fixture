@@ -8,13 +8,13 @@ import { ProcessedFile, ViewOrientation } from "@/modules/FileImport/types";
 import SelectableTransformControls from './SelectableTransformControls';
 import * as THREE from 'three';
 import SupportPlacement from './Supports/SupportPlacement';
-import SupportMesh from './Supports/SupportMeshes';
+import SupportMesh, { buildFullSupportGeometry } from './Supports/SupportMeshes';
 // SupportEditOverlay removed - supports are now moved via double-click gizmo
 import { SupportType, AnySupport } from './Supports/types';
 import { getSupportFootprintBounds, getSupportFootprintPoints } from './Supports/metrics';
 import { autoPlaceSupports } from './Supports/autoPlacement';
 import { CSGEngine } from '@/lib/csgEngine';
-import { createOffsetMesh, extractVertices } from '@/lib/offset/offsetMeshProcessor';
+import { createOffsetMesh, extractVertices, csgSubtract, initManifold } from '@/lib/offset';
 import SupportTransformControls from './Supports/SupportTransformControls';
 
 interface ThreeDSceneProps {
@@ -784,6 +784,15 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   // Cavity operations preview (for CSG operations)
   const [cavityPreview, setCavityPreview] = useState<THREE.Mesh | null>(null);
   
+  // Offset mesh preview (for visualizing the cavity cutting brush before CSG)
+  const [offsetMeshPreview, setOffsetMeshPreview] = useState<THREE.Mesh | null>(null);
+  const [offsetMeshProcessing, setOffsetMeshProcessing] = useState(false);
+  
+  // Modified support geometries (after cavity subtraction)
+  // Map from support ID to modified BufferGeometry
+  const [modifiedSupportGeometries, setModifiedSupportGeometries] = useState<Map<string, THREE.BufferGeometry>>(new Map());
+  const [cavitySubtractionProcessing, setCavitySubtractionProcessing] = useState(false);
+  
   // Support editing ref (kept for cleanup in event handlers)
   const editingSupportRef = useRef<AnySupport | null>(null);
   
@@ -1173,6 +1182,187 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     window.addEventListener('cavity-apply', handleApply as EventListener);
     return () => window.removeEventListener('cavity-apply', handleApply as EventListener);
   }, [importedParts]);
+
+  // Listen for offset mesh preview generation requests
+  React.useEffect(() => {
+    const handleGenerateOffsetMesh = async (e: CustomEvent) => {
+      const { settings } = e.detail || {};
+      if (!settings || !settings.enabled) {
+        setOffsetMeshPreview(null);
+        return;
+      }
+
+      // Get first part mesh with its world transform
+      const firstPartRef = importedParts.length > 0 ? modelMeshRefs.current.get(importedParts[0].id) : null;
+      const modelMesh = firstPartRef?.current;
+      if (!modelMesh) {
+        console.warn('[3DScene] Cannot generate offset mesh: no model mesh found');
+        setOffsetMeshPreview(null);
+        return;
+      }
+
+      setOffsetMeshProcessing(true);
+      
+      // Calculate how much to move the part up to achieve clearance from baseplate
+      // The goal is to have at least `clearanceTolerance` gap between part bottom and baseplate top
+      const clearanceTolerance = settings.offsetDistance ?? 0.5;
+      
+      // Get current part's lowest Y point (in world space)
+      modelMesh.updateMatrixWorld(true);
+      const geometry = modelMesh.geometry as THREE.BufferGeometry;
+      const tempGeometry = geometry.clone();
+      tempGeometry.applyMatrix4(modelMesh.matrixWorld);
+      tempGeometry.computeBoundingBox();
+      const partMinY = tempGeometry.boundingBox?.min.y ?? baseTopY;
+      tempGeometry.dispose();
+      
+      // Calculate current gap between part bottom and baseplate top
+      const currentGap = partMinY - baseTopY;
+      
+      // Determine how much to move up:
+      // - If currentGap >= clearanceTolerance: no movement needed (already has enough clearance)
+      // - If currentGap < clearanceTolerance: move up by (clearanceTolerance - currentGap)
+      const moveUpAmount = Math.max(0, clearanceTolerance - currentGap);
+      
+      if (moveUpAmount > 0) {
+        // Move the part UP by the calculated amount
+        importedParts.forEach(part => {
+          const partRef = modelMeshRefs.current.get(part.id);
+          if (partRef?.current) {
+            partRef.current.position.y += moveUpAmount;
+            partRef.current.updateMatrixWorld(true);
+          }
+        });
+        
+        // Extend all support heights by the same amount
+        // This ensures supports still reach the (now elevated) part
+        setSupports(prev => prev.map(s => ({
+          ...s,
+          height: (s as any).height + moveUpAmount
+        } as AnySupport)));
+      }
+
+      try {
+        // Update world matrix to ensure transforms are current
+        modelMesh.updateMatrixWorld(true);
+
+        // Get the geometry and extract vertices
+        const geometry = modelMesh.geometry as THREE.BufferGeometry;
+        
+        // We need to apply the world transform to the vertices before processing
+        // Create a clone of the geometry with world-space vertices
+        const worldGeometry = geometry.clone();
+        worldGeometry.applyMatrix4(modelMesh.matrixWorld);
+        
+        const vertices = extractVertices(worldGeometry);
+        
+        // Calculate safe resolution
+        worldGeometry.computeBoundingBox();
+        const box = worldGeometry.boundingBox ?? new THREE.Box3();
+        const size = box.getSize(new THREE.Vector3());
+        const span = Math.max(size.x, size.y, size.z);
+        
+        // Clamp pixelsPerUnit to avoid GPU memory issues
+        const requestedPPU = settings.pixelsPerUnit ?? 6;
+        const safePPU = Math.min(requestedPPU, 8);
+        const estimatedPixels = span * safePPU;
+        
+        if (!Number.isFinite(estimatedPixels) || estimatedPixels > 2000) {
+          console.warn('[3DScene] Offset mesh resolution too large, using lower resolution', {
+            span,
+            safePPU,
+            estimatedPixels,
+          });
+        }
+
+        console.log('[3DScene] Generating offset mesh preview...', {
+          offsetDistance: settings.offsetDistance,
+          pixelsPerUnit: Math.min(safePPU, 2000 / span),
+          simplifyRatio: settings.simplifyRatio,
+        });
+
+        // Generate the offset mesh with manifold verification for better CSG results
+        const result = await createOffsetMesh(vertices, {
+          offsetDistance: settings.offsetDistance ?? 0.5,
+          pixelsPerUnit: Math.min(safePPU, 2000 / span),
+          simplifyRatio: settings.simplifyRatio ?? 0.8,
+          verifyManifold: true, // Enable manifold verification for watertight mesh
+          fillHoles: true,
+          useManifold: true, // Use Manifold 3D for final mesh optimization
+          progressCallback: (current, total, stage) => {
+            console.log(`[OffsetMesh] ${stage}: ${current}/${total}`);
+          },
+        });
+
+        if (result.geometry) {
+          // Create preview material - translucent magenta to distinguish from model
+          const previewMaterial = new THREE.MeshStandardMaterial({
+            color: 0xff00ff, // Magenta for visibility
+            transparent: true,
+            opacity: settings.previewOpacity ?? 0.35,
+            side: THREE.DoubleSide,
+            depthWrite: false,
+            roughness: 0.5,
+            metalness: 0.1,
+          });
+
+          const previewMesh = new THREE.Mesh(result.geometry, previewMaterial);
+          
+          // The offset mesh is already in world space (we applied the transform before processing)
+          // No need to apply transform again
+          previewMesh.name = 'offset-mesh-preview';
+          
+          console.log(`[3DScene] Offset mesh generated: ${result.metadata.triangleCount} triangles in ${result.metadata.processingTime.toFixed(0)}ms`);
+          
+          setOffsetMeshPreview(previewMesh);
+          
+          // Notify completion
+          window.dispatchEvent(new CustomEvent('offset-mesh-preview-complete', { 
+            detail: { success: true, triangles: result.metadata.triangleCount } 
+          }));
+        } else {
+          console.warn('[3DScene] Offset mesh generation returned no geometry');
+          setOffsetMeshPreview(null);
+          window.dispatchEvent(new CustomEvent('offset-mesh-preview-complete', { 
+            detail: { success: false } 
+          }));
+        }
+
+        // Clean up cloned geometry
+        worldGeometry.dispose();
+      } catch (err) {
+        console.error('[3DScene] Failed to generate offset mesh preview:', err);
+        setOffsetMeshPreview(null);
+        window.dispatchEvent(new CustomEvent('offset-mesh-preview-complete', { 
+          detail: { success: false, error: err } 
+        }));
+      } finally {
+        setOffsetMeshProcessing(false);
+      }
+    };
+
+    const handleClearOffsetMesh = () => {
+      if (offsetMeshPreview) {
+        offsetMeshPreview.geometry?.dispose();
+        if (offsetMeshPreview.material) {
+          if (Array.isArray(offsetMeshPreview.material)) {
+            offsetMeshPreview.material.forEach(m => m.dispose());
+          } else {
+            offsetMeshPreview.material.dispose();
+          }
+        }
+      }
+      setOffsetMeshPreview(null);
+    };
+
+    window.addEventListener('generate-offset-mesh-preview', handleGenerateOffsetMesh as EventListener);
+    window.addEventListener('clear-offset-mesh-preview', handleClearOffsetMesh as EventListener);
+    
+    return () => {
+      window.removeEventListener('generate-offset-mesh-preview', handleGenerateOffsetMesh as EventListener);
+      window.removeEventListener('clear-offset-mesh-preview', handleClearOffsetMesh as EventListener);
+    };
+  }, [importedParts, offsetMeshPreview]);
 
   // TODO: Implement drag-and-drop for fixture components when library panel is ready
   const handlePointerMove = useCallback((_event: unknown) => {
@@ -1648,6 +1838,157 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     window.addEventListener('supports-trim-request', handler as EventListener);
     return () => window.removeEventListener('supports-trim-request', handler as EventListener);
   }, [supports, baseTopY, buildSupportMesh]);
+
+  // Handle cavity subtraction - cut supports with the offset mesh using three-bvh-csg
+  // Note: Baseplate is NOT cut - only supports are cut by the cavity
+  // The part was already moved UP and supports extended during offset mesh preview generation
+  React.useEffect(() => {
+    const handleExecuteCavitySubtraction = async (e: CustomEvent) => {
+      const { settings } = e.detail || {};
+      const clearanceTolerance = settings?.offsetDistance ?? 0.5; // Default 0.5mm clearance
+      
+      if (!offsetMeshPreview) {
+        console.warn('[3DScene] No offset mesh preview available for cavity subtraction');
+        window.dispatchEvent(new CustomEvent('cavity-subtraction-complete', {
+          detail: { success: false, error: 'No offset mesh preview available' }
+        }));
+        return;
+      }
+
+      const hasSupports = supports && supports.length > 0;
+      
+      if (!hasSupports) {
+        console.warn('[3DScene] No supports available for cavity subtraction');
+        window.dispatchEvent(new CustomEvent('cavity-subtraction-complete', {
+          detail: { success: false, error: 'No supports available' }
+        }));
+        return;
+      }
+
+      // Use three-bvh-csg for more robust CSG operations
+      const { Brush, Evaluator, SUBTRACTION } = await import('three-bvh-csg');
+      const evaluator = new Evaluator();
+      
+      // Configure evaluator for better edge handling
+      evaluator.useGroups = false; // Don't track material groups
+
+      try {
+        // Get the offset mesh geometry in world space
+        // The offset mesh was generated at the NEW part position (after moving up)
+        const cutterGeometry = offsetMeshPreview.geometry.clone();
+        offsetMeshPreview.updateMatrixWorld(true);
+        cutterGeometry.applyMatrix4(offsetMeshPreview.matrixWorld);
+        
+        // Ensure cutter geometry is clean for CSG
+        // Convert to indexed geometry if not already
+        if (!cutterGeometry.index) {
+          const posAttr = cutterGeometry.getAttribute('position');
+          const vertexCount = posAttr.count;
+          const indices = new Uint32Array(vertexCount);
+          for (let i = 0; i < vertexCount; i++) indices[i] = i;
+          cutterGeometry.setIndex(new THREE.BufferAttribute(indices, 1));
+        }
+        
+        // Ensure cutter has UVs (required by three-bvh-csg)
+        if (!cutterGeometry.getAttribute('uv')) {
+          const position = cutterGeometry.getAttribute('position');
+          const uvArray = new Float32Array(position.count * 2);
+          cutterGeometry.setAttribute('uv', new THREE.BufferAttribute(uvArray, 2));
+        }
+        
+        cutterGeometry.computeVertexNormals();
+        
+        // Create the cutter brush once (reused for all operations)
+        const cutterBrush = new Brush(cutterGeometry);
+        cutterBrush.updateMatrixWorld();
+
+        const newModifiedGeometries = new Map<string, THREE.BufferGeometry>();
+        let successCount = 0;
+        let errorCount = 0;
+
+        // Process each support (baseplate is NOT cut)
+        // Supports already have extended heights from preview generation
+        for (const support of supports) {
+          try {
+            // Build the full support geometry including fillet, already in world space
+            const supportGeometry = buildFullSupportGeometry(support, baseTopY);
+              if (!supportGeometry) {
+                console.warn(`[3DScene] Could not build geometry for support ${support.id}`);
+                continue;
+              }
+              
+              // Ensure support geometry is indexed for CSG
+              if (!supportGeometry.index) {
+                const posAttr = supportGeometry.getAttribute('position');
+                const vertexCount = posAttr.count;
+                const indices = new Uint32Array(vertexCount);
+                for (let i = 0; i < vertexCount; i++) indices[i] = i;
+                supportGeometry.setIndex(new THREE.BufferAttribute(indices, 1));
+              }
+              
+              // Ensure support has UVs
+              if (!supportGeometry.getAttribute('uv')) {
+                const position = supportGeometry.getAttribute('position');
+                const uvArray = new Float32Array(position.count * 2);
+                supportGeometry.setAttribute('uv', new THREE.BufferAttribute(uvArray, 2));
+              }
+              
+              supportGeometry.computeVertexNormals();
+              
+              // Create support brush
+              const supportBrush = new Brush(supportGeometry);
+              supportBrush.updateMatrixWorld();
+
+              // Perform CSG subtraction: support - cutter
+              const resultBrush = evaluator.evaluate(supportBrush, cutterBrush, SUBTRACTION);
+              
+              if (resultBrush && resultBrush.geometry) {
+                const resultGeometry = resultBrush.geometry.clone();
+                resultGeometry.computeVertexNormals();
+                
+                // Store the geometry in world space - we'll render it without transforms
+                newModifiedGeometries.set(support.id, resultGeometry);
+                successCount++;
+              } else {
+                console.warn(`[3DScene] CSG subtraction returned null for support ${support.id}`);
+                errorCount++;
+              }
+            } catch (err) {
+              console.error(`[3DScene] Error processing support ${support.id}:`, err);
+              errorCount++;
+            }
+          }
+
+        // Update state with new modified geometries
+        setModifiedSupportGeometries(newModifiedGeometries);
+
+        // Clear the preview mesh after successful subtraction
+        if (successCount > 0) {
+          setOffsetMeshPreview(null);
+        }
+        
+        window.dispatchEvent(new CustomEvent('cavity-subtraction-complete', {
+          detail: { 
+            success: successCount > 0, 
+            successCount, 
+            errorCount,
+            totalSupports: supports.length
+          }
+        }));
+
+      } catch (err) {
+        console.error('[3DScene] Cavity subtraction failed:', err);
+        window.dispatchEvent(new CustomEvent('cavity-subtraction-complete', {
+          detail: { success: false, error: String(err) }
+        }));
+      }
+    };
+
+    window.addEventListener('execute-cavity-subtraction', handleExecuteCavitySubtraction as EventListener);
+    return () => {
+      window.removeEventListener('execute-cavity-subtraction', handleExecuteCavitySubtraction as EventListener);
+    };
+  }, [offsetMeshPreview, supports, basePlate, baseTopY]);
 
   // Handle base plate creation events
   React.useEffect(() => {
@@ -2287,7 +2628,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       {/* Scalable grid - sized based on combined model bounds (includes world positions) */}
       <ScalableGrid modelBounds={modelBounds} isDarkMode={isDarkMode} />
 
-      {/* Base plate */}
+      {/* Base plate - baseplate is NOT cut during cavity subtraction, only supports are */}
       {basePlate && (
         <BasePlate
           key={`baseplate-${basePlate.id}`}
@@ -2406,21 +2747,55 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
 
       {/* Supports rendering */}
       {supportsTrimPreview.length === 0
-        ? supports.map((s) => (
-            <SupportMesh 
-              key={s.id} 
-              support={s} 
-              baseTopY={baseTopY}
-              selected={selectedSupportId === s.id}
-              onDoubleClick={(supportId) => {
-                // Notify part gizmos to close
-                window.dispatchEvent(new CustomEvent('pivot-control-activated', { detail: { supportId } }));
-                onSupportSelect?.(supportId);
-                // Don't disable orbit controls here - let the gizmo handle it during drag
-                // This allows pan/tilt/zoom while gizmo is active (same as part gizmo)
-              }}
-            />
-          ))
+        ? supports.map((s) => {
+            // Check if this support has a modified geometry (from cavity subtraction)
+            const modifiedGeometry = modifiedSupportGeometries.get(s.id);
+            
+            if (modifiedGeometry) {
+              // Render the modified geometry - it's already in world space from the CSG operation
+              // Use amber/orange color to indicate the support has been cut
+              const isSelected = selectedSupportId === s.id;
+              const cutSupportColor = 0xf59e0b; // Amber-500 - indicates support has been cut
+              const cutSupportSelectedColor = 0xfbbf24; // Amber-400 - lighter when selected
+              
+              return (
+                <mesh
+                  key={s.id}
+                  geometry={modifiedGeometry}
+                  onDoubleClick={(e) => {
+                    e.stopPropagation();
+                    window.dispatchEvent(new CustomEvent('pivot-control-activated', { detail: { supportId: s.id } }));
+                    onSupportSelect?.(s.id);
+                  }}
+                >
+                  <meshStandardMaterial 
+                    color={isSelected ? cutSupportSelectedColor : cutSupportColor}
+                    metalness={0.0}
+                    roughness={0.6}
+                    emissive={isSelected ? cutSupportSelectedColor : cutSupportColor}
+                    emissiveIntensity={isSelected ? 0.25 : 0.1}
+                  />
+                </mesh>
+              );
+            }
+            
+            // Render standard support mesh
+            return (
+              <SupportMesh 
+                key={s.id} 
+                support={s} 
+                baseTopY={baseTopY}
+                selected={selectedSupportId === s.id}
+                onDoubleClick={(supportId) => {
+                  // Notify part gizmos to close
+                  window.dispatchEvent(new CustomEvent('pivot-control-activated', { detail: { supportId } }));
+                  onSupportSelect?.(supportId);
+                  // Don't disable orbit controls here - let the gizmo handle it during drag
+                  // This allows pan/tilt/zoom while gizmo is active (same as part gizmo)
+                }}
+              />
+            );
+          })
         : supportsTrimPreview.map((mesh, idx) => <primitive key={`${mesh.uuid}-${idx}`} object={mesh} />)}
       
       {/* Support transform controls - XY plane only */}
@@ -2468,6 +2843,11 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
             />
           );
         })()
+      )}
+
+      {/* Offset mesh preview (cavity cutting brush visualization) */}
+      {offsetMeshPreview && (
+        <primitive object={offsetMeshPreview} />
       )}
 
       {/* Debug: Perimeter visualization (raycast silhouette) - controlled by DEBUG_SHOW_PERIMETER flag */}
@@ -2561,6 +2941,24 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
             <div className="w-10 h-10 rounded-full border-4 border-sky-300 border-t-sky-600 animate-spin shadow-md bg-white/10" />
             <span className="text-[11px] font-medium text-sky-200 drop-shadow-sm">
               Trimming supports...
+            </span>
+          </div>
+        </Html>
+      )}
+
+      {/* Processing indicator for offset mesh preview generation */}
+      {offsetMeshProcessing && (
+        <Html
+          center
+          style={{
+            pointerEvents: 'none',
+            zIndex: 9999,
+          }}
+        >
+          <div className="flex flex-col items-center gap-2">
+            <div className="w-10 h-10 rounded-full border-4 border-purple-300 border-t-purple-600 animate-spin shadow-md bg-white/10" />
+            <span className="text-[11px] font-medium text-purple-200 drop-shadow-sm">
+              Generating cavity preview...
             </span>
           </div>
         </Html>

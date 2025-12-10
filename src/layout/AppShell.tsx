@@ -6,7 +6,7 @@ import { ThemeToggle } from "@/components/ThemeToggle";
 import ViewCube from "@/components/ViewCube";
 import VerticalToolbar from "@/components/VerticalToolbar";
 import ThreeDViewer from "@/components/3DViewer";
-import BooleanOperationsPanel from "@/components/BooleanOperationsPanel";
+
 import PartPropertiesAccordion from "@/components/PartPropertiesAccordion";
 import ContextOptionsPanel, { WorkflowStep, WORKFLOW_STEPS } from "@/components/ContextOptionsPanel";
 import {
@@ -23,6 +23,7 @@ import {
 import { SupportType } from "@/components/ContextOptionsPanel/steps/SupportsStepContent";
 import { AnySupport } from "@/components/Supports/types";
 import { autoPlaceSupports, AutoPlacementStrategy } from "@/components/Supports/autoPlacement";
+import { CavitySettings, DEFAULT_CAVITY_SETTINGS } from "@/lib/offset/types";
 import UnitsDialog from "@/modules/FileImport/components/UnitsDialog";
 import MeshOptimizationDialog from "@/modules/FileImport/components/MeshOptimizationDialog";
 import { useFileProcessing } from "@/modules/FileImport/hooks/useFileProcessing";
@@ -133,14 +134,11 @@ interface AppShellProps {
 const AppShell = forwardRef<AppShellHandle, AppShellProps>(
   ({ children, onLogout, onToggleDesignMode, designMode = false, isProcessing: externalProcessing = false, fileStats, currentFile }, ref) => {
     // UI State
-    const [isCavityOpen, setIsCavityOpen] = useState(false);
     const [isContextPanelCollapsed, setIsContextPanelCollapsed] = useState(false);
     const [isPropertiesCollapsed, setIsPropertiesCollapsed] = useState(false);
     const [undoStack, setUndoStack] = useState<any[]>([]);
     const [redoStack, setRedoStack] = useState<any[]>([]);
     const [currentBaseplate, setCurrentBaseplate] = useState<{ id: string; type: string; padding?: number; height?: number } | null>(null);
-    const [cavityBaseMesh, setCavityBaseMesh] = useState<any | null>(null);
-    const [cavityTools, setCavityTools] = useState<any[]>([]);
 
     // Workflow State
     const [activeStep, setActiveStep] = useState<WorkflowStep>('import');
@@ -200,6 +198,51 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
 
     // Cavity state
     const [cavityClearance, setCavityClearance] = useState(0.5);
+    const [cavitySettings, setCavitySettings] = useState<CavitySettings>(DEFAULT_CAVITY_SETTINGS);
+    const [isCavityProcessing, setIsCavityProcessing] = useState(false);
+    const [hasCavityPreview, setHasCavityPreview] = useState(false);
+
+    // Cavity settings handlers
+    const handleCavitySettingsChange = useCallback((settings: CavitySettings) => {
+      setCavitySettings(settings);
+    }, []);
+
+    const handleGenerateCavityPreview = useCallback(() => {
+      setIsCavityProcessing(true);
+      window.dispatchEvent(new CustomEvent('generate-offset-mesh-preview', { 
+        detail: { settings: cavitySettings } 
+      }));
+      // Processing state will be cleared by the 3DScene when complete
+      // We'll listen for the completion event
+      const handleComplete = () => {
+        setIsCavityProcessing(false);
+        setHasCavityPreview(true);
+        window.removeEventListener('offset-mesh-preview-complete', handleComplete);
+      };
+      window.addEventListener('offset-mesh-preview-complete', handleComplete);
+      // Timeout fallback in case the event doesn't fire
+      setTimeout(() => setIsCavityProcessing(false), 30000);
+    }, [cavitySettings]);
+
+    const handleClearCavityPreview = useCallback(() => {
+      window.dispatchEvent(new CustomEvent('clear-offset-mesh-preview'));
+      setHasCavityPreview(false);
+    }, []);
+
+    const handleExecuteCavity = useCallback(() => {
+      setIsCavityProcessing(true);
+      window.dispatchEvent(new CustomEvent('execute-cavity-subtraction', { 
+        detail: { settings: cavitySettings } 
+      }));
+      // Listen for completion
+      const handleComplete = () => {
+        setIsCavityProcessing(false);
+        setHasCavityPreview(false);
+        window.removeEventListener('cavity-subtraction-complete', handleComplete);
+      };
+      window.addEventListener('cavity-subtraction-complete', handleComplete);
+      setTimeout(() => setIsCavityProcessing(false), 60000);
+    }, [cavitySettings]);
 
     const handleOpenFilePicker = () => {
       const input = document.createElement('input');
@@ -592,22 +635,12 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
     const handleStepChange = useCallback((step: WorkflowStep) => {
       setActiveStep(step);
       
-      // Close any open panels when changing steps
-      setIsCavityOpen(false);
-      
       // Cancel placement mode when leaving supports step
       if (step !== 'supports' && isPlacementMode) {
         setIsPlacementMode(false);
         window.dispatchEvent(new Event('supports-cancel-placement'));
       }
       
-      // Trigger step-specific events
-      switch (step) {
-        case 'cavity':
-          window.dispatchEvent(new CustomEvent('open-cavity-dialog'));
-          setTimeout(() => window.dispatchEvent(new CustomEvent('request-cavity-context')), 0);
-          break;
-      }
     }, [isPlacementMode]);
 
     const handleResetSession = () => {
@@ -615,9 +648,6 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
       setCurrentBaseplate(null);
       setUndoStack([]);
       setRedoStack([]);
-      setCavityBaseMesh(null);
-      setCavityTools([]);
-      setIsCavityOpen(false);
       setImportedParts([]);
       setSelectedPartId(null);
       setFileError(null);
@@ -733,9 +763,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
           // Supports is now handled by context panel, no floating dialog needed
           return;
         case 'cavity':
-          window.dispatchEvent(new CustomEvent('open-cavity-dialog'));
-          // ask scene to provide current meshes for cavity
-          setTimeout(() => window.dispatchEvent(new CustomEvent('request-cavity-context')), 0);
+          // Cavity is handled by the CavityStepContent in the context panel
           return;
         case 'clamps':
           window.dispatchEvent(new CustomEvent('open-clamps-dialog'));
@@ -765,24 +793,6 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
 
     // Listen for supports dialog open event - no longer needed as we use context panel
     // Remove floating panel, placement mode is controlled via context panel
-
-    // Listen for cavity (boolean ops) open event
-    React.useEffect(() => {
-      const onOpenCavity = () => setIsCavityOpen(true);
-      window.addEventListener('open-cavity-dialog', onOpenCavity as EventListener);
-      return () => window.removeEventListener('open-cavity-dialog', onOpenCavity as EventListener);
-    }, []);
-
-    // Listen for cavity context from scene
-    React.useEffect(() => {
-      const onCavityContext = (e: CustomEvent) => {
-        const { baseMesh, fixtureComponents } = e.detail || {};
-        setCavityBaseMesh(baseMesh || null);
-        setCavityTools(Array.isArray(fixtureComponents) ? fixtureComponents : []);
-      };
-      window.addEventListener('cavity-context', onCavityContext as EventListener);
-      return () => window.removeEventListener('cavity-context', onCavityContext as EventListener);
-    }, []);
 
     // Sync supports from 3D scene - listen for support-created and support-updated events
     React.useEffect(() => {
@@ -1151,14 +1161,15 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
                     <CavityStepContent
                       hasWorkpiece={!!actualFile}
                       hasBaseplate={!!currentBaseplate}
-                      clearance={cavityClearance}
-                      onClearanceChange={setCavityClearance}
-                      onExecuteSubtract={() => {
-                        window.dispatchEvent(new CustomEvent('cavity-execute', { detail: { clearance: cavityClearance } }));
-                      }}
-                      onPreview={() => {
-                        window.dispatchEvent(new CustomEvent('cavity-preview', { detail: { clearance: cavityClearance } }));
-                      }}
+                      hasSupports={supports.length > 0}
+                      supportsCount={supports.length}
+                      settings={cavitySettings}
+                      onSettingsChange={handleCavitySettingsChange}
+                      onGeneratePreview={handleGenerateCavityPreview}
+                      onClearPreview={handleClearCavityPreview}
+                      onExecuteCavity={handleExecuteCavity}
+                      isProcessing={isCavityProcessing}
+                      hasPreview={hasCavityPreview}
                     />
                   )}
                   {activeStep === 'clamps' && (
@@ -1326,26 +1337,11 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
                       detail: { partId, visible } 
                     }));
                   }}
+                  // Cavity settings props (simplified - main controls in CavityStepContent)
+                  cavitySettings={cavitySettings}
+                  isCavityProcessing={isCavityProcessing}
+                  hasCavityPreview={hasCavityPreview}
                 />
-
-                {/* Subtract Workpieces panel anchored here */}
-                {isCavityOpen && (
-                  <div className="mt-4">
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="font-tech text-sm font-semibold">Subtract Workpieces</div>
-                      <Button size="sm" variant="ghost" onClick={() => setIsCavityOpen(false)} className="w-8 h-8 p-0">×</Button>
-                    </div>
-                    <BooleanOperationsPanel
-                      baseMesh={cavityBaseMesh}
-                      fixtureComponents={cavityTools}
-                      onOperationComplete={(mesh:any) => {
-                        // Forward to scene as preview/apply result
-                        window.dispatchEvent(new CustomEvent('cavity-operation-result', { detail: { mesh, mode: 'preview' } }));
-                      }}
-                      onNegativeCreate={() => { /* history UI already in panel */ }}
-                    />
-                  </div>
-                )}
               </div>
             )}
           </aside>

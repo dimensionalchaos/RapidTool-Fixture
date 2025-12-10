@@ -1,6 +1,7 @@
 import React, { useRef, useCallback } from 'react';
 import * as THREE from 'three';
 import { ThreeEvent } from '@react-three/fiber';
+import { mergeGeometries, mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { AnySupport } from './types';
 
 interface SupportMeshProps {
@@ -32,51 +33,152 @@ const materialFor = (preview?: boolean, selected?: boolean) =>
 
 // Fillet parameters
 const FILLET_RADIUS = 2.0; // mm - radius of the fillet curve
-const FILLET_SEGMENTS = 12; // number of segments for smooth fillet
+const FILLET_SEGMENTS = 24; // number of segments for smooth fillet (increased for better CSG results)
 
-// Create a fillet ring geometry for cylindrical/conical supports
-// The fillet curves from the baseplate (y=0) up to meet the support wall (y=filletRadius)
-// It's a quarter-torus shape that adds material around the base
-const createCylindricalFilletGeometry = (supportRadius: number, filletRadius: number = FILLET_RADIUS, segments: number = FILLET_SEGMENTS): THREE.BufferGeometry => {
-  const radialSegments = 64;
-  const positions: number[] = [];
-  const indices: number[] = [];
+/**
+ * Create a SOLID cylindrical support with integrated fillet as a single manifold mesh.
+ * Uses LatheGeometry with a closed profile to create a watertight solid.
+ * The profile includes: bottom cap, fillet curve, cylinder wall, and top cap.
+ */
+const createSolidCylindricalSupport = (
+  supportRadius: number, 
+  height: number,
+  filletRadius: number = FILLET_RADIUS, 
+  segments: number = FILLET_SEGMENTS
+): THREE.BufferGeometry => {
+  // Create a 2D profile that will be revolved around the Y axis
+  // The profile traces the outline of the solid cross-section
+  const points: THREE.Vector2[] = [];
   
-  // Generate fillet profile - quarter circle curving from baseplate up to the cylinder wall
-  // At i=0: at the baseplate, outer edge (x=supportRadius+filletRadius, y=0)
-  // At i=segments: at the cylinder wall (x=supportRadius, y=filletRadius)
-  // The center of the quarter circle is at (supportRadius + filletRadius, 0)
-  for (let i = 0; i <= segments; i++) {
+  // Start at center bottom (y=0, x=0) - for bottom cap
+  points.push(new THREE.Vector2(0.001, 0)); // Tiny offset to avoid degenerate triangles at axis
+  
+  // Bottom edge - from center to outer edge of fillet at y=0
+  const outerRadius = supportRadius + filletRadius;
+  points.push(new THREE.Vector2(outerRadius, 0));
+  
+  // Fillet curve - quarter circle from (outerRadius, 0) to (supportRadius, filletRadius)
+  // Center of fillet arc is at (supportRadius + filletRadius, filletRadius)
+  // Wait, that's wrong. Let me recalculate.
+  // The fillet is at the BASE of the support, curving from the baseplate up.
+  // It should curve from outer (at y=0) to inner (at y=filletRadius).
+  // Arc center: (supportRadius + filletRadius, filletRadius)
+  // At angle 3π/2 (270°, pointing down): point is at (supportRadius + filletRadius, 0)
+  // At angle π (180°, pointing left): point is at (supportRadius, filletRadius)
+  
+  for (let i = 1; i <= segments; i++) {
     const t = i / segments;
-    const angle = Math.PI + t * (Math.PI / 2); // from 180 deg to 270 deg
-    const x = (supportRadius + filletRadius) + filletRadius * Math.cos(angle); // starts at supportRadius, ends at supportRadius+filletRadius
-    const y = filletRadius * Math.sin(angle) + filletRadius; // starts at 0, ends at filletRadius
-    
-    for (let j = 0; j <= radialSegments; j++) {
-      const theta = (j / radialSegments) * Math.PI * 2;
-      const cosTheta = Math.cos(theta);
-      const sinTheta = Math.sin(theta);
-      
-      positions.push(x * cosTheta, y, x * sinTheta);
-    }
+    const angle = (3 * Math.PI / 2) - t * (Math.PI / 2); // from 270° to 180°
+    const x = (supportRadius + filletRadius) + filletRadius * Math.cos(angle);
+    const y = filletRadius + filletRadius * Math.sin(angle);
+    points.push(new THREE.Vector2(x, y));
   }
   
-  // Generate indices - winding order for outward-facing normals
-  for (let i = 0; i < segments; i++) {
-    for (let j = 0; j < radialSegments; j++) {
-      const a = i * (radialSegments + 1) + j;
-      const b = a + radialSegments + 1;
-      const c = a + 1;
-      const d = b + 1;
-      
-      indices.push(a, b, c);
-      indices.push(c, b, d);
-    }
+  // Now at (supportRadius, filletRadius) - continue up the cylinder wall
+  // Top of cylinder at full height
+  points.push(new THREE.Vector2(supportRadius, height));
+  
+  // Top cap - from outer edge to center
+  points.push(new THREE.Vector2(0.001, height)); // Back to center axis at top
+  
+  // Create the lathe geometry
+  const geometry = new THREE.LatheGeometry(points, 64, 0, Math.PI * 2);
+  geometry.computeVertexNormals();
+  
+  return geometry;
+};
+
+/**
+ * Create a SOLID conical support with integrated fillet as a single manifold mesh.
+ * Uses LatheGeometry with a closed profile to create a watertight solid.
+ */
+const createSolidConicalSupport = (
+  baseRadius: number,
+  topRadius: number,
+  height: number,
+  filletRadius: number = FILLET_RADIUS, 
+  segments: number = FILLET_SEGMENTS
+): THREE.BufferGeometry => {
+  const points: THREE.Vector2[] = [];
+  
+  // Calculate the cone's slope angle
+  const radiusDiff = baseRadius - topRadius;
+  const slopeAngle = Math.atan2(radiusDiff, height);
+  
+  // Fillet parameters
+  const filletCenterR = baseRadius + filletRadius;
+  const filletCenterY = filletRadius;
+  
+  // Arc angles for conical fillet
+  const startAngle = Math.PI + slopeAngle;  // tangent to cone slope
+  const endAngle = 3 * Math.PI / 2;          // tangent to horizontal baseplate
+  const arcAngle = endAngle - startAngle;
+  
+  // Calculate where fillet meets the cone
+  const filletTopR = filletCenterR + filletRadius * Math.cos(startAngle);
+  const filletTopY = filletCenterY + filletRadius * Math.sin(startAngle);
+  
+  // Start at center bottom (y=0, x=0) - for bottom cap
+  points.push(new THREE.Vector2(0.001, 0));
+  
+  // Bottom edge - from center to outer edge of fillet at y=0
+  const outerRadius = baseRadius + filletRadius;
+  points.push(new THREE.Vector2(outerRadius, 0));
+  
+  // Fillet curve from outer bottom to where it meets cone slope
+  for (let i = 1; i <= segments; i++) {
+    const t = i / segments;
+    const angle = endAngle - t * arcAngle; // from 270° towards (180° + slopeAngle)
+    const r = filletCenterR + filletRadius * Math.cos(angle);
+    const y = filletCenterY + filletRadius * Math.sin(angle);
+    points.push(new THREE.Vector2(r, y));
   }
   
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  geometry.setIndex(indices);
+  // Continue along the cone slope from fillet top to cone top
+  // The cone goes from (filletTopR, filletTopY) to (topRadius, height)
+  points.push(new THREE.Vector2(topRadius, height));
+  
+  // Top cap - from outer edge to center
+  points.push(new THREE.Vector2(0.001, height));
+  
+  // Create the lathe geometry
+  const geometry = new THREE.LatheGeometry(points, 64, 0, Math.PI * 2);
+  geometry.computeVertexNormals();
+  
+  return geometry;
+};
+
+/**
+ * Create SOLID fillet geometry for cylindrical supports.
+ * This creates the fillet portion only (not the full support) as a solid volume.
+ */
+const createCylindricalFilletGeometry = (supportRadius: number, filletRadius: number = FILLET_RADIUS, segments: number = FILLET_SEGMENTS): THREE.BufferGeometry => {
+  // Create a profile for just the fillet portion as a solid
+  const points: THREE.Vector2[] = [];
+  
+  // Start at inner edge at y=0 (where it will meet the cylinder body)
+  points.push(new THREE.Vector2(supportRadius, 0));
+  
+  // Bottom edge to outer radius at y=0
+  const outerRadius = supportRadius + filletRadius;
+  points.push(new THREE.Vector2(outerRadius, 0));
+  
+  // Fillet curve from (outerRadius, 0) to (supportRadius, filletRadius)
+  for (let i = 1; i <= segments; i++) {
+    const t = i / segments;
+    const angle = (3 * Math.PI / 2) - t * (Math.PI / 2); // from 270° to 180°
+    const x = (supportRadius + filletRadius) + filletRadius * Math.cos(angle);
+    const y = filletRadius + filletRadius * Math.sin(angle);
+    points.push(new THREE.Vector2(x, y));
+  }
+  
+  // Top edge back to inner radius (close the profile)
+  // Already at (supportRadius, filletRadius) from the loop
+  // Close by going back down to start
+  points.push(new THREE.Vector2(supportRadius, 0));
+  
+  // Create the lathe geometry
+  const geometry = new THREE.LatheGeometry(points, 64, 0, Math.PI * 2);
   geometry.computeVertexNormals();
   
   return geometry;
@@ -94,6 +196,7 @@ const getConicalFilletHeight = (baseRadius: number, topRadius: number, coneHeigh
 
 // Create a fillet ring geometry for conical supports
 // This creates an external fillet tangent to both the horizontal baseplate and the cone's sloped wall
+// Now creates a SOLID fillet using LatheGeometry with closed profile
 const createConicalFilletGeometry = (
   baseRadius: number, 
   topRadius: number, 
@@ -101,74 +204,50 @@ const createConicalFilletGeometry = (
   filletRadius: number = FILLET_RADIUS, 
   segments: number = FILLET_SEGMENTS
 ): THREE.BufferGeometry => {
-  const radialSegments = 64;
-  const positions: number[] = [];
-  const indices: number[] = [];
-  
-  // Calculate the cone's slope angle (angle from vertical)
+  // Calculate the cone's slope angle
   const radiusDiff = baseRadius - topRadius;
   const slopeAngle = Math.atan2(radiusDiff, coneHeight);
   
-  // For a fillet tangent to both horizontal (baseplate) and the sloped cone wall:
-  // - The fillet center needs to be positioned so that tangency is achieved at both surfaces
-  // - For horizontal tangency at y=0: center is at distance filletRadius above (y = filletRadius)
-  // - For tangency to slope: the fillet must meet the cone wall perpendicularly to the wall's normal
-  
-  // The cone wall normal points outward at angle (90° - slopeAngle) from horizontal
-  // or equivalently at angle slopeAngle from vertical
-  
-  // For the fillet to be tangent to the slope, the center must be offset from the cone surface
-  // by filletRadius in the direction of the surface normal.
-  
-  // Key insight: The fillet center is at (baseRadius + filletRadius, filletRadius)
-  // The arc sweeps from angle 3π/2 (pointing down, tangent to horizontal) 
-  // to angle (π + slopeAngle) (tangent to the cone slope)
-  
-  // Arc angle = (3π/2) - (π + slopeAngle) = π/2 - slopeAngle
-  // But we sweep from top (meeting cone) to bottom (meeting baseplate)
-  
+  // Fillet center position
   const filletCenterR = baseRadius + filletRadius;
   const filletCenterY = filletRadius;
   
-  // The arc goes from angle (π + slopeAngle) at the top (tangent to cone slope)
-  // to angle (3π/2) at the bottom (tangent to horizontal baseplate)
+  // Arc angles
   const startAngle = Math.PI + slopeAngle;  // tangent to cone slope
-  const endAngle = 3 * Math.PI / 2;          // tangent to horizontal (pointing down)
-  const arcAngle = endAngle - startAngle;    // = π/2 - slopeAngle
+  const endAngle = 3 * Math.PI / 2;          // tangent to horizontal baseplate
+  const arcAngle = endAngle - startAngle;
   
-  for (let i = 0; i <= segments; i++) {
+  // Calculate where fillet meets the cone (at top of fillet)
+  const filletTopR = filletCenterR + filletRadius * Math.cos(startAngle);
+  const filletTopY = filletCenterY + filletRadius * Math.sin(startAngle);
+  
+  // Create a 2D profile for the solid fillet
+  const points: THREE.Vector2[] = [];
+  
+  // Start at inner edge at y=0 (where it will meet the cone body base)
+  points.push(new THREE.Vector2(baseRadius, 0));
+  
+  // Bottom edge to outer radius at y=0
+  const outerRadius = baseRadius + filletRadius;
+  points.push(new THREE.Vector2(outerRadius, 0));
+  
+  // Fillet curve from outer bottom to where it meets cone
+  for (let i = 1; i <= segments; i++) {
     const t = i / segments;
-    const angle = startAngle + t * arcAngle;
-    
+    const angle = endAngle - t * arcAngle; // from 270° towards (180° + slopeAngle)
     const r = filletCenterR + filletRadius * Math.cos(angle);
     const y = filletCenterY + filletRadius * Math.sin(angle);
-    
-    // Revolve around Y axis
-    for (let j = 0; j <= radialSegments; j++) {
-      const theta = (j / radialSegments) * Math.PI * 2;
-      const cosTheta = Math.cos(theta);
-      const sinTheta = Math.sin(theta);
-      
-      positions.push(r * cosTheta, y, r * sinTheta);
-    }
+    points.push(new THREE.Vector2(r, y));
   }
   
-  // Generate indices - match the winding from circular fillet
-  for (let i = 0; i < segments; i++) {
-    for (let j = 0; j < radialSegments; j++) {
-      const a = i * (radialSegments + 1) + j;
-      const b = a + radialSegments + 1;
-      const c = a + 1;
-      const d = b + 1;
-      
-      indices.push(a, b, c);
-      indices.push(c, b, d);
-    }
-  }
+  // Close by going back to where cone wall would be at this height
+  // The fillet top point is at (filletTopR, filletTopY)
+  // We need to connect back to close the profile
+  points.push(new THREE.Vector2(baseRadius, filletTopY)); // Straight down to inner radius
+  points.push(new THREE.Vector2(baseRadius, 0)); // Back to start
   
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  geometry.setIndex(indices);
+  // Create the lathe geometry
+  const geometry = new THREE.LatheGeometry(points, 64, 0, Math.PI * 2);
   geometry.computeVertexNormals();
   
   return geometry;
@@ -659,6 +738,270 @@ const createRectangularFilletGeometry = (width: number, depthVal: number, corner
   
   return geometry;
 };
+
+/**
+ * Create a bottom cap geometry for sealing supports during CSG operations.
+ * The cap is a flat disc/shape at y=0 that matches the fillet's outer footprint.
+ */
+const createBottomCapGeometry = (
+  type: string, 
+  support: any, 
+  filletRadius: number
+): THREE.BufferGeometry | null => {
+  if (type === 'cylindrical') {
+    const { radius } = support;
+    // Outer radius = support radius + fillet radius (where fillet touches baseplate)
+    const outerRadius = radius + filletRadius;
+    const cap = new THREE.CircleGeometry(outerRadius, 64);
+    cap.rotateX(-Math.PI / 2); // Face downward (normal pointing -Y)
+    return cap;
+  } else if (type === 'rectangular') {
+    const { width, depth, cornerRadius = 0 } = support;
+    // Add fillet radius to dimensions
+    const capWidth = width + filletRadius * 2;
+    const capDepth = depth + filletRadius * 2;
+    const capCornerRadius = cornerRadius + filletRadius;
+    
+    if (capCornerRadius <= 0.01) {
+      const cap = new THREE.PlaneGeometry(capWidth, capDepth);
+      cap.rotateX(-Math.PI / 2);
+      return cap;
+    } else {
+      // Create rounded rectangle cap
+      const hw = capWidth / 2;
+      const hd = capDepth / 2;
+      const r = Math.min(capCornerRadius, hw, hd);
+      const shape = new THREE.Shape();
+      shape.moveTo(-hw + r, -hd);
+      shape.lineTo(hw - r, -hd);
+      shape.quadraticCurveTo(hw, -hd, hw, -hd + r);
+      shape.lineTo(hw, hd - r);
+      shape.quadraticCurveTo(hw, hd, hw - r, hd);
+      shape.lineTo(-hw + r, hd);
+      shape.quadraticCurveTo(-hw, hd, -hw, hd - r);
+      shape.lineTo(-hw, -hd + r);
+      shape.quadraticCurveTo(-hw, -hd, -hw + r, -hd);
+      const cap = new THREE.ShapeGeometry(shape, 32);
+      cap.rotateX(-Math.PI / 2);
+      return cap;
+    }
+  } else if (type === 'conical') {
+    const { baseRadius } = support;
+    // For conical, outer radius at base = baseRadius + filletRadius
+    const outerRadius = baseRadius + filletRadius;
+    const cap = new THREE.CircleGeometry(outerRadius, 64);
+    cap.rotateX(-Math.PI / 2);
+    return cap;
+  } else if (type === 'custom') {
+    const { polygon, cornerRadius = 0 } = support;
+    if (!polygon || polygon.length < 3) return null;
+    
+    // Offset the polygon outward by fillet radius
+    // For simplicity, we'll create a shape from the polygon with corner radius increased
+    const workingPolygon: [number, number][] = polygon.map(([x, y]: [number, number]) => [x, -y]);
+    const safeCornerRadius = Math.max(0, cornerRadius) + filletRadius;
+    const shape = new THREE.Shape();
+    let started = false;
+    
+    for (let idx = 0; idx < workingPolygon.length; idx++) {
+      const curr = workingPolygon[idx];
+      const prev = workingPolygon[(idx - 1 + workingPolygon.length) % workingPolygon.length];
+      const next = workingPolygon[(idx + 1) % workingPolygon.length];
+      
+      // Offset the vertex outward
+      const toPrev = [prev[0] - curr[0], prev[1] - curr[1]];
+      const toNext = [next[0] - curr[0], next[1] - curr[1]];
+      const lenPrev = Math.sqrt(toPrev[0] ** 2 + toPrev[1] ** 2);
+      const lenNext = Math.sqrt(toNext[0] ** 2 + toNext[1] ** 2);
+      
+      // Calculate outward normal (perpendicular to edge bisector)
+      let nx = 0, ny = 0;
+      if (lenPrev > 0.01 && lenNext > 0.01) {
+        const dirPrev = [toPrev[0] / lenPrev, toPrev[1] / lenPrev];
+        const dirNext = [toNext[0] / lenNext, toNext[1] / lenNext];
+        // Average direction and rotate 90 degrees for normal
+        const avgX = -(dirPrev[0] + dirNext[0]) / 2;
+        const avgY = -(dirPrev[1] + dirNext[1]) / 2;
+        const avgLen = Math.sqrt(avgX * avgX + avgY * avgY);
+        if (avgLen > 0.01) {
+          nx = avgX / avgLen * filletRadius;
+          ny = avgY / avgLen * filletRadius;
+        }
+      }
+      
+      const offsetX = curr[0] + nx;
+      const offsetY = curr[1] + ny;
+      
+      if (!started) {
+        shape.moveTo(offsetX, offsetY);
+        started = true;
+      } else {
+        shape.lineTo(offsetX, offsetY);
+      }
+    }
+    shape.closePath();
+    
+    const cap = new THREE.ShapeGeometry(shape, 32);
+    cap.rotateX(-Math.PI / 2);
+    return cap;
+  }
+  
+  return null;
+};
+
+/**
+ * Build a complete merged geometry for a support including fillet and bottom cap.
+ * The geometry is positioned in world space ready for CSG operations.
+ * The bottom cap ensures watertight geometry for proper CSG subtraction.
+ * @param support The support configuration
+ * @param baseTopY The Y position of the baseplate top
+ * @returns A merged BufferGeometry in world space, or null if creation fails
+ */
+export function buildFullSupportGeometry(support: AnySupport, baseTopY: number = 0): THREE.BufferGeometry | null {
+  const { type, height, center } = support as any;
+  const rotY = (support as any).rotationY ?? 0;
+  const effectiveBaseY = (support as any).baseY ?? baseTopY;
+  
+  // Clamp fillet radius to not exceed support height
+  const effectiveFilletRadius = Math.min(FILLET_RADIUS, Math.max(0, height - 0.1));
+  
+  // Create rotation quaternion for geometry
+  const rotationQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, rotY, 0));
+  
+  let geometry: THREE.BufferGeometry | null = null;
+  
+  if (type === 'cylindrical') {
+    const { radius } = support as any;
+    // Create complete solid support using LatheGeometry with closed profile
+    geometry = createSolidCylindricalSupport(radius, height, effectiveFilletRadius, FILLET_SEGMENTS);
+  } else if (type === 'conical') {
+    const { baseRadius, topRadius } = support as any;
+    // Create complete solid conical support using LatheGeometry
+    geometry = createSolidConicalSupport(baseRadius, topRadius, height, effectiveFilletRadius, FILLET_SEGMENTS);
+  } else if (type === 'rectangular') {
+    // For rectangular, we still need to combine fillet + body + cap
+    // because we can't use LatheGeometry for non-circular shapes
+    const { width, depth, cornerRadius = 0 } = support as any;
+    const bodyHeight = Math.max(0.1, height - effectiveFilletRadius);
+    
+    const filletGeo = createRectangularFilletGeometry(width, depth, cornerRadius, effectiveFilletRadius, FILLET_SEGMENTS);
+    
+    let bodyGeo: THREE.BufferGeometry;
+    if (cornerRadius <= 0) {
+      bodyGeo = new THREE.BoxGeometry(width, bodyHeight, depth);
+      bodyGeo.translate(0, bodyHeight / 2 + effectiveFilletRadius, 0);
+    } else {
+      const hw = width / 2;
+      const hd = depth / 2;
+      const r = Math.min(cornerRadius, hw, hd);
+      const s = new THREE.Shape();
+      s.moveTo(-hw + r, -hd);
+      s.lineTo(hw - r, -hd);
+      s.quadraticCurveTo(hw, -hd, hw, -hd + r);
+      s.lineTo(hw, hd - r);
+      s.quadraticCurveTo(hw, hd, hw - r, hd);
+      s.lineTo(-hw + r, hd);
+      s.quadraticCurveTo(-hw, hd, -hw, hd - r);
+      s.lineTo(-hw, -hd + r);
+      s.quadraticCurveTo(-hw, -hd, -hw + r, -hd);
+      bodyGeo = new THREE.ExtrudeGeometry(s, { depth: bodyHeight, bevelEnabled: false, curveSegments: 64 });
+      bodyGeo.rotateX(-Math.PI / 2);
+      bodyGeo.translate(0, effectiveFilletRadius, 0);
+    }
+    
+    // Add bottom cap
+    const bottomCap = createBottomCapGeometry(type, support, effectiveFilletRadius);
+    
+    // Merge all parts
+    const normalizeGeometry = (geo: THREE.BufferGeometry): THREE.BufferGeometry => {
+      const normalized = geo.index ? geo.toNonIndexed() : geo.clone();
+      if (normalized.getAttribute('uv')) normalized.deleteAttribute('uv');
+      if (normalized.getAttribute('uv2')) normalized.deleteAttribute('uv2');
+      return normalized;
+    };
+    
+    const parts: THREE.BufferGeometry[] = [normalizeGeometry(filletGeo), normalizeGeometry(bodyGeo)];
+    if (bottomCap) parts.push(normalizeGeometry(bottomCap));
+    
+    geometry = mergeGeometries(parts, false);
+    if (geometry) geometry = mergeVertices(geometry, 0.001);
+  } else if (type === 'custom') {
+    const { polygon, cornerRadius = 0 } = support as any;
+    if (!polygon || polygon.length < 3) return null;
+    
+    const bodyHeight = Math.max(0.1, height - effectiveFilletRadius);
+    const filletGeo = createPolygonFilletGeometry(polygon, cornerRadius, effectiveFilletRadius, FILLET_SEGMENTS);
+    
+    // Build the custom shape for the body
+    const workingPolygon: [number, number][] = polygon.map(([x, y]: [number, number]) => [x, -y]);
+    const safeCornerRadius = Math.max(0, cornerRadius);
+    const shape = new THREE.Shape();
+    let started = false;
+    
+    for (let idx = 0; idx < workingPolygon.length; idx++) {
+      const curr = workingPolygon[idx];
+      const prev = workingPolygon[(idx - 1 + workingPolygon.length) % workingPolygon.length];
+      const next = workingPolygon[(idx + 1) % workingPolygon.length];
+      
+      const toPrev = [prev[0] - curr[0], prev[1] - curr[1]];
+      const toNext = [next[0] - curr[0], next[1] - curr[1]];
+      const lenPrev = Math.sqrt(toPrev[0] ** 2 + toPrev[1] ** 2);
+      const lenNext = Math.sqrt(toNext[0] ** 2 + toNext[1] ** 2);
+      
+      if (lenPrev < 0.01 || lenNext < 0.01 || safeCornerRadius < 0.01) {
+        if (!started) { shape.moveTo(curr[0], curr[1]); started = true; }
+        else { shape.lineTo(curr[0], curr[1]); }
+        continue;
+      }
+      
+      const r = Math.min(safeCornerRadius, lenPrev / 2, lenNext / 2);
+      const dirPrev = [toPrev[0] / lenPrev, toPrev[1] / lenPrev];
+      const dirNext = [toNext[0] / lenNext, toNext[1] / lenNext];
+      
+      if (r > 0.01) {
+        const insetStart: [number, number] = [curr[0] + dirPrev[0] * r, curr[1] + dirPrev[1] * r];
+        const insetEnd: [number, number] = [curr[0] + dirNext[0] * r, curr[1] + dirNext[1] * r];
+        if (!started) { shape.moveTo(insetStart[0], insetStart[1]); started = true; }
+        else { shape.lineTo(insetStart[0], insetStart[1]); }
+        shape.quadraticCurveTo(curr[0], curr[1], insetEnd[0], insetEnd[1]);
+      } else {
+        if (!started) { shape.moveTo(curr[0], curr[1]); started = true; }
+        else { shape.lineTo(curr[0], curr[1]); }
+      }
+    }
+    shape.closePath();
+    
+    const bodyGeo = new THREE.ExtrudeGeometry(shape, { depth: bodyHeight, bevelEnabled: false, curveSegments: 64 });
+    bodyGeo.rotateX(-Math.PI / 2);
+    bodyGeo.translate(0, effectiveFilletRadius, 0);
+    
+    // Add bottom cap
+    const bottomCap = createBottomCapGeometry(type, support, effectiveFilletRadius);
+    
+    // Merge all parts
+    const normalizeGeometry = (geo: THREE.BufferGeometry): THREE.BufferGeometry => {
+      const normalized = geo.index ? geo.toNonIndexed() : geo.clone();
+      if (normalized.getAttribute('uv')) normalized.deleteAttribute('uv');
+      if (normalized.getAttribute('uv2')) normalized.deleteAttribute('uv2');
+      return normalized;
+    };
+    
+    const parts: THREE.BufferGeometry[] = [normalizeGeometry(filletGeo), normalizeGeometry(bodyGeo)];
+    if (bottomCap) parts.push(normalizeGeometry(bottomCap));
+    
+    geometry = mergeGeometries(parts, false);
+    if (geometry) geometry = mergeVertices(geometry, 0.001);
+  }
+  
+  if (!geometry) return null;
+  
+  // Apply rotation and translation
+  geometry.applyQuaternion(rotationQuat);
+  geometry.translate(center.x, effectiveBaseY, center.y);
+  geometry.computeVertexNormals();
+  
+  return geometry;
+}
 
 const SupportMesh: React.FC<SupportMeshProps> = ({ support, preview, baseTopY = 0, selected, onDoubleClick }) => {
   const { type, height, center } = support as any;

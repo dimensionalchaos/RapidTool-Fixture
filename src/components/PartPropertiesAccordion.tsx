@@ -14,7 +14,9 @@ import * as THREE from 'three';
 import { ProcessedFile } from '@/modules/FileImport/types';
 import SupportsAccordion from './Supports/SupportsAccordion';
 import BaseplateAccordion from './BaseplateAccordion';
+import CavityAccordion from './CavityAccordion';
 import { AnySupport } from './Supports/types';
+import { CavitySettings, DEFAULT_CAVITY_SETTINGS } from '@/lib/offset/types';
 import PartThumbnail from './PartThumbnail';
 
 interface PartTransform {
@@ -42,6 +44,10 @@ interface PartPropertiesAccordionProps {
   modelColors?: Map<string, string>;
   partVisibility?: Map<string, boolean>;
   onPartVisibilityChange?: (partId: string, visible: boolean) => void;
+  // Cavity settings (simplified - main controls in CavityStepContent)
+  cavitySettings?: CavitySettings;
+  isCavityProcessing?: boolean;
+  hasCavityPreview?: boolean;
 }
 
 const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({ 
@@ -64,6 +70,10 @@ const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({
   modelColors = new Map(),
   partVisibility = new Map(),
   onPartVisibilityChange,
+  // Cavity props (simplified)
+  cavitySettings = DEFAULT_CAVITY_SETTINGS,
+  isCavityProcessing = false,
+  hasCavityPreview = false,
 }) => {
   // Map of partId -> transform (stores transforms for ALL parts)
   const [partTransforms, setPartTransforms] = useState<Map<string, PartTransform>>(new Map());
@@ -561,6 +571,14 @@ const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({
         onSupportSelect={onSupportSelect || (() => {})}
         onSupportUpdate={onSupportUpdate || (() => {})}
         onSupportDelete={onSupportDelete || (() => {})}
+      />
+
+      {/* Cavity Accordion - Status view only, main controls in CavityStepContent */}
+      <CavityAccordion
+        settings={cavitySettings}
+        isProcessing={isCavityProcessing}
+        hasPreview={hasCavityPreview}
+        hasModel={hasModel}
       />
     </Accordion>
   );
