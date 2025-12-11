@@ -45,77 +45,40 @@ export function fillMeshHoles(
 ): Float32Array {
     const startTime = performance.now();
     
-    console.log(`[fillMeshHoles] Input: ${vertices.length / 9} triangles, ${vertices.length / 3} vertices`);
-    
     // Step 1: Build vertex map with spatial hashing for welding
-    console.log('[fillMeshHoles] Building vertex map...');
     const { uniqueVertices, vertexToUnique } = buildVertexMap(vertices);
     
     // Step 2: Build edge map and find boundary edges
-    console.log('[fillMeshHoles] Finding boundary edges...');
     const boundaryEdges = findBoundaryEdges(vertices, vertexToUnique);
     
     if (boundaryEdges.length === 0) {
-        console.log('[fillMeshHoles] ✓ No holes detected - mesh appears closed');
         return vertices;
     }
     
-    console.log(`[fillMeshHoles] Found ${boundaryEdges.length} boundary edges`);
-    
     // Step 3: Chain boundary edges into loops
-    console.log('[fillMeshHoles] Building boundary loops...');
     const loops = buildBoundaryLoops(boundaryEdges, uniqueVertices);
     
     if (loops.length === 0) {
-        console.log('[fillMeshHoles] ⚠ Could not form closed boundary loops from edges');
-        console.log('[fillMeshHoles] This may indicate a non-manifold mesh or complex hole geometry');
         return vertices;
     }
-    
-    console.log(`[fillMeshHoles] Found ${loops.length} boundary loops (potential holes)`);
     
     // Step 4: Filter and triangulate loops to create cap geometry
     const capTriangles: number[] = [];
     let filledHoles = 0;
-    let skippedSmall = 0;
-    let skippedLarge = 0;
-    let failedTriangulation = 0;
     
-    for (let loopIdx = 0; loopIdx < loops.length; loopIdx++) {
-        const loop = loops[loopIdx];
-        
-        // Skip if outside size limits
-        if (loop.vertices.length < minHoleVertices) {
-            skippedSmall++;
+    for (const loop of loops) {
+        if (loop.vertices.length < minHoleVertices || loop.area > maxHoleArea) {
             continue;
         }
         
-        if (loop.area > maxHoleArea) {
-            skippedLarge++;
-            continue;
-        }
-        
-        console.log(`[fillMeshHoles] Processing loop ${loopIdx + 1}/${loops.length}: ${loop.vertices.length} vertices, area=${loop.area.toFixed(2)}`);
-        
-        // Triangulate the loop
         const triangles = triangulateLoop(loop);
-        
         if (triangles.length > 0) {
             capTriangles.push(...triangles);
             filledHoles++;
-            console.log(`[fillMeshHoles]   ✓ Created ${triangles.length / 9} cap triangles`);
-        } else {
-            failedTriangulation++;
-            console.log(`[fillMeshHoles]   ✗ Triangulation failed`);
         }
     }
     
-    if (skippedSmall > 0) console.log(`[fillMeshHoles] Skipped ${skippedSmall} small loops`);
-    if (skippedLarge > 0) console.log(`[fillMeshHoles] Skipped ${skippedLarge} large loops`);
-    if (failedTriangulation > 0) console.log(`[fillMeshHoles] Failed to triangulate ${failedTriangulation} loops`);
-    
     if (capTriangles.length === 0) {
-        console.log('[fillMeshHoles] No cap triangles generated');
         return vertices;
     }
     
@@ -125,7 +88,9 @@ export function fillMeshHoles(
     combinedVertices.set(new Float32Array(capTriangles), vertices.length);
     
     const endTime = performance.now();
-    console.log(`[fillMeshHoles] ✓ Complete: ${filledHoles} holes filled, ${capTriangles.length / 9} cap triangles added [${(endTime - startTime).toFixed(0)}ms]`);
+    if (filledHoles > 0) {
+        console.log(`[HoleFill] ${filledHoles} holes filled (${capTriangles.length / 9} triangles) [${(endTime - startTime).toFixed(0)}ms]`);
+    }
     
     return combinedVertices;
 }
@@ -200,8 +165,6 @@ function buildVertexMap(vertices: Float32Array): {
             spatialHash.get(key)!.push(newIndex);
         }
     }
-    
-    console.log(`  Welded ${numVertices} vertices to ${uniqueVertices.length} unique vertices`);
     
     return { uniqueVertices, vertexToUnique };
 }
@@ -299,11 +262,6 @@ function buildBoundaryLoops(edges: Edge[], uniqueVertices: THREE.Vector3[]): Bou
         else if (degree === 2) degree2Count++;
         else degree3PlusCount++;
     }
-    console.log(`  Boundary vertex degrees: 1=${degree1Count}, 2=${degree2Count}, 3+=${degree3PlusCount}`);
-    
-    if (degree1Count > 0) {
-        console.log(`  ⚠ Found ${degree1Count} degree-1 vertices (open boundary, cannot form closed loops)`);
-    }
     
     // Track which edges have been used
     const usedEdges = new Set<string>();
@@ -387,24 +345,10 @@ function buildBoundaryLoops(edges: Edge[], uniqueVertices: THREE.Vector3[]): Bou
                 
                 if (!found) {
                     // Dead end - this path doesn't form a closed loop
-                    console.log(`    Dead end at vertex ${current}, could not find next unused edge`);
                     break;
                 }
             }
         }
-    }
-    
-    // Count unused edges for diagnostics
-    let unusedEdgeCount = 0;
-    for (const edge of edges) {
-        const key = getEdgeKey(edge.v1, edge.v2);
-        if (!usedEdges.has(key)) unusedEdgeCount++;
-    }
-    
-    console.log(`  Built ${loops.length} closed boundary loops from ${edges.length} edges (${unusedEdgeCount} unused)`);
-    
-    if (unusedEdgeCount > 0 && loops.length === 0) {
-        console.log(`  ⚠ All ${unusedEdgeCount} edges unused - boundary may be open or non-manifold`);
     }
     
     return loops;

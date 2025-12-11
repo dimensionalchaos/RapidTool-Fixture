@@ -87,8 +87,6 @@ export async function createOffsetMesh(vertices: Float32Array, options: any): Pr
             
             // Rotate vertices
             workingVertices = applyMatrixToVertices(vertices, rotationMatrix);
-            
-            console.log(`Applied rotation: XZ=${rotationXZ}°, YZ=${rotationYZ}° (actual YZ=${actualYZ}°)`);
         }
         
         // Step 0.5: Fill holes in input mesh to prevent gaps in heightmap
@@ -98,8 +96,6 @@ export async function createOffsetMesh(vertices: Float32Array, options: any): Pr
             const holeAnalysis = analyzeMeshHoles(workingVertices);
             
             if (holeAnalysis.hasHoles) {
-                console.log(`Mesh has ${holeAnalysis.boundaryEdges} boundary edges (~${holeAnalysis.estimatedHoles} holes)`);
-                
                 if (progressCallback) progressCallback(3, 100, 'Filling mesh holes');
                 
                 const originalVertexCount = workingVertices.length;
@@ -110,10 +106,6 @@ export async function createOffsetMesh(vertices: Float32Array, options: any): Pr
                 
                 result.metadata.holesFilled = holeAnalysis.estimatedHoles;
                 result.metadata.holesCapTriangles = addedTriangles;
-                
-                console.log(`Added ${addedTriangles} cap triangles to close holes`);
-            } else {
-                console.log('No holes detected in input mesh');
             }
         }
         
@@ -134,8 +126,6 @@ export async function createOffsetMesh(vertices: Float32Array, options: any): Pr
         const clampedResolution = Math.max(64, Math.min(16384, resolution));
         
         result.metadata.resolution = clampedResolution;
-        
-        console.log(`Resolution: ${maxDim.toFixed(1)} units × ${pixelsPerUnit} px/unit = ${clampedResolution}×${clampedResolution}`);
         
         // Step 2: Generate heightmap
         if (progressCallback) progressCallback(10, 100, 'Generating heightmap');
@@ -183,7 +173,6 @@ export async function createOffsetMesh(vertices: Float32Array, options: any): Pr
             const fillResult = fillInternalHoles(heightMap, clampedResolution);
             
             if (fillResult.filledHoles > 0) {
-                console.log(`Filled ${fillResult.filledHoles} internal holes (${fillResult.filledPixels} pixels)`);
                 result.metadata.internalHolesFilled = fillResult.filledHoles;
                 result.metadata.internalHolesPixels = fillResult.filledPixels;
             }
@@ -196,8 +185,6 @@ export async function createOffsetMesh(vertices: Float32Array, options: any): Pr
             downsampleFactor: 1,
             effectiveResolution: clampedResolution
         };
-        
-        console.log(`Mesh resolution: ${meshSettings.effectiveResolution}×${meshSettings.effectiveResolution}`);
         
         // Step 5: Create watertight mesh
         if (progressCallback) progressCallback(75, 100, 'Creating watertight mesh');
@@ -233,8 +220,6 @@ export async function createOffsetMesh(vertices: Float32Array, options: any): Pr
             const inverseMatrix = createInverseRotationMatrix(rotationXZ, actualYZ);
             result.geometry.applyMatrix4(inverseMatrix);
             result.geometry.computeVertexNormals();
-            
-            console.log('Restored original orientation');
         }
         
         result.metadata.vertexCount = result.geometry.getAttribute('position').count;
@@ -246,7 +231,7 @@ export async function createOffsetMesh(vertices: Float32Array, options: any): Pr
         
         if (progressCallback) progressCallback(100, 100, 'Complete');
         
-        console.log(`Processing complete: ${result.metadata.triangleCount.toLocaleString()} triangles in ${result.metadata.processingTime.toFixed(0)}ms`);
+        console.log(`[OffsetMesh] Complete: ${result.metadata.triangleCount.toLocaleString()} triangles [${result.metadata.processingTime.toFixed(0)}ms]`);
         
         return result;
         
