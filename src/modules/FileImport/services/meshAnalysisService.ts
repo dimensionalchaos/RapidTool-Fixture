@@ -418,9 +418,7 @@ async function simplifyWithMeshOptimizer(
   
   // If non-indexed or vertices == triangles * 3, we need to merge
   if (!workGeometry.index || originalVertexCount === originalTriangles * 3) {
-    console.log(`[MeshOptimizer] Merging vertices: ${originalVertexCount} vertices for ${originalTriangles} triangles`);
     workGeometry = mergeVertices(workGeometry, 1e-4); // tolerance for merging
-    console.log(`[MeshOptimizer] After merge: ${workGeometry.getAttribute('position').count} unique vertices`);
   }
   
   const positions = workGeometry.getAttribute('position');
@@ -504,8 +502,6 @@ async function simplifyWithMeshOptimizer(
     
     const reductionPercent = ((originalTriangles - finalTriangles) / originalTriangles) * 100;
     
-    console.log(`[MeshOptimizer] Simplified: ${originalTriangles} → ${finalTriangles} triangles (error: ${resultError.toFixed(6)})`);
-    
     return {
       success: true,
       geometry: newGeometry,
@@ -553,6 +549,7 @@ export async function decimateMesh(
   
   // Skip if already below target
   if (originalTriangles <= targetTriangles) {
+    console.log(`[Decimation] Skipped: ${originalTriangles.toLocaleString()} triangles already below target ${targetTriangles.toLocaleString()}`);
     return {
       success: true,
       geometry: geometry.clone(),
@@ -561,6 +558,8 @@ export async function decimateMesh(
       reductionPercent: 0,
     };
   }
+  
+  console.log(`[Decimation] Starting: ${originalTriangles.toLocaleString()} triangles → target ${targetTriangles.toLocaleString()}`);
   
   let currentGeometry = geometry;
   let currentTriangles = originalTriangles;
@@ -575,9 +574,10 @@ export async function decimateMesh(
       const meshoptResult = await simplifyWithMeshOptimizer(currentGeometry, meshoptTargetIndices, onProgress);
       
       if (meshoptResult.success && meshoptResult.geometry) {
+        const reduction = ((originalTriangles - meshoptResult.finalTriangles) / originalTriangles * 100).toFixed(1);
+        console.log(`[Decimation] Step 1 - MeshOptimizer: ${originalTriangles.toLocaleString()} → ${meshoptResult.finalTriangles.toLocaleString()} triangles (${reduction}% reduction)`);
         currentGeometry = meshoptResult.geometry;
         currentTriangles = meshoptResult.finalTriangles;
-        console.log(`[decimateMesh] MeshOptimizer: ${originalTriangles.toLocaleString()} → ${currentTriangles.toLocaleString()} triangles`);
         reportProgress(onProgress, 'decimating', 40, `MeshOptimizer complete: ${currentTriangles.toLocaleString()} triangles`);
       } else {
         console.warn('[decimateMesh] MeshOptimizer failed, continuing with original geometry');
@@ -617,7 +617,10 @@ export async function decimateMesh(
       result.geometry.computeVertexNormals();
       reportProgress(onProgress, 'decimating', 100, 'Decimation complete');
       
-      console.log(`[decimateMesh] Fast Quadric: ${currentTriangles.toLocaleString()} → ${result.finalTriangles.toLocaleString()} triangles`);
+      const stepReduction = ((currentTriangles - result.finalTriangles) / currentTriangles * 100).toFixed(1);
+      const totalReduction = ((originalTriangles - result.finalTriangles) / originalTriangles * 100).toFixed(1);
+      console.log(`[Decimation] Step 2 - Fast Quadric: ${currentTriangles.toLocaleString()} → ${result.finalTriangles.toLocaleString()} triangles (${stepReduction}% reduction)`);
+      console.log(`[Decimation] Complete: ${originalTriangles.toLocaleString()} → ${result.finalTriangles.toLocaleString()} triangles (${totalReduction}% total reduction)`);
       
       return {
         success: true,
@@ -652,8 +655,6 @@ export async function decimateMesh(
       manifoldResult.geometry.computeVertexNormals();
       reportProgress(onProgress, 'decimating', 100, 'Manifold3D decimation complete');
       
-      console.log(`[decimateMesh] Manifold3D fallback success: ${originalTriangles.toLocaleString()} → ${manifoldResult.finalTriangles.toLocaleString()} triangles`);
-      
       return {
         success: true,
         geometry: manifoldResult.geometry,
@@ -671,8 +672,6 @@ export async function decimateMesh(
   
   // STAGE 4: Vertex clustering as last resort
   try {
-    console.log('[decimateMesh] Attempting vertex clustering decimation...');
-    
     const clusteredGeometry = vertexClusteringDecimate(currentGeometry, targetTriangles);
     const finalTriangles = clusteredGeometry.index 
       ? clusteredGeometry.index.count / 3 
@@ -681,8 +680,6 @@ export async function decimateMesh(
     
     clusteredGeometry.computeVertexNormals();
     reportProgress(onProgress, 'decimating', 100, 'Vertex clustering decimation complete');
-    
-    console.log(`[decimateMesh] Vertex clustering success: ${originalTriangles.toLocaleString()} → ${finalTriangles.toLocaleString()} triangles (${reductionPercent.toFixed(1)}% reduction)`);
     
     return {
       success: true,
@@ -812,8 +809,6 @@ function vertexClusteringDecimate(
   const newGeometry = new THREE.BufferGeometry();
   newGeometry.setAttribute('position', new THREE.BufferAttribute(cellPositions, 3));
   newGeometry.setIndex(newTriangles);
-  
-  console.log(`[vertexClusteringDecimate] Reduced from ${triangleCount} to ${newTriangles.length / 3} triangles using ${cellMap.size} cells`);
   
   return newGeometry;
 }
@@ -1249,13 +1244,13 @@ export async function laplacianSmooth(
   }
   
   const {
-    iterations = 5,
+    iterations = 2, // Reduced from 5 for gentler smoothing
     method = 'combined',
     lambda = 0.5,
     mu = -0.53, // Slightly larger than -lambda to prevent shrinkage
     alpha = 0.5,
     beta = 0.5,
-    sigma = 1.0, // Gaussian sigma for weight falloff
+    sigma = 0.2, // Reduced from 1.0 for gentler Gaussian smoothing
   } = opts;
   
   try {
@@ -1343,7 +1338,6 @@ export async function laplacianSmooth(
     };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown smoothing error';
-    console.error('Smoothing error:', error);
     return {
       success: false,
       geometry: null,

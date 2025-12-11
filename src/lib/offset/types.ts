@@ -77,6 +77,8 @@ export interface CavitySettings {
   enableSmoothing: boolean;
   /** Number of smoothing iterations (for non-combined methods) */
   smoothingIterations: number;
+  /** Gaussian sigma - controls smoothing weight falloff (lower = gentler) */
+  smoothingSigma: number;
   /** Smoothing method: 'taubin', 'hc', 'combined', or 'gaussian' */
   smoothingMethod: 'taubin' | 'hc' | 'combined' | 'gaussian';
   /** HC smoothing alpha parameter (0-1, higher = more original shape preservation) */
@@ -134,11 +136,12 @@ export const DEFAULT_CAVITY_SETTINGS: CavitySettings = {
   previewOpacity: 0.3,
   enableDecimation: true, // Uses Fast Quadric with Manifold3D fallback
   enableSmoothing: true,
-  smoothingIterations: 5,
+  smoothingIterations: 2, // Reduced for gentler smoothing
+  smoothingSigma: 0.2, // Lower sigma = gentler smoothing
   smoothingMethod: 'combined',
   smoothingAlpha: 0.5,
   smoothingBeta: 0.5,
-  combinedGaussianIterations: 6,
+  combinedGaussianIterations: 2, // Reduced for gentler smoothing
   combinedLaplacianIterations: 2,
   combinedTaubinIterations: 2,
 };

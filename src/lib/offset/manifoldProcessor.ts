@@ -33,7 +33,6 @@ export async function initManifold(): Promise<boolean> {
         Manifold = ManifoldModule.Manifold;
         Mesh = ManifoldModule.Mesh;
         
-        console.log('✓ Manifold 3D initialized');
         return true;
     } catch (error) {
         console.error('Failed to initialize Manifold 3D:', error);
@@ -45,7 +44,6 @@ export async function initManifold(): Promise<boolean> {
                 ManifoldModule.setup();
                 Manifold = ManifoldModule.Manifold;
                 Mesh = ManifoldModule.Mesh;
-                console.log('✓ Manifold 3D initialized from global');
                 return true;
             }
         } catch (e2) {
@@ -186,10 +184,7 @@ export async function processWithManifold(
         try {
             manifold = new Manifold(mesh);
             isManifold = true;
-            console.log('✓ Input mesh is manifold');
         } catch (e) {
-            console.log('⚠ Input mesh is not manifold, attempting repair...');
-            
             if (ensureManifold) {
                 // Try to make it manifold using hull or other operations
                 // For now, we'll use the convex hull as a fallback for severely broken meshes
@@ -198,7 +193,6 @@ export async function processWithManifold(
                     // Attempt to create manifold with error tolerance
                     manifold = Manifold.ofMesh(mesh);
                     isManifold = true;
-                    console.log('✓ Mesh repaired successfully');
                 } catch (e2) {
                     console.warn('Could not repair mesh, using original geometry');
                     return {
@@ -228,16 +222,13 @@ export async function processWithManifold(
         if (decimate && targetRatio < 1.0 && finalTriangles > 100) {
             const targetTriangles = Math.max(12, Math.floor(finalTriangles * targetRatio));
             
-            console.log(`Decimating with Manifold: ${finalTriangles} → ${targetTriangles} triangles (ratio: ${targetRatio})`);
-            
             try {
                 // Use Manifold's simplify/decimate if available
                 // Note: Manifold 3D doesn't have built-in decimation, so we'll use
                 // the mesh as-is after manifold repair
                 // The actual decimation will still use meshoptimizer
-                console.log('Note: Manifold ensures watertight mesh, decimation handled separately');
             } catch (e) {
-                console.warn('Decimation not applied:', e);
+                // Decimation not applied
             }
             
             outputMesh = manifold.getMesh();
@@ -251,7 +242,6 @@ export async function processWithManifold(
         manifold.delete();
         
         const processingTime = performance.now() - startTime;
-        console.log(`Manifold processing: ${originalTriangles} → ${finalTriangles} triangles in ${processingTime.toFixed(1)}ms`);
         
         return {
             geometry: resultGeometry,
@@ -455,9 +445,6 @@ export async function csgSubtract(
         manifoldA.delete();
         manifoldB.delete();
         resultManifold.delete();
-        
-        const endTime = performance.now();
-        console.log(`CSG subtraction completed in ${(endTime - startTime).toFixed(1)}ms`);
         
         return resultGeometry;
         

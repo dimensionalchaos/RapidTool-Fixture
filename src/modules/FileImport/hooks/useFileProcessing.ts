@@ -45,7 +45,6 @@ export function useFileProcessing(): UseFileProcessingReturn {
 
   const parseSTL = async (arrayBuffer: ArrayBuffer): Promise<THREE.BufferGeometry> => {
     const byteLength = arrayBuffer.byteLength;
-    console.log('Parsing STL file, byteLength:', byteLength);
 
     if (byteLength > 84) {
       const view = new DataView(arrayBuffer);
@@ -55,30 +54,21 @@ export function useFileProcessing(): UseFileProcessingReturn {
       const headerText = new TextDecoder().decode(new Uint8Array(arrayBuffer, 0, 80)).trim().toLowerCase();
       const headerSuggestsASCII = headerText.startsWith('solid');
 
-      console.log('STL Header:', headerText.substring(0, 50));
-      console.log('Triangle count from header:', triangleCount);
-      console.log('Expected byte length:', expectedByteLength);
-      console.log('Actual byte length:', byteLength);
-      console.log('Header suggests ASCII:', headerSuggestsASCII);
-
       // Better binary detection: check if the expected length matches actual length
       // Binary files have a predictable size based on triangle count
       const isBinaryBySize = Math.abs(expectedByteLength - byteLength) < 100 && triangleCount > 0;
       
       // If the size matches binary format, treat as binary even if header starts with "solid"
       if (isBinaryBySize) {
-        console.log('Parsing as binary STL (size matches binary format)');
         return parseBinarySTL(arrayBuffer, triangleCount);
       }
       
       // If header doesn't suggest ASCII and we have valid triangle count, try binary
       if (!headerSuggestsASCII && triangleCount > 0) {
-        console.log('Parsing as binary STL (header does not suggest ASCII)');
         return parseBinarySTL(arrayBuffer, triangleCount);
       }
     }
 
-    console.log('Parsing as ASCII STL');
     return parseASCIISTL(new TextDecoder().decode(arrayBuffer));
   };
 
@@ -246,12 +236,6 @@ export function useFileProcessing(): UseFileProcessingReturn {
       const mesh = new THREE.Mesh(geometry, material);
       mesh.castShadow = true;
       mesh.receiveShadow = true;
-
-      console.log('Mesh created successfully:');
-      console.log('- Geometry vertices:', geometry.attributes.position.count);
-      console.log('- Geometry faces:', geometry.attributes.position.count / 3);
-      console.log('- Material:', material);
-      console.log('- Mesh:', mesh);
 
       // Compute metadata
       const processingTime = performance.now() - startTime;

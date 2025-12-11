@@ -1283,20 +1283,8 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
         const estimatedPixels = span * safePPU;
         
         if (!Number.isFinite(estimatedPixels) || estimatedPixels > 2000) {
-          console.warn('[3DScene] Offset mesh resolution too large, using lower resolution', {
-            span,
-            safePPU,
-            estimatedPixels,
-          });
+          console.warn('[3DScene] Offset mesh resolution clamped for GPU limits');
         }
-
-        console.log('[3DScene] Generating offset mesh preview...', {
-          offsetDistance: settings.offsetDistance,
-          pixelsPerUnit: Math.min(safePPU, 2000 / span),
-          rotationXZ: settings.rotationXZ,
-          rotationYZ: settings.rotationYZ,
-          fillHoles: settings.fillHoles,
-        });
 
         // Yield to browser before heavy computation
         await new Promise(resolve => setTimeout(resolve, 0));
@@ -1309,7 +1297,6 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
           rotationYZ: settings.rotationYZ ?? 0,
           fillHoles: settings.fillHoles ?? true,
           progressCallback: (current, total, stage) => {
-            console.log(`[OffsetMesh] ${stage}: ${current}/${total}`);
             // Dispatch progress event for UI updates
             window.dispatchEvent(new CustomEvent('offset-mesh-preview-progress', {
               detail: { current, total, stage }
@@ -1333,8 +1320,6 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
             
             // === Step 1: Decimation (if enabled and needed) ===
             if (shouldDecimate) {
-              console.log(`[3DScene] Decimating offset mesh from ${result.metadata.triangleCount} to ~${OFFSET_MESH_DECIMATION_TARGET} triangles...`);
-              
               window.dispatchEvent(new CustomEvent('offset-mesh-preview-progress', {
                 detail: { current: 70, total: 100, stage: 'Decimating mesh...' }
               }));
@@ -1352,55 +1337,43 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
               
               const decimationResult = await decimateMesh(
                 geometryToDecimate,
-                OFFSET_MESH_DECIMATION_TARGET,
-                (progressInfo) => {
-                  console.log(`[3DScene] Decimation: ${progressInfo.message}`);
-                }
+                OFFSET_MESH_DECIMATION_TARGET
               );
               
               if (decimationResult.success && decimationResult.geometry) {
-                console.log(`[3DScene] Decimation complete: ${decimationResult.originalTriangles} -> ${decimationResult.finalTriangles} triangles (${decimationResult.reductionPercent.toFixed(1)}% reduction)`);
                 currentGeometry.dispose();
                 currentGeometry = decimationResult.geometry;
                 finalTriangleCount = Math.round(decimationResult.finalTriangles);
-              } else {
-                console.warn('[3DScene] Decimation failed, proceeding with original geometry');
               }
             }
             
             // === Step 2: Smoothing (if enabled) ===
             if (shouldSmooth) {
-              const iterations = settings.smoothingIterations ?? 5;
-              
-              console.log(`[3DScene] Applying Gaussian smoothing (${iterations} iterations)...`);
+              const iterations = settings.smoothingIterations ?? 2;
+              const sigma = settings.smoothingSigma ?? 0.2;
               
               window.dispatchEvent(new CustomEvent('offset-mesh-preview-progress', {
-                detail: { current: 85, total: 100, stage: `Smoothing mesh...` }
+                detail: { current: 85, total: 100, stage: `Smoothing mesh (${iterations} iterations, σ=${sigma})...` }
               }));
               
               // Yield to browser before smoothing
               await new Promise(resolve => setTimeout(resolve, 0));
               
-              // Use Gaussian smoothing
+              // Use Gaussian smoothing with configurable parameters
               const smoothingResult = await laplacianSmooth(
                 currentGeometry,
                 {
                   iterations,
                   method: 'gaussian',
-                },
-                (progressInfo) => {
-                  console.log(`[3DScene] Smoothing: ${progressInfo.message}`);
+                  sigma,
                 }
               );
               
               if (smoothingResult.success && smoothingResult.geometry) {
-                console.log(`[3DScene] Gaussian smoothing complete (${smoothingResult.iterations} iterations)`);
                 currentGeometry.dispose();
                 currentGeometry = smoothingResult.geometry;
                 // Update triangle count after smoothing (smoothing outputs non-indexed)
                 finalTriangleCount = Math.round(currentGeometry.getAttribute('position').count / 3);
-              } else {
-                console.warn('[3DScene] Smoothing failed, using previous geometry');
               }
             }
             

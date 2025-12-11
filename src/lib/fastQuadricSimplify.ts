@@ -64,7 +64,6 @@ async function loadModule(): Promise<SimplifyModule> {
         return path;
       },
       onRuntimeInitialized: () => {
-        console.log('[Simplify] WASM module initialized');
         moduleInstance = Module as SimplifyModule;
         resolve(moduleInstance);
       },
@@ -328,8 +327,6 @@ export async function simplifyGeometry(
     // Convert geometry to STL binary format
     const stlData = geometryToSTL(geometry);
     
-    console.log(`[Simplify] Input: ${originalTriangles.toLocaleString()} triangles, ${(stlData.byteLength / 1024 / 1024).toFixed(2)} MB`);
-    
     onProgress?.('writing', 20, 'Writing to virtual filesystem...');
     
     // Write input file to WASM virtual filesystem
@@ -338,8 +335,6 @@ export async function simplifyGeometry(
     lastInputFile = inputFile;
     
     onProgress?.('simplifying', 30, `Simplifying to ${Math.round(ratio * 100)}%...`);
-    
-    console.log(`[Simplify] Calling WASM simplify(${inputFile}, ${ratio}, ${outputFile})`);
     
     // Call the simplify function exactly like the demo does:
     // Module.ccall("simplify", undefined, ["string", "number", "string"], [filename, percentage, simplify_name]);
@@ -361,8 +356,6 @@ export async function simplifyGeometry(
       throw new Error('Simplification produced empty output');
     }
     
-    console.log(`[Simplify] Output: ${(outputData.byteLength / 1024 / 1024).toFixed(2)} MB`);
-    
     onProgress?.('parsing', 85, 'Parsing simplified mesh...');
     
     // Parse STL back to geometry
@@ -375,8 +368,6 @@ export async function simplifyGeometry(
     
     const finalTriangles = simplifiedGeometry.getAttribute('position').count / 3;
     const reductionPercent = ((originalTriangles - finalTriangles) / originalTriangles) * 100;
-    
-    console.log(`[Simplify] Result: ${finalTriangles.toLocaleString()} triangles (${reductionPercent.toFixed(1)}% reduction)`);
     
     onProgress?.('complete', 100, 'Simplification complete');
     

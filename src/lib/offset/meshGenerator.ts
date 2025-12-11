@@ -283,12 +283,6 @@ export function createWatertightMeshFromHeightmap(
     geometry.setIndex(new THREE.BufferAttribute(finalIndices, 1));
     geometry.computeVertexNormals();
     
-    const endTime = performance.now();
-    const vertexCount = finalPositions.length / 3;
-    const triangleCount = finalIndices.length / 3;
-    
-    console.log(`Manifold mesh: ${vertexCount} vertices, ${triangleCount} triangles [${(endTime - startTime).toFixed(0)}ms]`);
-    
     return geometry;
 }
 

@@ -321,26 +321,49 @@ const CavityStepContent: React.FC<CavityStepContentProps> = ({
             {/* Smoothing Options */}
             {settings.enableSmoothing && (
               <div className="space-y-3 pl-2 border-l-2 border-border/30">
-                {/* Gaussian Iterations */}
+                {/* Smoothing Iterations */}
                 <div className="space-y-1">
                   <div className="flex items-center justify-between">
                     <Label className="text-[10px] font-tech text-muted-foreground">
                       Iterations
                     </Label>
                     <span className="text-[10px] font-mono text-muted-foreground">
-                      {settings.combinedGaussianIterations ?? 6}
+                      {settings.smoothingIterations ?? 2}
                     </span>
                   </div>
                   <Slider
-                    value={[settings.combinedGaussianIterations ?? 6]}
-                    onValueChange={([value]) => handleSettingChange('combinedGaussianIterations', value)}
+                    value={[settings.smoothingIterations ?? 2]}
+                    onValueChange={([value]) => handleSettingChange('smoothingIterations', value)}
                     min={1}
-                    max={20}
+                    max={10}
                     step={1}
                     disabled={isProcessing}
                   />
                   <p className="text-[8px] text-muted-foreground italic">
-                    More iterations = smoother surface
+                    Number of smoothing passes (1-10)
+                  </p>
+                </div>
+
+                {/* Smoothing Sigma (Strength) */}
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-[10px] font-tech text-muted-foreground">
+                      Strength (σ)
+                    </Label>
+                    <span className="text-[10px] font-mono text-muted-foreground">
+                      {(settings.smoothingSigma ?? 0.2).toFixed(2)}
+                    </span>
+                  </div>
+                  <Slider
+                    value={[settings.smoothingSigma ?? 0.2]}
+                    onValueChange={([value]) => handleSettingChange('smoothingSigma', value)}
+                    min={0.1}
+                    max={2.0}
+                    step={0.1}
+                    disabled={isProcessing}
+                  />
+                  <p className="text-[8px] text-muted-foreground italic">
+                    Higher = stronger smoothing effect
                   </p>
                 </div>
               </div>

@@ -42,8 +42,6 @@ export function removeDegenerateTriangles(geometry) {
     }
     
     if (removedTriangles > 0) {
-        console.log(`Removed ${removedTriangles} degenerate triangles`);
-        
         const cleanedGeometry = new THREE.BufferGeometry();
         cleanedGeometry.setAttribute('position', geometry.attributes.position.clone());
         cleanedGeometry.setIndex(newIndices);
@@ -103,12 +101,6 @@ export function verifyWatertightness(geometry) {
         }
     }
     
-    console.log(`Manifold check: ${edges.size} total edges`);
-    console.log(`  - Manifold (count=2): ${edgesByCount['2']}`);
-    console.log(`  - Boundary (count=1): ${edgesByCount['1']}`);
-    console.log(`  - Over-shared (count=3+): ${edgesByCount['3+']}`);
-    console.log(`  - Non-manifold total: ${nonManifoldEdges}`);
-    
     return {
         isWatertight: nonManifoldEdges === 0,
         totalEdges: edges.size,
@@ -129,8 +121,6 @@ export function verifyWatertightness(geometry) {
  * Strategy: Iteratively keep the 2 best quality triangles for each over-shared edge
  */
 export function repairNonManifoldMesh(geometry, maxIterations = 5) {
-    console.log('Attempting to repair non-manifold geometry...');
-    
     let currentGeometry = geometry;
     let iteration = 0;
     
@@ -176,16 +166,12 @@ export function repairNonManifoldMesh(geometry, maxIterations = 5) {
         }
         
         if (overSharedEdges.length === 0 && boundaryEdges.length === 0) {
-            console.log(`✓ Repair complete after ${iteration} iteration(s)`);
             return currentGeometry;
         }
-        
-        console.log(`Iteration ${iteration + 1}: Found ${overSharedEdges.length} over-shared edges, ${boundaryEdges.length} boundary edges`);
         
         // If only boundary edges remain and we've done at least one iteration, stop
         // (removing triangles to fix boundaries often creates more problems)
         if (overSharedEdges.length === 0 && iteration > 0) {
-            console.log(`✓ Repair stopped - only boundary edges remain (${boundaryEdges.length})`);
             return currentGeometry;
         }
         
@@ -226,11 +212,8 @@ export function repairNonManifoldMesh(geometry, maxIterations = 5) {
         }
         
         if (trianglesToRemove.size === 0) {
-            console.log(`✓ No triangles to remove`);
             return currentGeometry;
         }
-        
-        console.log(`  Removing ${trianglesToRemove.size} triangles to fix over-shared edges`);
         
         // Build new index array without removed triangles
         const newIndices = [];
@@ -247,13 +230,10 @@ export function repairNonManifoldMesh(geometry, maxIterations = 5) {
         repairedGeometry.setIndex(newIndices);
         repairedGeometry.computeVertexNormals();
         
-        console.log(`  ${indices.length / 3} → ${newIndices.length / 3} triangles`);
-        
         currentGeometry = repairedGeometry;
         iteration++;
     }
     
-    console.log(`⚠ Repair incomplete after ${maxIterations} iterations`);
     return currentGeometry;
 }
 
@@ -302,7 +282,6 @@ export function fillSmallHoles(geometry: any, maxHoleEdges: number = 100): any {
     }
     
     if (boundaryEdges.size === 0) {
-        console.log('✓ No holes detected - mesh is watertight');
         return geometry;
     }
     
@@ -339,15 +318,12 @@ export function fillSmallHoles(geometry: any, maxHoleEdges: number = 100): any {
         }
     }
     
-    console.log(`Found ${boundaryLoops.length} boundary loops`);
-    
     let filledHoles = 0;
     const newIndices = [...indices];
     
     // Fill each hole
     for (const loop of boundaryLoops) {
         if (loop.length < 3 || loop.length > maxHoleEdges) {
-            console.log(`  Skipping hole with ${loop.length} edges (max: ${maxHoleEdges})`);
             continue;
         }
         
@@ -401,11 +377,9 @@ export function fillSmallHoles(geometry: any, maxHoleEdges: number = 100): any {
         }
         
         filledHoles++;
-        console.log(`  ✓ Filled hole with ${loop.length} edges`);
     }
     
     if (filledHoles === 0) {
-        console.log('No holes were small enough to fill');
         return geometry;
     }
     
@@ -414,8 +388,6 @@ export function fillSmallHoles(geometry: any, maxHoleEdges: number = 100): any {
     filledGeometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
     filledGeometry.setIndex(newIndices);
     filledGeometry.computeVertexNormals();
-    
-    console.log(`✓ Filled ${filledHoles} holes, added ${(newIndices.length - indices.length) / 3} triangles`);
     
     return filledGeometry;
 }

@@ -176,9 +176,6 @@ function processBatchSubtraction(
     return [];
   }
   
-  console.log(`[CSGWorker] Starting batch subtraction: ${supports.length} supports`);
-  console.log(`[CSGWorker] Cutter positions: ${cutterData.positions.length / 3} vertices`);
-  
   // Create evaluator once and reuse for all operations
   const evaluator = new Evaluator();
   evaluator.useGroups = false;
@@ -201,8 +198,6 @@ function processBatchSubtraction(
   for (let i = 0; i < supports.length; i++) {
     const support = supports[i];
     progressCallback(i + 1, supports.length, support.id);
-    
-    console.log(`[CSGWorker] Processing support ${i + 1}/${supports.length}: ${support.id}, positions: ${support.positions.length / 3} vertices`);
     
     try {
       // Create support geometry
@@ -300,8 +295,6 @@ function processBatchMerge(
     return null;
   }
   
-  console.log(`[CSGWorker] Starting geometry merge of ${geometries.length} geometries`);
-  
   // Instead of CSG union (which is very slow), we'll merge geometries by combining their buffers
   // This is much faster and achieves the same visual result for fixture export
   
@@ -317,8 +310,6 @@ function processBatchMerge(
     totalNormals += (geom.normals?.length || 0);
     totalIndices += (geom.indices?.length || geom.positions.length / 3);
   }
-  
-  console.log(`[CSGWorker] Merging: ${totalPositions / 3} total vertices, ${totalIndices / 3} total triangles`);
   
   // Allocate output arrays
   const mergedPositions = new Float32Array(totalPositions);
@@ -369,8 +360,6 @@ function processBatchMerge(
     normOffset += geom.positions.length; // Normals same size as positions
     vertexOffset += vertCount;
   }
-  
-  console.log(`[CSGWorker] Merge complete: ${mergedIndices.length / 3} triangles`);
   
   return {
     positions: mergedPositions,

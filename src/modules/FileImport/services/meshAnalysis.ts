@@ -320,8 +320,6 @@ export async function decimateMesh(
     // Calculate target ratio
     const targetRatio = targetTriangles / originalTriangles;
     
-    console.log(`[Decimation] Original: ${originalTriangles} triangles, Target: ${targetTriangles}, Ratio: ${targetRatio.toFixed(3)}`);
-    
     // Use Fast Quadric Mesh Simplification (WASM)
     const result = await simplifyGeometry(geometry, {
       ratio: targetRatio,
@@ -344,8 +342,6 @@ export async function decimateMesh(
     }
     
     onProgress?.({ stage: 'decimating', progress: 100, message: 'Decimation complete' });
-    
-    console.log(`[Decimation] Complete: ${result.originalTriangles} -> ${result.finalTriangles} triangles (${result.reductionPercent.toFixed(1)}% reduction)`);
     
     return {
       success: true,

@@ -90,7 +90,6 @@ async function getManifoldModule(): Promise<any> {
     // Call setup() to initialize the module
     wasm.setup();
     manifoldModule = wasm;
-    console.log('[ManifoldMeshService] ✓ Manifold3D WASM module initialized');
     return wasm;
   });
   
@@ -226,8 +225,6 @@ export async function repairMeshWithManifold(
     const positionAttr = geometry.getAttribute('position');
     const originalTriangles = positionAttr.count / 3;
     
-    console.log(`[ManifoldMeshService] Starting repair. Original triangles: ${originalTriangles.toLocaleString()}`);
-    
     // Convert to Manifold Mesh format
     const mesh = threeGeometryToManifoldMesh(geometry, wasm);
     
@@ -245,7 +242,6 @@ export async function repairMeshWithManifold(
       
       const status = manifold.status();
       if (status !== 0) { // 0 = NoError
-        console.log('[ManifoldMeshService] Direct manifold creation had issues, status:', status);
         wasRepaired = true;
         actions.push('Manifold attempted automatic repair');
       }
@@ -285,9 +281,6 @@ export async function repairMeshWithManifold(
     
     onProgress?.({ stage: 'complete', progress: 100, message: 'Repair complete' });
     await yieldToUI();
-    
-    const duration = ((performance.now() - startTime) / 1000).toFixed(2);
-    console.log(`[ManifoldMeshService] ✓ Repair complete in ${duration}s. Final triangles: ${finalTriangles.toLocaleString()}`);
     
     if (wasRepaired) {
       actions.push('Mesh successfully repaired with Manifold3D');
@@ -347,11 +340,8 @@ export async function decimateMeshWithManifold(
     const positionAttr = geometry.getAttribute('position');
     const originalTriangles = positionAttr.count / 3;
     
-    console.log(`[ManifoldMeshService] Starting decimation. Original: ${originalTriangles.toLocaleString()}, Target: ${targetTriangles.toLocaleString()}, Force: ${force}`);
-    
     // Skip if already below target (unless force is true)
     if (originalTriangles <= targetTriangles && !force) {
-      console.log('[ManifoldMeshService] Mesh already below target, skipping decimation');
       return {
         success: true,
         geometry: geometry.clone(),
@@ -372,7 +362,7 @@ export async function decimateMeshWithManifold(
     
     const status = manifold.status();
     if (status !== 0) { // 0 = NoError
-      console.log('[ManifoldMeshService] Warning: mesh has issues, status:', status);
+      // Mesh has issues but we'll try to continue
     }
     
     if (manifold.isEmpty()) {
@@ -410,8 +400,6 @@ export async function decimateMeshWithManifold(
       // Simplify with current tolerance
       const newSimplified = simplified.simplify(tolerance);
       const newTriangles = newSimplified.numTri();
-      
-      console.log(`[ManifoldMeshService] Iteration ${iterations + 1}: tolerance=${tolerance.toFixed(6)}, triangles=${newTriangles.toLocaleString()}`);
       
       // Clean up old manifold if not the original
       if (simplified !== manifold) {
@@ -458,10 +446,6 @@ export async function decimateMeshWithManifold(
     
     onProgress?.({ stage: 'complete', progress: 100, message: 'Decimation complete' });
     
-    const duration = ((performance.now() - startTime) / 1000).toFixed(2);
-    console.log(`[ManifoldMeshService] ✓ Decimation complete in ${duration}s. Reduction: ${reductionPercent.toFixed(1)}%`);
-    console.log(`[ManifoldMeshService]   Original: ${originalTriangles.toLocaleString()} → Final: ${finalTriangles.toLocaleString()}`);
-    
     return {
       success: true,
       geometry: decimatedGeometry,
@@ -507,13 +491,6 @@ export async function repairAndDecimateMesh(
   const positionAttr = geometry.getAttribute('position');
   const originalTriangles = positionAttr.count / 3;
   
-  console.log('[ManifoldMeshService] ═══════════════════════════════════════════');
-  console.log('[ManifoldMeshService] Starting mesh processing');
-  console.log(`[ManifoldMeshService]   Original triangles: ${originalTriangles.toLocaleString()}`);
-  console.log(`[ManifoldMeshService]   Target triangles: ${targetTriangles.toLocaleString()}`);
-  console.log(`[ManifoldMeshService]   Repair: ${options.repair}, Decimate: ${options.decimate}`);
-  console.log('[ManifoldMeshService] ═══════════════════════════════════════════');
-  
   let currentGeometry = geometry;
   let wasRepaired = false;
   let wasDecimated = false;
@@ -551,7 +528,6 @@ export async function repairAndDecimateMesh(
       await yieldToUI();
       
       // Use Fast Quadric Mesh Simplification (WASM) - high quality QEM decimation
-      console.log('[ManifoldMeshService] Using Fast Quadric Mesh Simplification (WASM)...');
       const fallbackResult = await fallbackDecimateMesh(
         currentGeometry,
         targetTriangles,
@@ -601,17 +577,6 @@ export async function repairAndDecimateMesh(
     onProgress?.({ stage: 'complete', progress: 100, message: 'Processing complete' });
     
     const reductionPercent = ((originalTriangles - finalTriangles) / originalTriangles) * 100;
-    const duration = ((performance.now() - startTime) / 1000).toFixed(2);
-    
-    console.log('[ManifoldMeshService] ═══════════════════════════════════════════');
-    console.log('[ManifoldMeshService] ✓ Processing complete');
-    console.log(`[ManifoldMeshService]   Duration: ${duration}s`);
-    console.log(`[ManifoldMeshService]   Original: ${originalTriangles.toLocaleString()} triangles`);
-    console.log(`[ManifoldMeshService]   Final: ${finalTriangles.toLocaleString()} triangles`);
-    console.log(`[ManifoldMeshService]   Reduction: ${reductionPercent.toFixed(1)}%`);
-    console.log(`[ManifoldMeshService]   Repaired: ${wasRepaired}`);
-    console.log(`[ManifoldMeshService]   Decimated: ${wasDecimated}`);
-    console.log('[ManifoldMeshService] ═══════════════════════════════════════════');
     
     return {
       success: true,

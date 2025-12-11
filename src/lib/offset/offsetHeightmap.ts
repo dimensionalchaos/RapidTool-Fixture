@@ -501,7 +501,6 @@ export function fillInternalHoles(
     for (const hole of holes) {
         // Skip holes outside size limits
         if (hole.pixels.length < minHoleSize || hole.pixels.length > maxHoleSize) {
-            console.log(`Skipping hole with ${hole.pixels.length} pixels (limits: ${minHoleSize}-${maxHoleSize})`);
             continue;
         }
         
@@ -593,9 +592,6 @@ export function fillInternalHoles(
         filledPixels += hole.pixels.length;
     }
     
-    const endTime = performance.now();
-    console.log(`Internal hole filling: Found ${holes.length} holes, filled ${filledHoles} (${filledPixels} pixels) in ${(endTime - startTime).toFixed(1)}ms`);
-    
     return { filledHoles, filledPixels };
 }
 
@@ -672,10 +668,6 @@ function removeIsolatedOutliers(heightMap, resolution, heightThreshold = 0.15) {
                 removed.push(idx);
             }
         }
-    }
-    
-    if (removed.length > 0) {
-        console.log(`Removed ${removed.length} interior outlier pixels`);
     }
 }
 
@@ -807,7 +799,6 @@ function applyMorphologicalClosing(heightMap, resolution, iterations = 5, kernel
         
         // Early exit if no more changes
         if (changeCount === 0) {
-            console.log(`Morphological closing converged after ${iter + 1} iterations`);
             break;
         }
     }
@@ -816,9 +807,6 @@ function applyMorphologicalClosing(heightMap, resolution, iterations = 5, kernel
     for (let i = 0; i < heightMap.length; i++) {
         heightMap[i] = current[i];
     }
-    
-    const endTime = performance.now();
-    console.log(`Morphological closing applied in ${(endTime - startTime).toFixed(1)} ms`);
 }
 
 // ============================================
@@ -928,9 +916,6 @@ function createSinglePassHeightMap(vertices, offset, resolution) {
         }
     }
 
-    const endTime = performance.now();
-    console.log(`Offset heightmap: ${triCount} triangles → ${resolution}x${resolution} in ${(endTime - startTime).toFixed(1)} ms`);
-    
     // Apply morphological closing to fill small gaps at edges
     applyMorphologicalClosing(heightMap, resolution);
     
@@ -1059,8 +1044,6 @@ async function createTiledHeightMap(vertices, offset, resolution, tileSize, prog
     const tilesPerSide = Math.ceil(resolution / tileSize);
     const totalTiles = tilesPerSide * tilesPerSide;
     
-    console.log(`Tiled rendering: ${resolution}x${resolution} split into ${tilesPerSide}x${tilesPerSide} tiles`);
-    
     const box = new THREE.Box3();
     box.setFromArray(vertices);
     const size = new THREE.Vector3();
@@ -1102,9 +1085,6 @@ async function createTiledHeightMap(vertices, offset, resolution, tileSize, prog
     }
     
     await db.flushBatch();
-    
-    const endTime = performance.now();
-    console.log(`Tiled heightmap complete: ${resolution}x${resolution} in ${(endTime - startTime).toFixed(1)} ms`);
     
     return {
         scale,
@@ -1178,9 +1158,6 @@ export async function loadHeightMapFromTiles(result, progressCallback = null) {
             }
         }
     }
-    
-    const endTime = performance.now();
-    console.log(`Heightmap loaded from IndexedDB in ${(endTime - startTime).toFixed(1)} ms`);
     
     // Apply morphological closing to fill small gaps at edges
     applyMorphologicalClosing(heightMap, resolution);

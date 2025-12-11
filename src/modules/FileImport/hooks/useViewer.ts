@@ -177,20 +177,16 @@ export function useViewer(
   // Initialize Three.js scene
   const initializeScene = useCallback(() => {
     if (!containerRef.current || isInitializedRef.current) {
-      console.log('Viewer initialization skipped - container:', !!containerRef.current, 'initialized:', isInitializedRef.current);
       return;
     }
 
-    console.log('Starting viewer initialization...');
     const container = containerRef.current;
     const rect = container.getBoundingClientRect();
-    console.log('Container dimensions:', rect.width, 'x', rect.height);
 
     // Scene
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(config.backgroundColor);
     sceneRef.current = scene;
-    console.log('Scene created:', scene);
 
     // Camera (orthographic default to match ToolWorks-like view)
     let camera: THREE.Camera;
@@ -315,11 +311,9 @@ export function useViewer(
     // hud.style.background = 'transparent';
     // hud.style.backgroundColor = 'transparent';
     // container.appendChild(hud);
-    console.log('Renderer added to container. DOM element:', renderer.domElement);
 
     // Test render
     renderer.render(scene, camera);
-    console.log('Initial test render completed');
 
     // Start render loop
     const animate = () => {
@@ -393,18 +387,12 @@ export function useViewer(
 
   // Initialize when container is available
   useEffect(() => {
-    console.log('useViewer effect triggered, container:', !!containerRef.current);
     if (containerRef.current) {
-      console.log('Initializing viewer with container:', containerRef.current);
       return initializeScene();
     }
   }, [initializeScene, containerRef]);
 
   const addMesh = useCallback((mesh: THREE.Mesh) => {
-    console.log('addMesh called with mesh:', mesh);
-    console.log('Scene exists:', !!sceneRef.current);
-    console.log('Current meshes count:', meshesRef.current.length);
-
     if (!sceneRef.current) {
       console.error('Cannot add mesh: scene not initialized');
       return;
@@ -413,13 +401,10 @@ export function useViewer(
     try {
       sceneRef.current.add(mesh);
       meshesRef.current.push(mesh);
-      console.log('Mesh added successfully. Total meshes:', meshesRef.current.length);
-      console.log('Scene children count:', sceneRef.current.children.length);
 
       // Force a render update
       if (rendererRef.current && cameraRef.current) {
         rendererRef.current.render(sceneRef.current, cameraRef.current);
-        console.log('Manual render completed');
       }
 
       // Recenter large XY cross to model center if present
