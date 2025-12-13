@@ -49,7 +49,22 @@ export interface SmoothingResult {
   success: boolean;
   geometry: THREE.BufferGeometry | null;
   iterations: number;
-  method?: 'taubin' | 'hc' | 'combined' | 'gaussian';
+  method?: 'taubin' | 'hc' | 'combined' | 'gaussian' | 'boundary';
+  error?: string;
+}
+
+export interface BoundarySmoothingOptions {
+  /** Number of Chaikin iterations (2-5 recommended) */
+  iterations: number;
+  /** Tolerance for detecting boundary vertices (in world units) */
+  boundaryTolerance?: number;
+}
+
+export interface BoundarySmoothingResult {
+  success: boolean;
+  geometry: THREE.BufferGeometry | null;
+  iterations: number;
+  boundaryVerticesSmoothed: number;
   error?: string;
 }
 
@@ -1747,6 +1762,441 @@ export async function laplacianSmooth(
       success: false,
       geometry: null,
       iterations: 0,
+      error: errorMessage,
+    };
+  }
+}
+
+// ============================================================================
+// Boundary Smoothing - Chaikin Corner Cutting
+// Specifically targets wall vertices without affecting top/bottom surfaces
+// ============================================================================
+
+/**
+ * Identify boundary (wall) vertices in a heightmap-derived mesh.
+ * Wall vertices are those that are NOT at the top or bottom Y levels.
+ * 
+ * For heightmap meshes:
+ * - Top surface vertices: at the highest Y values (variable heights)
+ * - Bottom surface vertices: at clipYMin (flat bottom)
+ * - Wall vertices: connect top to bottom, need smoothing
+ * 
+ * We identify wall vertices by checking if they have neighbors at significantly
+ * different Y levels (connecting top to bottom).
+ */
+function identifyBoundaryVertices(
+  positions: Float32Array,
+  vertexCount: number,
+  adjacency: Map<number, Set<number>>,
+  vertexGroups: number[][]
+): Set<number> {
+  const boundaryVertices = new Set<number>();
+  
+  // Find the Y range of the mesh
+  let minY = Infinity, maxY = -Infinity;
+  for (let i = 0; i < vertexCount; i++) {
+    const y = positions[i * 3 + 1];
+    minY = Math.min(minY, y);
+    maxY = Math.max(maxY, y);
+  }
+  
+  const yRange = maxY - minY;
+  if (yRange < 0.001) {
+    // Flat mesh, no boundaries
+    return boundaryVertices;
+  }
+  
+  // A vertex is a wall vertex if:
+  // 1. It's at the bottom Y level (flat bottom), OR
+  // 2. It has a neighbor at a significantly different Y level
+  // 3. AND it's part of the outer boundary (has fewer than max neighbors)
+  
+  const bottomThreshold = minY + yRange * 0.05; // Within 5% of bottom
+  const topThreshold = maxY - yRange * 0.05;    // Within 5% of top
+  
+  // First pass: identify vertices that are clearly on walls
+  // These are bottom vertices that are on the boundary (not interior)
+  const processedGroups = new Set<number>();
+  
+  for (let i = 0; i < vertexCount; i++) {
+    const group = vertexGroups[i];
+    const firstInGroup = group[0];
+    
+    if (processedGroups.has(firstInGroup)) continue;
+    processedGroups.add(firstInGroup);
+    
+    const y = positions[i * 3 + 1];
+    const neighbors = adjacency.get(i);
+    
+    if (!neighbors || neighbors.size === 0) continue;
+    
+    // Check if this vertex is at the bottom level
+    const isBottom = y <= bottomThreshold;
+    
+    if (isBottom) {
+      // Check if any neighbor is significantly higher (wall connection)
+      let hasTopNeighbor = false;
+      for (const ni of neighbors) {
+        const ny = positions[ni * 3 + 1];
+        if (ny > y + yRange * 0.1) { // Neighbor is at least 10% higher
+          hasTopNeighbor = true;
+          break;
+        }
+      }
+      
+      if (hasTopNeighbor) {
+        // This is a boundary bottom vertex
+        for (const vi of group) {
+          boundaryVertices.add(vi);
+        }
+      }
+    }
+  }
+  
+  // Second pass: find all wall vertices by following edges from boundary bottom vertices
+  // Wall vertices are those between bottom and top that connect boundary vertices
+  let changed = true;
+  let iterations = 0;
+  const maxIterations = 100;
+  
+  while (changed && iterations < maxIterations) {
+    changed = false;
+    iterations++;
+    
+    for (let i = 0; i < vertexCount; i++) {
+      if (boundaryVertices.has(i)) continue;
+      
+      const y = positions[i * 3 + 1];
+      const neighbors = adjacency.get(i);
+      if (!neighbors) continue;
+      
+      // Skip vertices that are clearly on the top surface (interior)
+      if (y >= topThreshold) continue;
+      
+      // Check if this vertex connects boundary vertices
+      let boundaryNeighborCount = 0;
+      let hasDifferentYNeighbor = false;
+      
+      for (const ni of neighbors) {
+        if (boundaryVertices.has(ni)) {
+          boundaryNeighborCount++;
+        }
+        const ny = positions[ni * 3 + 1];
+        if (Math.abs(ny - y) > yRange * 0.05) {
+          hasDifferentYNeighbor = true;
+        }
+      }
+      
+      // If connected to boundary and has vertical neighbors, it's a wall vertex
+      if (boundaryNeighborCount > 0 && hasDifferentYNeighbor) {
+        const group = vertexGroups[i];
+        for (const vi of group) {
+          boundaryVertices.add(vi);
+        }
+        changed = true;
+      }
+    }
+  }
+  
+  return boundaryVertices;
+}
+
+/**
+ * Extract boundary contours at each unique Y level.
+ * Returns a map from Y level to ordered list of vertex indices forming the contour.
+ */
+function extractBoundaryContours(
+  positions: Float32Array,
+  boundaryVertices: Set<number>,
+  adjacency: Map<number, Set<number>>,
+  vertexGroups: number[][],
+  vertexCount: number
+): Map<number, number[][]> {
+  const yTolerance = 0.001;
+  const contoursByY = new Map<number, number[][]>();
+  
+  // Group boundary vertices by Y level
+  const verticesByY = new Map<number, number[]>();
+  const processedGroups = new Set<number>();
+  
+  for (const vi of boundaryVertices) {
+    const group = vertexGroups[vi];
+    const firstInGroup = group[0];
+    
+    if (processedGroups.has(firstInGroup)) continue;
+    processedGroups.add(firstInGroup);
+    
+    const y = positions[vi * 3 + 1];
+    
+    // Find or create Y level bucket
+    let foundY: number | null = null;
+    for (const existingY of verticesByY.keys()) {
+      if (Math.abs(existingY - y) < yTolerance) {
+        foundY = existingY;
+        break;
+      }
+    }
+    
+    if (foundY === null) {
+      foundY = y;
+      verticesByY.set(foundY, []);
+    }
+    
+    verticesByY.get(foundY)!.push(firstInGroup);
+  }
+  
+  // For each Y level, extract ordered contours
+  for (const [yLevel, vertices] of verticesByY) {
+    if (vertices.length < 3) continue;
+    
+    const contours: number[][] = [];
+    const visited = new Set<number>();
+    
+    // Find connected contours at this Y level
+    for (const startVert of vertices) {
+      if (visited.has(startVert)) continue;
+      
+      const contour: number[] = [];
+      let current = startVert;
+      
+      // Walk the contour
+      while (!visited.has(current)) {
+        visited.add(current);
+        contour.push(current);
+        
+        // Find next vertex in contour (at same Y level, boundary vertex, not visited)
+        const neighbors = adjacency.get(current);
+        if (!neighbors) break;
+        
+        let nextVert: number | null = null;
+        for (const ni of neighbors) {
+          const niGroup = vertexGroups[ni][0];
+          if (visited.has(niGroup)) continue;
+          if (!boundaryVertices.has(ni)) continue;
+          
+          const ny = positions[ni * 3 + 1];
+          if (Math.abs(ny - yLevel) < yTolerance) {
+            nextVert = niGroup;
+            break;
+          }
+        }
+        
+        if (nextVert === null) break;
+        current = nextVert;
+      }
+      
+      if (contour.length >= 3) {
+        contours.push(contour);
+      }
+    }
+    
+    if (contours.length > 0) {
+      contoursByY.set(yLevel, contours);
+    }
+  }
+  
+  return contoursByY;
+}
+
+/**
+ * Apply Chaikin corner cutting to a 2D contour (in XZ plane).
+ * This smooths the jagged stair-step pattern on boundary walls.
+ * 
+ * Chaikin's algorithm:
+ * For each edge (P_i, P_{i+1}), create two new points:
+ *   Q = 0.75 * P_i + 0.25 * P_{i+1}
+ *   R = 0.25 * P_i + 0.75 * P_{i+1}
+ * 
+ * For boundary smoothing, we use a gentler version:
+ *   Q = 0.875 * P_i + 0.125 * P_{i+1}  (closer to original)
+ *   R = 0.125 * P_i + 0.875 * P_{i+1}
+ */
+function chaikinSmooth2D(
+  positions: Float32Array,
+  contour: number[],
+  iterations: number
+): Map<number, { x: number, z: number }> {
+  if (contour.length < 3) {
+    return new Map();
+  }
+  
+  // Extract XZ positions for contour vertices
+  let points: { x: number, z: number, origIdx: number }[] = contour.map(vi => ({
+    x: positions[vi * 3],
+    z: positions[vi * 3 + 2],
+    origIdx: vi
+  }));
+  
+  // Apply Chaikin iterations
+  for (let iter = 0; iter < iterations; iter++) {
+    const newPoints: { x: number, z: number, origIdx: number }[] = [];
+    
+    for (let i = 0; i < points.length; i++) {
+      const p0 = points[i];
+      const p1 = points[(i + 1) % points.length];
+      
+      // Gentler corner cutting (0.875/0.125 instead of 0.75/0.25)
+      const q = {
+        x: 0.875 * p0.x + 0.125 * p1.x,
+        z: 0.875 * p0.z + 0.125 * p1.z,
+        origIdx: p0.origIdx // Inherit original index for first point
+      };
+      
+      const r = {
+        x: 0.125 * p0.x + 0.875 * p1.x,
+        z: 0.125 * p0.z + 0.875 * p1.z,
+        origIdx: p1.origIdx // Inherit original index for second point
+      };
+      
+      newPoints.push(q, r);
+    }
+    
+    points = newPoints;
+  }
+  
+  // Map original vertex indices to their smoothed positions
+  // For each original vertex, find the closest smoothed point that inherits from it
+  const smoothedPositions = new Map<number, { x: number, z: number }>();
+  
+  for (const origIdx of contour) {
+    // Find all points that inherit from this original index
+    const matchingPoints = points.filter(p => p.origIdx === origIdx);
+    
+    if (matchingPoints.length > 0) {
+      // Use the first matching point (Q point in Chaikin)
+      smoothedPositions.set(origIdx, { 
+        x: matchingPoints[0].x, 
+        z: matchingPoints[0].z 
+      });
+    }
+  }
+  
+  return smoothedPositions;
+}
+
+/**
+ * Apply Chaikin boundary smoothing to wall vertices.
+ * This smooths the stair-step pattern on boundary walls without affecting
+ * the top surface shape.
+ */
+export async function boundarySmooth(
+  geometry: THREE.BufferGeometry,
+  options: BoundarySmoothingOptions,
+  onProgress?: ProgressCallback
+): Promise<BoundarySmoothingResult> {
+  const { iterations = 3 } = options;
+  
+  try {
+    reportProgress(onProgress, 'smoothing', 0, 'Starting boundary smoothing...');
+    
+    // Clone geometry to avoid modifying original
+    const workGeometry = geometry.clone();
+    
+    // Ensure non-indexed geometry for consistent vertex handling
+    if (workGeometry.index) {
+      const posAttr = workGeometry.getAttribute('position');
+      const indexArray = workGeometry.index.array;
+      const newPositions = new Float32Array(indexArray.length * 3);
+      
+      for (let i = 0; i < indexArray.length; i++) {
+        const idx = indexArray[i];
+        newPositions[i * 3] = posAttr.getX(idx);
+        newPositions[i * 3 + 1] = posAttr.getY(idx);
+        newPositions[i * 3 + 2] = posAttr.getZ(idx);
+      }
+      
+      workGeometry.deleteAttribute('position');
+      workGeometry.setAttribute('position', new THREE.BufferAttribute(newPositions, 3));
+      workGeometry.setIndex(null);
+    }
+    
+    const posAttr = workGeometry.getAttribute('position') as THREE.BufferAttribute;
+    const positions = posAttr.array as Float32Array;
+    const vertexCount = positions.length / 3;
+    const triangleCount = vertexCount / 3;
+    
+    reportProgress(onProgress, 'smoothing', 10, 'Building adjacency map...');
+    
+    // Build adjacency map
+    const { adjacency, vertexGroups } = buildAdjacencyMap(positions, vertexCount, triangleCount);
+    
+    reportProgress(onProgress, 'smoothing', 20, 'Identifying boundary vertices...');
+    
+    // Identify boundary (wall) vertices
+    const boundaryVertices = identifyBoundaryVertices(positions, vertexCount, adjacency, vertexGroups);
+    
+    if (boundaryVertices.size === 0) {
+      reportProgress(onProgress, 'smoothing', 100, 'No boundary vertices found');
+      return {
+        success: true,
+        geometry: workGeometry,
+        iterations: 0,
+        boundaryVerticesSmoothed: 0,
+      };
+    }
+    
+    reportProgress(onProgress, 'smoothing', 40, `Found ${boundaryVertices.size} boundary vertices`);
+    
+    // Extract boundary contours by Y level
+    const contoursByY = extractBoundaryContours(positions, boundaryVertices, adjacency, vertexGroups, vertexCount);
+    
+    reportProgress(onProgress, 'smoothing', 50, `Extracted ${contoursByY.size} Y-level contours`);
+    
+    // Apply Chaikin smoothing to each contour
+    const allSmoothedPositions = new Map<number, { x: number, z: number }>();
+    let contourIndex = 0;
+    const totalContours = Array.from(contoursByY.values()).reduce((sum, c) => sum + c.length, 0);
+    
+    for (const [yLevel, contours] of contoursByY) {
+      for (const contour of contours) {
+        const progress = 50 + (contourIndex / totalContours) * 40;
+        reportProgress(onProgress, 'smoothing', progress, `Smoothing contour ${contourIndex + 1}/${totalContours}`);
+        
+        const smoothed = chaikinSmooth2D(positions, contour, iterations);
+        
+        // Merge into all smoothed positions
+        for (const [idx, pos] of smoothed) {
+          allSmoothedPositions.set(idx, pos);
+        }
+        
+        contourIndex++;
+      }
+    }
+    
+    reportProgress(onProgress, 'smoothing', 90, 'Applying smoothed positions...');
+    
+    // Apply smoothed positions to all vertices in each group
+    let smoothedCount = 0;
+    for (const [groupFirst, newPos] of allSmoothedPositions) {
+      const group = vertexGroups[groupFirst];
+      
+      for (const vi of group) {
+        positions[vi * 3] = newPos.x;
+        // Y is preserved (not smoothed)
+        positions[vi * 3 + 2] = newPos.z;
+        smoothedCount++;
+      }
+    }
+    
+    posAttr.needsUpdate = true;
+    workGeometry.computeVertexNormals();
+    
+    reportProgress(onProgress, 'smoothing', 100, 'Boundary smoothing complete');
+    
+    return {
+      success: true,
+      geometry: workGeometry,
+      iterations,
+      boundaryVerticesSmoothed: smoothedCount,
+    };
+    
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown boundary smoothing error';
+    return {
+      success: false,
+      geometry: null,
+      iterations: 0,
+      boundaryVerticesSmoothed: 0,
       error: errorMessage,
     };
   }
