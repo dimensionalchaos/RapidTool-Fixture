@@ -85,6 +85,24 @@ export interface SmoothingOptions {
    * - false: Faster processing (uniform weights, may develop uneven regions)
    */
   quality?: boolean;
+  /**
+   * Debug coloring mode - adds vertex colors based on classification:
+   * - RED: WALL vertices (smoothed in X-Z)
+   * - GREEN: TOP_SURFACE_BOUNDARY vertices (smoothed in X-Z)
+   * - BLUE: TOP_SURFACE_INTERIOR vertices (NOT smoothed)
+   * - YELLOW: BOTTOM_SURFACE vertices (NOT smoothed)
+   */
+  debugColors?: boolean;
+  /**
+   * Height axis for heightmap-derived meshes.
+   * After inverse rotation is applied to restore world orientation,
+   * the height axis may no longer be Y.
+   * - 'y': Y is up (default, standard Three.js)
+   * - 'z': Z is up (after 90° rotation around X)
+   * - '-y': -Y is up (after 180° rotation)
+   * - '-z': -Z is up
+   */
+  heightAxis?: 'y' | 'z' | '-y' | '-z';
   
   // Legacy parameters for backward compatibility
   /** @deprecated Use strength instead. Smoothing method */
@@ -1682,6 +1700,8 @@ export async function laplacianSmooth(
     iterations = 1,       // Default: 1 iteration
     strength = 0,         // Default: pure Taubin (volume-preserving)
     quality = false,      // Default: faster processing
+    debugColors = false,  // Default: no debug coloring
+    heightAxis = 'y',     // Default: Y is up (standard Three.js)
   } = opts;
   
   try {
@@ -1717,21 +1737,75 @@ export async function laplacianSmooth(
     reportProgress(progressCb, 'smoothing', 20, `Smoothing (${iterations} iterations)...`);
     
     // Apply trCAD-style smoothing
-    const smoothedPositions = trCADSmoothing(
+    const smoothingResult = trCADSmoothing(
       positions,
       adjacency,
       vertexGroups,
       iterations,
       strength,
       quality,
-      vertexCount
+      vertexCount,
+      heightAxis
     );
     
     reportProgress(progressCb, 'smoothing', 90, 'Updating geometry...');
     
     // Update positions
-    posAttr.array.set(smoothedPositions);
+    posAttr.array.set(smoothingResult.positions);
     posAttr.needsUpdate = true;
+    
+    // Add debug vertex colors if requested
+    if (debugColors && smoothingResult.heightmapInfo) {
+      const colors = new Float32Array(vertexCount * 3);
+      const info = smoothingResult.heightmapInfo;
+      
+      // Color mapping:
+      // RED (1,0,0): WALL - smoothed
+      // GREEN (0,1,0): TOP_SURFACE_BOUNDARY - smoothed
+      // BLUE (0,0,1): TOP_SURFACE_INTERIOR - NOT smoothed
+      // YELLOW (1,1,0): BOTTOM_SURFACE - NOT smoothed
+      
+      for (let i = 0; i < vertexCount; i++) {
+        const vertexType = info.vertexTypes.get(i) ?? VertexSurfaceType.TOP_SURFACE_INTERIOR;
+        
+        switch (vertexType) {
+          case VertexSurfaceType.WALL:
+            colors[i * 3] = 1;     // R
+            colors[i * 3 + 1] = 0; // G
+            colors[i * 3 + 2] = 0; // B
+            break;
+          case VertexSurfaceType.TOP_SURFACE_BOUNDARY:
+            colors[i * 3] = 0;     // R
+            colors[i * 3 + 1] = 1; // G
+            colors[i * 3 + 2] = 0; // B
+            break;
+          case VertexSurfaceType.TOP_SURFACE_INTERIOR:
+            colors[i * 3] = 0;     // R
+            colors[i * 3 + 1] = 0; // G
+            colors[i * 3 + 2] = 1; // B
+            break;
+          case VertexSurfaceType.BOTTOM_SURFACE:
+            colors[i * 3] = 1;     // R
+            colors[i * 3 + 1] = 1; // G
+            colors[i * 3 + 2] = 0; // B
+            break;
+        }
+      }
+      
+      workGeometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+      
+      // Log classification stats for debugging
+      console.log('[Smoothing Debug] Vertex classification:', {
+        total: vertexCount,
+        wall: info.wallVertices.size,
+        topBoundary: info.topSurfaceBoundaryVertices.size,
+        topInterior: info.topSurfaceInteriorVertices.size,
+        bottom: info.bottomSurfaceVertices.size,
+        heightRange: info.yRange,
+        bottomHeight: info.bottomY,
+        detectedHeightAxis: info.detectedHeightAxis,
+      });
+    }
     
     // Recompute normals
     workGeometry.computeVertexNormals();
@@ -1765,9 +1839,10 @@ export async function laplacianSmooth(
  * Vertex classification for heightmap-derived meshes.
  */
 enum VertexSurfaceType {
-  TOP_SURFACE,      // On the top (offset) surface - variable Y
-  BOTTOM_SURFACE,   // On the bottom (flat) surface - constant Y = clipYMin
-  WALL,             // On the wall connecting top to bottom
+  TOP_SURFACE_INTERIOR,  // Interior of top surface - NO smoothing needed
+  TOP_SURFACE_BOUNDARY,  // Edge/boundary of top surface - smooth X-Z only
+  BOTTOM_SURFACE,        // On the bottom (flat) surface - constant Y = clipYMin
+  WALL,                  // On the wall connecting top to bottom
 }
 
 /**
@@ -1784,35 +1859,121 @@ function classifyHeightmapVertices(
   positions: Float32Array,
   vertexCount: number,
   adjacency: Map<number, Set<number>>,
-  vertexGroups: number[][]
+  vertexGroups: number[][],
+  heightAxis: 'y' | 'z' | '-y' | '-z' = 'y'
 ): {
   bottomY: number;
   yRange: number;
   vertexTypes: Map<number, VertexSurfaceType>;
-  topSurfaceVertices: Set<number>;
+  topSurfaceInteriorVertices: Set<number>;
+  topSurfaceBoundaryVertices: Set<number>;
   bottomSurfaceVertices: Set<number>;
   wallVertices: Set<number>;
+  detectedHeightAxis: 'y' | 'z' | '-y' | '-z';
 } {
-  // Find Y range
+  // Auto-detect height axis if not explicitly specified or use the hint
+  // The bottom surface is flat (constant height), so we find which axis has
+  // vertices clustered at the minimum value with low variance
+  
+  // Find min/max for each axis
+  let minX = Infinity, maxX = -Infinity;
   let minY = Infinity, maxY = -Infinity;
+  let minZ = Infinity, maxZ = -Infinity;
+  
   for (let i = 0; i < vertexCount; i++) {
+    const x = positions[i * 3];
     const y = positions[i * 3 + 1];
-    minY = Math.min(minY, y);
-    maxY = Math.max(maxY, y);
+    const z = positions[i * 3 + 2];
+    minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+    minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+    minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z);
   }
   
-  const yRange = maxY - minY;
-  // Use a small threshold relative to Y range for bottom detection
-  const bottomThreshold = minY + Math.max(0.001, yRange * 0.01);
+  const rangeX = maxX - minX;
+  const rangeY = maxY - minY;
+  const rangeZ = maxZ - minZ;
+  
+  // Auto-detect: The height axis is the one with:
+  // 1. Significant range (not degenerate)
+  // 2. Has a flat "bottom" surface - vertices clustered at one extreme
+  
+  // Count vertices near min/max for each axis
+  const thresholdX = minX + rangeX * 0.05;
+  const thresholdY = minY + rangeY * 0.05;
+  const thresholdZ = minZ + rangeZ * 0.05;
+  
+  let countAtMinX = 0, countAtMinY = 0, countAtMinZ = 0;
+  for (let i = 0; i < vertexCount; i++) {
+    if (positions[i * 3] <= thresholdX) countAtMinX++;
+    if (positions[i * 3 + 1] <= thresholdY) countAtMinY++;
+    if (positions[i * 3 + 2] <= thresholdZ) countAtMinZ++;
+  }
+  
+  // The height axis should have a meaningful portion of vertices at the bottom (the flat base)
+  // but not ALL vertices (that would be a flat plane)
+  const ratioX = countAtMinX / vertexCount;
+  const ratioY = countAtMinY / vertexCount;
+  const ratioZ = countAtMinZ / vertexCount;
+  
+  // Auto-detect height axis: prefer the axis with ratio between 10-40% (typical for heightmap meshes)
+  // This indicates a flat bottom with walls and top surface
+  let detectedAxis: 'y' | 'z' | '-y' | '-z' = heightAxis;
+  
+  // Only auto-detect if heightAxis is the default 'y' and it doesn't look right
+  if (heightAxis === 'y') {
+    const idealRange = (r: number) => r >= 0.10 && r <= 0.40;
+    
+    if (!idealRange(ratioY) && idealRange(ratioZ)) {
+      detectedAxis = 'z';
+      console.log('[Smoothing] Auto-detected height axis: Z (ratioY:', ratioY.toFixed(2), 'ratioZ:', ratioZ.toFixed(2), ')');
+    } else if (!idealRange(ratioY) && rangeZ > rangeY * 1.5) {
+      // If Z range is significantly larger than Y range, Z is probably height
+      detectedAxis = 'z';
+      console.log('[Smoothing] Auto-detected height axis: Z (rangeY:', rangeY.toFixed(2), 'rangeZ:', rangeZ.toFixed(2), ')');
+    }
+  }
+  
+  // Helper function to get the "height" value from a vertex based on detected axis
+  const getHeight = (vertexIndex: number): number => {
+    const baseIdx = vertexIndex * 3;
+    switch (detectedAxis) {
+      case 'y':  return positions[baseIdx + 1];      // Y component
+      case '-y': return -positions[baseIdx + 1];     // Negative Y
+      case 'z':  return positions[baseIdx + 2];      // Z component
+      case '-z': return -positions[baseIdx + 2];     // Negative Z
+      default:   return positions[baseIdx + 1];      // Default to Y
+    }
+  };
+
+  // Find height range along the detected axis
+  let minHeight = Infinity, maxHeight = -Infinity;
+  for (let i = 0; i < vertexCount; i++) {
+    const h = getHeight(i);
+    minHeight = Math.min(minHeight, h);
+    maxHeight = Math.max(maxHeight, h);
+  }
+  
+  const heightRange = maxHeight - minHeight;
+  
+  // Define height zones:
+  // - Bottom zone: within 5% of minHeight (the flat base) - NEVER smoothed
+  // - Middle zone: between 5% and 80% of height (wall area) - smoothed
+  // - Top zone: above 80% of height (the heightmap surface) - only boundary smoothed
+  // These thresholds help distinguish regions even after decimation
+  const bottomZoneThreshold = minHeight + heightRange * 0.05;
+  const topZoneThreshold = minHeight + heightRange * 0.80;
   
   const vertexTypes = new Map<number, VertexSurfaceType>();
-  const topSurfaceVertices = new Set<number>();
+  const topSurfaceInteriorVertices = new Set<number>();
+  const topSurfaceBoundaryVertices = new Set<number>();
   const bottomSurfaceVertices = new Set<number>();
   const wallVertices = new Set<number>();
   
+  // Track which groups are initially classified as "top surface" for second pass
+  const potentialTopSurfaceGroups = new Set<number>();
   const processedGroups = new Set<number>();
   
-  // First pass: classify based on Y position and neighbor Y variance
+  // First pass: classify based on height position and neighbor height distribution
   for (let i = 0; i < vertexCount; i++) {
     const group = vertexGroups[i];
     const groupId = group[0];
@@ -1820,54 +1981,66 @@ function classifyHeightmapVertices(
     if (processedGroups.has(groupId)) continue;
     processedGroups.add(groupId);
     
-    const y = positions[i * 3 + 1];
-    const isAtBottom = y <= bottomThreshold;
+    const h = getHeight(i);
+    const isInBottomZone = h <= bottomZoneThreshold;
+    const isInTopZone = h >= topZoneThreshold;
     
-    // Check neighbors to determine if this is a wall vertex
+    // Analyze neighbor heights
     const neighbors = adjacency.get(i);
-    let hasHigherNeighbor = false;
-    let hasLowerNeighbor = false;
-    let hasSameHeightNeighbor = false;
+    let neighborMinH = Infinity;
+    let neighborMaxH = -Infinity;
+    let hasBottomZoneNeighbor = false;
+    let hasTopZoneNeighbor = false;
     
     if (neighbors) {
       for (const ni of neighbors) {
-        const ny = positions[ni * 3 + 1];
-        const yDiff = ny - y;
+        const nh = getHeight(ni);
+        neighborMinH = Math.min(neighborMinH, nh);
+        neighborMaxH = Math.max(neighborMaxH, nh);
         
-        if (yDiff > yRange * 0.05) {
-          hasHigherNeighbor = true;
-        } else if (yDiff < -yRange * 0.05) {
-          hasLowerNeighbor = true;
-        } else {
-          hasSameHeightNeighbor = true;
+        if (nh <= bottomZoneThreshold) {
+          hasBottomZoneNeighbor = true;
+        }
+        if (nh >= topZoneThreshold) {
+          hasTopZoneNeighbor = true;
         }
       }
     }
     
+    // Calculate neighbor height span (how much vertical range do neighbors cover?)
+    const neighborHeightSpan = neighborMaxH - neighborMinH;
+    const hasLargeVerticalSpan = neighborHeightSpan > heightRange * 0.3; // Neighbors span >30% of total height
+    
     // Classify the vertex
+    // NOTE: Due to 180-degree rotation applied in mesh generation (to project from below),
+    // the coordinate system is flipped:
+    //   - "Bottom zone" (low coordinates) = heightmap surface (TOP_SURFACE)
+    //   - "Top zone" (high coordinates) = flat base (BOTTOM_SURFACE)
     let surfaceType: VertexSurfaceType;
     
-    if (isAtBottom) {
-      // At bottom Y level
-      if (hasHigherNeighbor) {
-        // Has connection to higher vertices = wall corner at bottom
+    if (isInTopZone) {
+      // CRITICAL: Top zone (high coordinates) = FLAT BASE after 180° rotation
+      // The flat base should NEVER be smoothed - not even at its edges
+      surfaceType = VertexSurfaceType.BOTTOM_SURFACE;
+    } else if (isInBottomZone) {
+      // Bottom zone (low coordinates) = HEIGHTMAP SURFACE after 180° rotation
+      if (hasTopZoneNeighbor || hasLargeVerticalSpan) {
+        // Connected to flat base zone or has large span = wall at heightmap edge
         surfaceType = VertexSurfaceType.WALL;
       } else {
-        // Only same-height neighbors = interior bottom surface
-        surfaceType = VertexSurfaceType.BOTTOM_SURFACE;
+        // All neighbors in bottom zone = potential heightmap surface (will refine in pass 2)
+        potentialTopSurfaceGroups.add(groupId);
+        surfaceType = VertexSurfaceType.TOP_SURFACE_INTERIOR; // Temporary
       }
     } else {
-      // Not at bottom
-      if (hasLowerNeighbor && hasHigherNeighbor) {
-        // Has both higher and lower neighbors = middle of wall
+      // Vertex is in middle zone - likely a wall vertex (connects heightmap to flat base)
+      // After decimation, wall vertices often end up here
+      if (hasBottomZoneNeighbor || hasTopZoneNeighbor || hasLargeVerticalSpan) {
         surfaceType = VertexSurfaceType.WALL;
-      } else if (hasLowerNeighbor) {
-        // Has lower neighbors = top edge of wall OR top surface boundary
-        // If most neighbors are at same height, it's top surface boundary
-        surfaceType = hasSameHeightNeighbor ? VertexSurfaceType.TOP_SURFACE : VertexSurfaceType.WALL;
       } else {
-        // Only same-height or higher neighbors = top surface
-        surfaceType = VertexSurfaceType.TOP_SURFACE;
+        // Middle height but no vertical connections - could be decimated heightmap surface
+        potentialTopSurfaceGroups.add(groupId);
+        surfaceType = VertexSurfaceType.TOP_SURFACE_INTERIOR; // Temporary
       }
     }
     
@@ -1875,26 +2048,63 @@ function classifyHeightmapVertices(
     for (const vi of group) {
       vertexTypes.set(vi, surfaceType);
       switch (surfaceType) {
-        case VertexSurfaceType.TOP_SURFACE:
-          topSurfaceVertices.add(vi);
-          break;
         case VertexSurfaceType.BOTTOM_SURFACE:
           bottomSurfaceVertices.add(vi);
           break;
         case VertexSurfaceType.WALL:
           wallVertices.add(vi);
           break;
+        // TOP_SURFACE types will be assigned in second pass
+      }
+    }
+  }
+  
+  // Second pass: distinguish TOP_SURFACE_BOUNDARY from TOP_SURFACE_INTERIOR
+  // A vertex is BOUNDARY if it is adjacent to WALL vertices
+  for (const groupId of potentialTopSurfaceGroups) {
+    const i = groupId;
+    const group = vertexGroups[i];
+    const neighbors = adjacency.get(i);
+    
+    let isBoundary = false;
+    
+    if (neighbors) {
+      for (const ni of neighbors) {
+        const neighborGroupId = vertexGroups[ni][0];
+        const neighborType = vertexTypes.get(neighborGroupId);
+        
+        // Check if neighbor is a WALL vertex
+        if (neighborType === VertexSurfaceType.WALL) {
+          isBoundary = true;
+          break;
+        }
+      }
+    }
+    
+    const surfaceType = isBoundary 
+      ? VertexSurfaceType.TOP_SURFACE_BOUNDARY 
+      : VertexSurfaceType.TOP_SURFACE_INTERIOR;
+    
+    // Apply to all vertices in this group
+    for (const vi of group) {
+      vertexTypes.set(vi, surfaceType);
+      if (surfaceType === VertexSurfaceType.TOP_SURFACE_BOUNDARY) {
+        topSurfaceBoundaryVertices.add(vi);
+      } else {
+        topSurfaceInteriorVertices.add(vi);
       }
     }
   }
   
   return {
-    bottomY: minY,
-    yRange,
+    bottomY: minHeight,
+    yRange: heightRange,
     vertexTypes,
-    topSurfaceVertices,
+    topSurfaceInteriorVertices,
+    topSurfaceBoundaryVertices,
     bottomSurfaceVertices,
     wallVertices,
+    detectedHeightAxis: detectedAxis,
   };
 }
 
@@ -1938,8 +2148,21 @@ function trCADSmoothing(
   iterations: number,
   strength: number,
   quality: boolean,
-  vertexCount: number
-): Float32Array {
+  vertexCount: number,
+  heightAxis: 'y' | 'z' | '-y' | '-z' = 'y'
+): {
+  positions: Float32Array;
+  heightmapInfo: {
+    bottomY: number;
+    yRange: number;
+    vertexTypes: Map<number, VertexSurfaceType>;
+    topSurfaceInteriorVertices: Set<number>;
+    topSurfaceBoundaryVertices: Set<number>;
+    bottomSurfaceVertices: Set<number>;
+    wallVertices: Set<number>;
+    detectedHeightAxis: 'y' | 'z' | '-y' | '-z';
+  };
+} {
   // Clamp strength to [0, 1]
   const s = Math.max(0, Math.min(1, strength));
   
@@ -1949,7 +2172,7 @@ function trCADSmoothing(
   const LAPLACIAN_LAMBDA = 0.5;
   
   // Classify vertices by surface type for heightmap-aware smoothing
-  const heightmapInfo = classifyHeightmapVertices(positions, vertexCount, adjacency, vertexGroups);
+  const heightmapInfo = classifyHeightmapVertices(positions, vertexCount, adjacency, vertexGroups, heightAxis);
   
   // Build cotangent weights if quality mode
   let cotWeights: Map<string, number> | null = null;
@@ -1982,20 +2205,25 @@ function trCADSmoothing(
     }
   }
   
-  return current as Float32Array;
+  return {
+    positions: current as Float32Array,
+    heightmapInfo,
+  };
 }
 
 /**
  * Single smoothing pass with heightmap-aware vertex handling.
  * 
- * For heightmap-derived meshes, the jagged edges are in the HORIZONTAL plane (X-Z in Three.js,
- * which is X-Y in world coordinates). The Y coordinate (Three.js) represents HEIGHT (world Z)
- * and should be PRESERVED to maintain the correct offset/clearance from the part.
+ * For heightmap-derived meshes, the jagged edges are in the HORIZONTAL plane.
+ * The height coordinate should be PRESERVED to maintain the correct offset/clearance from the part.
+ * 
+ * The height axis is auto-detected and stored in heightmapInfo.detectedHeightAxis:
+ * - 'y': Y is height, smooth X-Z (standard Three.js)
+ * - 'z': Z is height, smooth X-Y (after rotation around X axis)
  * 
  * Smoothing behavior:
- * - TOP_SURFACE: Smooth X-Z only (horizontal), preserve Y (height)
- * - WALL: Smooth X-Z only (horizontal), preserve Y (height)
- * - BOTTOM_SURFACE: No smoothing at all
+ * - TOP_SURFACE_BOUNDARY & WALL: Smooth in horizontal plane, preserve height
+ * - TOP_SURFACE_INTERIOR & BOTTOM_SURFACE: No smoothing at all
  * 
  * This ensures the boundary contour becomes smoother without affecting the height profile.
  */
@@ -2011,16 +2239,32 @@ function smoothPassHeightmapAware(
     bottomY: number;
     yRange: number;
     vertexTypes: Map<number, VertexSurfaceType>;
-    topSurfaceVertices: Set<number>;
+    topSurfaceInteriorVertices: Set<number>;
+    topSurfaceBoundaryVertices: Set<number>;
     bottomSurfaceVertices: Set<number>;
     wallVertices: Set<number>;
+    detectedHeightAxis: 'y' | 'z' | '-y' | '-z';
   }
 ): Float32Array {
   const result = new Float32Array(positions.length);
   const processedGroups = new Set<number>();
   
-  // Y tolerance for "same height" neighbor filtering
-  const yTolerance = Math.max(0.001, heightmapInfo.yRange * 0.15);
+  // Height tolerance for "same height" neighbor filtering
+  const heightTolerance = Math.max(0.001, heightmapInfo.yRange * 0.15);
+  
+  // Determine which axis is height based on detected axis
+  const heightAxis = heightmapInfo.detectedHeightAxis;
+  
+  // Helper functions based on height axis
+  const getHeight = (idx: number): number => {
+    switch (heightAxis) {
+      case 'y':  return positions[idx * 3 + 1];
+      case '-y': return -positions[idx * 3 + 1];
+      case 'z':  return positions[idx * 3 + 2];
+      case '-z': return -positions[idx * 3 + 2];
+      default:   return positions[idx * 3 + 1];
+    }
+  };
   
   for (let i = 0; i < vertexCount; i++) {
     const group = vertexGroups[i];
@@ -2040,10 +2284,12 @@ function smoothPassHeightmapAware(
     const pz = positions[i * 3 + 2];
     
     // Get vertex surface type
-    const surfaceType = heightmapInfo.vertexTypes.get(i) ?? VertexSurfaceType.TOP_SURFACE;
+    const surfaceType = heightmapInfo.vertexTypes.get(i) ?? VertexSurfaceType.TOP_SURFACE_INTERIOR;
     
-    // BOTTOM_SURFACE vertices: No smoothing at all - keep original position
-    if (surfaceType === VertexSurfaceType.BOTTOM_SURFACE) {
+    // BOTTOM_SURFACE and TOP_SURFACE_INTERIOR vertices: No smoothing - keep original position
+    // Interior top surface vertices don't need smoothing as their XZ position is accurate from heightmap
+    if (surfaceType === VertexSurfaceType.BOTTOM_SURFACE || 
+        surfaceType === VertexSurfaceType.TOP_SURFACE_INTERIOR) {
       for (const vi of group) {
         result[vi * 3] = px;
         result[vi * 3 + 1] = py;
@@ -2062,8 +2308,12 @@ function smoothPassHeightmapAware(
       continue;
     }
     
-    // Compute weighted centroid of FILTERED neighbors (X and Z only, not Y)
-    let sumX = 0, sumZ = 0;
+    // Compute weighted centroid of FILTERED neighbors in the horizontal plane
+    // Only WALL and TOP_SURFACE_BOUNDARY vertices reach here
+    // Based on height axis, we smooth different coordinate pairs:
+    // - Y is height: smooth X-Z, preserve Y
+    // - Z is height: smooth X-Y, preserve Z
+    let sumH1 = 0, sumH2 = 0; // Horizontal coordinates to smooth
     let totalWeight = 0;
     const visitedNeighborGroups = new Set<number>();
     
@@ -2081,8 +2331,9 @@ function smoothPassHeightmapAware(
       if (neighborType === VertexSurfaceType.BOTTOM_SURFACE) continue;
       
       // Filter to same-height neighbors for horizontal smoothing
-      // This ensures we only smooth with vertices at similar heights
-      if (Math.abs(ny - py) > yTolerance) continue;
+      const nh = getHeight(ni);
+      const ph = getHeight(i);
+      if (Math.abs(nh - ph) > heightTolerance) continue;
       
       let weight = 1.0;
       if (quality && cotWeights) {
@@ -2090,20 +2341,36 @@ function smoothPassHeightmapAware(
         weight = cotWeights.get(edgeKey) ?? 1.0;
       }
       
-      // Only accumulate X and Z for horizontal smoothing
-      sumX += nx * weight;
-      sumZ += nz * weight;
+      // Accumulate horizontal coordinates based on height axis
+      if (heightAxis === 'y' || heightAxis === '-y') {
+        // Y is height: smooth X and Z
+        sumH1 += nx * weight;
+        sumH2 += nz * weight;
+      } else {
+        // Z is height: smooth X and Y
+        sumH1 += nx * weight;
+        sumH2 += ny * weight;
+      }
       totalWeight += weight;
     }
     
     if (totalWeight > 0) {
-      const cx = sumX / totalWeight;
-      const cz = sumZ / totalWeight;
+      const ch1 = sumH1 / totalWeight;
+      const ch2 = sumH2 / totalWeight;
       
-      // Smooth X and Z (horizontal plane), PRESERVE Y (height)
-      const newX = px + factor * (cx - px);
-      const newY = py; // ALWAYS preserve Y (height) to maintain offset distance
-      const newZ = pz + factor * (cz - pz);
+      let newX: number, newY: number, newZ: number;
+      
+      if (heightAxis === 'y' || heightAxis === '-y') {
+        // Y is height: smooth X-Z, preserve Y
+        newX = px + factor * (ch1 - px);
+        newY = py; // Preserve height
+        newZ = pz + factor * (ch2 - pz);
+      } else {
+        // Z is height: smooth X-Y, preserve Z
+        newX = px + factor * (ch1 - px);
+        newY = py + factor * (ch2 - py);
+        newZ = pz; // Preserve height
+      }
       
       for (const vi of group) {
         result[vi * 3] = newX;

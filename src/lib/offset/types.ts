@@ -103,6 +103,14 @@ export interface CavitySettings {
    * - false: Faster processing (may develop uneven regions)
    */
   smoothingQuality: boolean;
+  /**
+   * Debug coloring mode - adds vertex colors based on classification:
+   * - RED: WALL vertices (smoothed in X-Z)
+   * - GREEN: TOP_SURFACE_BOUNDARY vertices (smoothed in X-Z)
+   * - BLUE: TOP_SURFACE_INTERIOR vertices (NOT smoothed)
+   * - YELLOW: BOTTOM_SURFACE vertices (NOT smoothed)
+   */
+  debugSmoothingColors: boolean;
   /** CSG Cleanup: Minimum volume for component to be kept (mm³) */
   csgMinVolume: number;
   /** CSG Cleanup: Minimum thickness for component to be kept (mm) */
@@ -155,6 +163,7 @@ export const DEFAULT_CAVITY_SETTINGS: CavitySettings = {
   smoothingStrength: 0.0, // Pure Taubin (volume-preserving)
   smoothingIterations: 10, // Default iterations
   smoothingQuality: true, // Quality mode on by default
+  debugSmoothingColors: false, // Debug colors off by default
   csgMinVolume: 5.0,
   csgMinThickness: 2.0,
   csgMinTriangles: 10,

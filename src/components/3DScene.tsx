@@ -1405,6 +1405,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
                 const iterations = settings.smoothingIterations ?? 10;
                 const strength = settings.smoothingStrength ?? 0;
                 const quality = settings.smoothingQuality ?? true;
+                const debugColors = settings.debugSmoothingColors ?? false;
                 
                 const strengthLabel = strength === 0 ? 'Taubin' : strength === 1 ? 'Laplacian' : `${(strength * 100).toFixed(0)}%`;
                 
@@ -1426,6 +1427,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
                     iterations,
                     strength,
                     quality,
+                    debugColors,
                   }
                 );
                 
@@ -1440,16 +1442,35 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
               finalGeometry = currentGeometry;
             }
             
-            // Create preview material - translucent blue to match color scheme
-            const previewMaterial = new THREE.MeshStandardMaterial({
-              color: 0x3b82f6, // Blue-500 for visibility
-              transparent: true,
-              opacity: settings.previewOpacity ?? 0.3,
-              side: THREE.DoubleSide,
-              depthWrite: false,
-              roughness: 0.5,
-              metalness: 0.1,
-            });
+            // Check if geometry has vertex colors (from debug mode)
+            const hasVertexColors = finalGeometry.hasAttribute('color');
+            
+            // Create preview material - use vertex colors for debug, or translucent blue normally
+            const previewMaterial = hasVertexColors
+              ? new THREE.MeshBasicMaterial({
+                  vertexColors: true,
+                  transparent: true,
+                  opacity: settings.previewOpacity ?? 0.8, // Higher opacity for debug colors
+                  side: THREE.DoubleSide,
+                  depthWrite: false,
+                })
+              : new THREE.MeshStandardMaterial({
+                  color: 0x3b82f6, // Blue-500 for visibility
+                  transparent: true,
+                  opacity: settings.previewOpacity ?? 0.3,
+                  side: THREE.DoubleSide,
+                  depthWrite: false,
+                  roughness: 0.5,
+                  metalness: 0.1,
+                });
+            
+            if (hasVertexColors) {
+              console.log('[3DScene] Debug colors enabled - vertex classification visualization:');
+              console.log('  RED: WALL vertices (smoothed in X-Z)');
+              console.log('  GREEN: TOP_SURFACE_BOUNDARY vertices (smoothed in X-Z)');
+              console.log('  BLUE: TOP_SURFACE_INTERIOR vertices (NOT smoothed)');
+              console.log('  YELLOW: BOTTOM_SURFACE vertices (NOT smoothed)');
+            }
 
             const previewMesh = new THREE.Mesh(finalGeometry, previewMaterial);
             

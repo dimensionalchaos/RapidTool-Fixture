@@ -419,6 +419,14 @@ const CavityStepContent: React.FC<CavityStepContentProps> = ({
                   disabled={isProcessing}
                   hint="Better quality (slower) vs faster processing"
                 />
+
+                <ToggleSetting
+                  label="Debug Colors"
+                  checked={settings.debugSmoothingColors ?? false}
+                  onCheckedChange={(checked) => handleSettingChange('debugSmoothingColors', checked)}
+                  disabled={isProcessing}
+                  hint="RED=Wall, GREEN=TopBoundary, BLUE=TopInterior, YELLOW=Bottom"
+                />
               </div>
             )}
           </div>
