@@ -203,14 +203,20 @@ const processHoleFilling = async (
   fillHoles: boolean,
   progressCallback: ProgressCallback | null
 ): Promise<{ vertices: Float32Array; holesFilled: number; capTriangles: number }> => {
+  console.log('[OffsetMesh] processHoleFilling called with fillHoles:', fillHoles);
+  
   if (!fillHoles) {
+    console.log('[OffsetMesh] Hole filling DISABLED by user');
     return { vertices, holesFilled: 0, capTriangles: 0 };
   }
 
   reportProgress(progressCallback, PROGRESS.HOLE_ANALYSIS, 'Analyzing mesh for holes');
   const holeAnalysis = analyzeMeshHoles(vertices);
+  
+  console.log('[OffsetMesh] Hole analysis result:', holeAnalysis);
 
   if (!holeAnalysis.hasHoles) {
+    console.log('[OffsetMesh] No holes found in mesh');
     return { vertices, holesFilled: 0, capTriangles: 0 };
   }
 
@@ -218,6 +224,12 @@ const processHoleFilling = async (
   const originalLength = vertices.length;
   const filledVertices = fillMeshHoles(vertices);
   const addedVertices = filledVertices.length - originalLength;
+  
+  console.log('[OffsetMesh] Filled holes:', {
+    originalVertices: originalLength / 3,
+    newVertices: filledVertices.length / 3,
+    addedTriangles: addedVertices / 9,
+  });
 
   return {
     vertices: filledVertices,

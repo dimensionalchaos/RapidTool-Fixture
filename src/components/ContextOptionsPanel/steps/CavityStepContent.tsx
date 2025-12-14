@@ -413,14 +413,6 @@ const CavityStepContent: React.FC<CavityStepContentProps> = ({
                 />
 
                 <ToggleSetting
-                  label="Quality Mode"
-                  checked={settings.smoothingQuality ?? true}
-                  onCheckedChange={(checked) => handleSettingChange('smoothingQuality', checked)}
-                  disabled={isProcessing}
-                  hint="Better quality (slower) vs faster processing"
-                />
-
-                <ToggleSetting
                   label="Debug Colors"
                   checked={settings.debugSmoothingColors ?? false}
                   onCheckedChange={(checked) => handleSettingChange('debugSmoothingColors', checked)}

@@ -2026,13 +2026,110 @@ function classifyHeightmapVertices(
   
   const heightRange = maxHeight - minHeight;
   
-  // Define height zones:
-  // - Bottom zone: within 5% of minHeight (the flat base) - NEVER smoothed
-  // - Middle zone: between 5% and 80% of height (wall area) - smoothed
-  // - Top zone: above 80% of height (the heightmap surface) - only boundary smoothed
-  // These thresholds help distinguish regions even after decimation
-  const bottomZoneThreshold = minHeight + heightRange * 0.05;
-  const topZoneThreshold = minHeight + heightRange * 0.80;
+  // Only need to identify the flat base zone (high height values = flat base after 180° rotation)
+  const flatBaseThreshold = minHeight + heightRange * 0.90; // Top 10% is flat base
+  
+  // HYBRID CLASSIFICATION APPROACH:
+  // Problem: Decimation creates large triangles that span from flat areas to walls.
+  // - Face-based wall detection marks ALL vertices of a wall face as walls (bad for decimated meshes)
+  // - Adjacency-based boundary detection connects distant vertices through large triangles
+  //
+  // Solution:
+  // 1. WALL: Use averaged vertex normals (dilutes effect of one large spanning triangle)
+  // 2. BOUNDARY: Require geometric proximity to wall vertices, not just adjacency
+  
+  const vertexNormals = new Map<number, { x: number; y: number; z: number }>();
+  const vertexPositions = new Map<number, { x: number; y: number; z: number }>();
+  
+  const WALL_THRESHOLD = 0.1; // cos(~84°) - for averaged normals, use less strict threshold
+  
+  // Debug: track stats
+  let totalFaces = 0;
+  let wallFaceCount = 0;
+  let minFaceDot = 1.0;
+  let maxFaceDot = 0.0;
+  
+  // Compute face normals and ACCUMULATE to vertices (averaging approach)
+  const triangleCount = vertexCount / 3;
+  for (let t = 0; t < triangleCount; t++) {
+    const i0 = t * 3;
+    const i1 = t * 3 + 1;
+    const i2 = t * 3 + 2;
+    
+    // Get triangle vertices
+    const v0x = positions[i0 * 3], v0y = positions[i0 * 3 + 1], v0z = positions[i0 * 3 + 2];
+    const v1x = positions[i1 * 3], v1y = positions[i1 * 3 + 1], v1z = positions[i1 * 3 + 2];
+    const v2x = positions[i2 * 3], v2y = positions[i2 * 3 + 1], v2z = positions[i2 * 3 + 2];
+    
+    // Compute face normal (cross product of edges)
+    const e1x = v1x - v0x, e1y = v1y - v0y, e1z = v1z - v0z;
+    const e2x = v2x - v0x, e2y = v2y - v0y, e2z = v2z - v0z;
+    let nx = e1y * e2z - e1z * e2y;
+    let ny = e1z * e2x - e1x * e2z;
+    let nz = e1x * e2y - e1y * e2x;
+    
+    // Normalize face normal
+    const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
+    if (len > 0) {
+      nx /= len;
+      ny /= len;
+      nz /= len;
+    }
+    
+    // Debug: track face stats
+    const faceDot = Math.abs(nx * upX + ny * upY + nz * upZ);
+    totalFaces++;
+    minFaceDot = Math.min(minFaceDot, faceDot);
+    maxFaceDot = Math.max(maxFaceDot, faceDot);
+    if (faceDot < 0.1) wallFaceCount++;
+    
+    // Accumulate normals to vertices (will be averaged later)
+    for (const vi of [i0, i1, i2]) {
+      const groupId = vertexGroups[vi][0];
+      const existing = vertexNormals.get(groupId);
+      if (existing) {
+        existing.x += nx;
+        existing.y += ny;
+        existing.z += nz;
+      } else {
+        vertexNormals.set(groupId, { x: nx, y: ny, z: nz });
+      }
+      
+      // Also store vertex position for distance-based boundary check
+      if (!vertexPositions.has(groupId)) {
+        vertexPositions.set(groupId, {
+          x: positions[vi * 3],
+          y: positions[vi * 3 + 1],
+          z: positions[vi * 3 + 2]
+        });
+      }
+    }
+  }
+  
+  // Debug: log wall detection stats
+  console.log(`[Smoothing] Hybrid classification stats:`);
+  console.log(`  - Up vector: (${upX.toFixed(3)}, ${upY.toFixed(3)}, ${upZ.toFixed(3)})`);
+  console.log(`  - Total faces: ${totalFaces}`);
+  console.log(`  - Wall-like faces: ${wallFaceCount} (${(wallFaceCount/totalFaces*100).toFixed(1)}%)`);
+  console.log(`  - Face dot range: [${minFaceDot.toFixed(4)}, ${maxFaceDot.toFixed(4)}]`);
+  console.log(`  - Wall threshold (averaged): ${WALL_THRESHOLD}`);
+  
+  // Normalize the accumulated normals to get averaged vertex normals
+  for (const [, n] of vertexNormals) {
+    const len = Math.sqrt(n.x * n.x + n.y * n.y + n.z * n.z);
+    if (len > 0) {
+      n.x /= len;
+      n.y /= len;
+      n.z /= len;
+    }
+  }
+  
+  // Helper: get dot product of averaged vertex normal with up direction
+  const getVertexNormalDot = (groupId: number): number => {
+    const n = vertexNormals.get(groupId);
+    if (!n) return 1; // Default to flat if no normal
+    return Math.abs(n.x * upX + n.y * upY + n.z * upZ);
+  };
   
   const vertexTypes = new Map<number, VertexSurfaceType>();
   const topSurfaceInteriorVertices = new Set<number>();
@@ -2040,11 +2137,11 @@ function classifyHeightmapVertices(
   const bottomSurfaceVertices = new Set<number>();
   const wallVertices = new Set<number>();
   
-  // Track which groups are initially classified as "top surface" for second pass
-  const potentialTopSurfaceGroups = new Set<number>();
   const processedGroups = new Set<number>();
   
-  // First pass: classify based on height position and neighbor height distribution
+  // FIRST PASS: Classify using averaged vertex normals
+  // This is robust to decimation because large triangles' wall normals get diluted by many flat faces
+  
   for (let i = 0; i < vertexCount; i++) {
     const group = vertexGroups[i];
     const groupId = group[0];
@@ -2053,76 +2150,21 @@ function classifyHeightmapVertices(
     processedGroups.add(groupId);
     
     const h = getHeight(i);
-    const isInBottomZone = h <= bottomZoneThreshold;
-    const isInTopZone = h >= topZoneThreshold;
+    const normalDot = getVertexNormalDot(groupId);
+    const isWall = normalDot < WALL_THRESHOLD; // Averaged normal is wall-like
+    const isAtFlatBase = h >= flatBaseThreshold;
     
-    // Analyze neighbor heights
-    const neighbors = adjacency.get(i);
-    let neighborMinH = Infinity;
-    let neighborMaxH = -Infinity;
-    let hasBottomZoneNeighbor = false;
-    let hasTopZoneNeighbor = false;
-    
-    if (neighbors) {
-      for (const ni of neighbors) {
-        const nh = getHeight(ni);
-        neighborMinH = Math.min(neighborMinH, nh);
-        neighborMaxH = Math.max(neighborMaxH, nh);
-        
-        if (nh <= bottomZoneThreshold) {
-          hasBottomZoneNeighbor = true;
-        }
-        if (nh >= topZoneThreshold) {
-          hasTopZoneNeighbor = true;
-        }
-      }
-    }
-    
-    // Calculate neighbor height span (how much vertical range do neighbors cover?)
-    const neighborHeightSpan = neighborMaxH - neighborMinH;
-    const hasLargeVerticalSpan = neighborHeightSpan > heightRange * 0.3; // Neighbors span >30% of total height
-    
-    // For internal walls within heightmap (undercuts): detect significant LOCAL height variation
-    // These walls don't span the full height but have steep local gradients
-    // Use a smaller threshold relative to the bottom zone thickness
-    const bottomZoneHeight = bottomZoneThreshold - minHeight;
-    const internalWallThreshold = Math.max(heightRange * 0.08, bottomZoneHeight * 0.5); // 8% of total or 50% of bottom zone
-    const hasInternalWallSpan = neighborHeightSpan > internalWallThreshold;
-    
-    // Classify the vertex
-    // NOTE: Due to 180-degree rotation applied in mesh generation (to project from below),
-    // the coordinate system is flipped:
-    //   - "Bottom zone" (low coordinates) = heightmap surface (TOP_SURFACE)
-    //   - "Top zone" (high coordinates) = flat base (BOTTOM_SURFACE)
     let surfaceType: VertexSurfaceType;
     
-    if (isInTopZone) {
-      // CRITICAL: Top zone (high coordinates) = FLAT BASE after 180° rotation
-      // The flat base should NEVER be smoothed - not even at its edges
+    if (isWall) {
+      // Averaged normal is wall-like = WALL (smoothed)
+      surfaceType = VertexSurfaceType.WALL;
+    } else if (isAtFlatBase) {
+      // Flat normal, at high height = FLAT BASE (never smoothed)
       surfaceType = VertexSurfaceType.BOTTOM_SURFACE;
-    } else if (isInBottomZone) {
-      // Bottom zone (low coordinates) = HEIGHTMAP SURFACE after 180° rotation
-      if (hasTopZoneNeighbor || hasLargeVerticalSpan) {
-        // Connected to flat base zone or has large span = wall at heightmap edge
-        surfaceType = VertexSurfaceType.WALL;
-      } else if (hasInternalWallSpan) {
-        // Internal wall within heightmap (undercut) - significant local height variation
-        surfaceType = VertexSurfaceType.WALL;
-      } else {
-        // All neighbors in bottom zone = potential heightmap surface (will refine in pass 2)
-        potentialTopSurfaceGroups.add(groupId);
-        surfaceType = VertexSurfaceType.TOP_SURFACE_INTERIOR; // Temporary
-      }
     } else {
-      // Vertex is in middle zone - likely a wall vertex (connects heightmap to flat base)
-      // After decimation, wall vertices often end up here
-      if (hasBottomZoneNeighbor || hasTopZoneNeighbor || hasLargeVerticalSpan || hasInternalWallSpan) {
-        surfaceType = VertexSurfaceType.WALL;
-      } else {
-        // Middle height but no vertical connections - could be decimated heightmap surface
-        potentialTopSurfaceGroups.add(groupId);
-        surfaceType = VertexSurfaceType.TOP_SURFACE_INTERIOR; // Temporary
-      }
+      // Flat normal, NOT at flat base = HEIGHTMAP SURFACE (will refine in pass 2)
+      surfaceType = VertexSurfaceType.TOP_SURFACE_INTERIOR; // Temporary
     }
     
     // Apply to all vertices in this group
@@ -2135,30 +2177,52 @@ function classifyHeightmapVertices(
         case VertexSurfaceType.WALL:
           wallVertices.add(vi);
           break;
-        // TOP_SURFACE types will be assigned in second pass
       }
     }
   }
   
+  // Collect wall vertex positions for distance-based boundary check
+  const wallPositions: Array<{ x: number; y: number; z: number }> = [];
+  for (const [groupId] of vertexNormals) {
+    if (vertexTypes.get(groupId) === VertexSurfaceType.WALL) {
+      const pos = vertexPositions.get(groupId);
+      if (pos) wallPositions.push(pos);
+    }
+  }
+  
+  // Compute a reasonable distance threshold based on mesh size
+  const meshSize = Math.max(maxHeight - minHeight, 1);
+  const BOUNDARY_DISTANCE_THRESHOLD = meshSize * 0.02; // 2% of mesh size
+  console.log(`  - Boundary distance threshold: ${BOUNDARY_DISTANCE_THRESHOLD.toFixed(4)}`);
+  
   // Second pass: distinguish TOP_SURFACE_BOUNDARY from TOP_SURFACE_INTERIOR
-  // A vertex is BOUNDARY if it is adjacent to WALL vertices
-  for (const groupId of potentialTopSurfaceGroups) {
-    const i = groupId;
+  // Use GEOMETRIC DISTANCE to wall vertices, not just adjacency
+  processedGroups.clear();
+  for (let i = 0; i < vertexCount; i++) {
     const group = vertexGroups[i];
-    const neighbors = adjacency.get(i);
+    const groupId = group[0];
     
+    if (processedGroups.has(groupId)) continue;
+    processedGroups.add(groupId);
+    
+    const currentType = vertexTypes.get(groupId);
+    if (currentType !== VertexSurfaceType.TOP_SURFACE_INTERIOR) continue;
+    
+    // Get this vertex's position
+    const pos = vertexPositions.get(groupId);
+    if (!pos) continue;
+    
+    // Check distance to any wall vertex
     let isBoundary = false;
-    
-    if (neighbors) {
-      for (const ni of neighbors) {
-        const neighborGroupId = vertexGroups[ni][0];
-        const neighborType = vertexTypes.get(neighborGroupId);
-        
-        // Check if neighbor is a WALL vertex
-        if (neighborType === VertexSurfaceType.WALL) {
-          isBoundary = true;
-          break;
-        }
+    for (const wallPos of wallPositions) {
+      const dx = pos.x - wallPos.x;
+      const dy = pos.y - wallPos.y;
+      const dz = pos.z - wallPos.z;
+      const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      
+      if (dist < BOUNDARY_DISTANCE_THRESHOLD) {
+        isBoundary = true;
+        break;
       }
     }
     

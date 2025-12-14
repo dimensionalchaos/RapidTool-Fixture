@@ -160,9 +160,9 @@ export const DEFAULT_CAVITY_SETTINGS: CavitySettings = {
   previewOpacity: 0.3,
   enableDecimation: true,
   enableSmoothing: true,
-  smoothingStrength: 0.0, // Pure Taubin (volume-preserving)
+  smoothingStrength: 0.5, // 50% blend of Taubin and Laplacian
   smoothingIterations: 10, // Default iterations
-  smoothingQuality: true, // Quality mode on by default
+  smoothingQuality: true, // Quality mode always on
   debugSmoothingColors: false, // Debug colors off by default
   csgMinVolume: 5.0,
   csgMinThickness: 2.0,
