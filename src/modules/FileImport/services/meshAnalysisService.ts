@@ -101,8 +101,21 @@ export interface SmoothingOptions {
    * - 'z': Z is up (after 90° rotation around X)
    * - '-y': -Y is up (after 180° rotation)
    * - '-z': -Z is up
+   * @deprecated Use tiltXZ and tiltYZ instead for accurate classification
    */
   heightAxis?: 'y' | 'z' | '-y' | '-z';
+  /**
+   * Tilt angle around Z axis (left/right tilt) in degrees.
+   * This should match the rotationXZ setting from CavitySettings.
+   * Used to compute the actual "up" direction for proper surface classification.
+   */
+  tiltXZ?: number;
+  /**
+   * Tilt angle around X axis (front/back tilt) in degrees.
+   * This should match the rotationYZ setting from CavitySettings.
+   * Used to compute the actual "up" direction for proper surface classification.
+   */
+  tiltYZ?: number;
   
   // Legacy parameters for backward compatibility
   /** @deprecated Use strength instead. Smoothing method */
@@ -1702,6 +1715,8 @@ export async function laplacianSmooth(
     quality = false,      // Default: faster processing
     debugColors = false,  // Default: no debug coloring
     heightAxis = 'y',     // Default: Y is up (standard Three.js)
+    tiltXZ = 0,           // Default: no left/right tilt
+    tiltYZ = 0,           // Default: no front/back tilt
   } = opts;
   
   try {
@@ -1745,7 +1760,9 @@ export async function laplacianSmooth(
       strength,
       quality,
       vertexCount,
-      heightAxis
+      heightAxis,
+      tiltXZ,
+      tiltYZ
     );
     
     reportProgress(progressCb, 'smoothing', 90, 'Updating geometry...');
@@ -1804,6 +1821,9 @@ export async function laplacianSmooth(
         heightRange: info.yRange,
         bottomHeight: info.bottomY,
         detectedHeightAxis: info.detectedHeightAxis,
+        upVector: info.upVector,
+        tiltXZ,
+        tiltYZ,
       });
     }
     
@@ -1860,7 +1880,9 @@ function classifyHeightmapVertices(
   vertexCount: number,
   adjacency: Map<number, Set<number>>,
   vertexGroups: number[][],
-  heightAxis: 'y' | 'z' | '-y' | '-z' = 'y'
+  heightAxis: 'y' | 'z' | '-y' | '-z' = 'y',
+  tiltXZ: number = 0,
+  tiltYZ: number = 0
 ): {
   bottomY: number;
   yRange: number;
@@ -1870,80 +1892,129 @@ function classifyHeightmapVertices(
   bottomSurfaceVertices: Set<number>;
   wallVertices: Set<number>;
   detectedHeightAxis: 'y' | 'z' | '-y' | '-z';
+  upVector: { x: number; y: number; z: number };
 } {
-  // Auto-detect height axis if not explicitly specified or use the hint
-  // The bottom surface is flat (constant height), so we find which axis has
-  // vertices clustered at the minimum value with low variance
+  // When tilt is applied, we need to compute the proper "up" direction.
+  // The mesh is generated with:
+  //   1. Forward rotation: RotZ(xzAngle) * RotX(180° + yzAngle)
+  //   2. Heightmap generated (projecting from -Y direction in rotated space)
+  //   3. Inverse rotation applied: RotX(-180° - yzAngle) * RotZ(-xzAngle)
+  //
+  // In rotated space: flat base is at low Y (clipYMin), heightmap surface is at higher Y
+  // After inverse rotation, we need to find where the +Y axis points.
+  //
+  // The "up" direction for classification should point toward the flat base
+  // (high height = BOTTOM_SURFACE = flat base)
   
-  // Find min/max for each axis
-  let minX = Infinity, maxX = -Infinity;
-  let minY = Infinity, maxY = -Infinity;
-  let minZ = Infinity, maxZ = -Infinity;
+  const hasTilt = tiltXZ !== 0 || tiltYZ !== 0;
   
-  for (let i = 0; i < vertexCount; i++) {
-    const x = positions[i * 3];
-    const y = positions[i * 3 + 1];
-    const z = positions[i * 3 + 2];
-    minX = Math.min(minX, x); maxX = Math.max(maxX, x);
-    minY = Math.min(minY, y); maxY = Math.max(maxY, y);
-    minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z);
-  }
+  // Calculate the "up" direction vector based on tilt
+  // Default: Y is up (flat base at high Y after 180° baseline rotation inverse)
+  let upX = 0, upY = 1, upZ = 0;
   
-  const rangeX = maxX - minX;
-  const rangeY = maxY - minY;
-  const rangeZ = maxZ - minZ;
-  
-  // Auto-detect: The height axis is the one with:
-  // 1. Significant range (not degenerate)
-  // 2. Has a flat "bottom" surface - vertices clustered at one extreme
-  
-  // Count vertices near min/max for each axis
-  const thresholdX = minX + rangeX * 0.05;
-  const thresholdY = minY + rangeY * 0.05;
-  const thresholdZ = minZ + rangeZ * 0.05;
-  
-  let countAtMinX = 0, countAtMinY = 0, countAtMinZ = 0;
-  for (let i = 0; i < vertexCount; i++) {
-    if (positions[i * 3] <= thresholdX) countAtMinX++;
-    if (positions[i * 3 + 1] <= thresholdY) countAtMinY++;
-    if (positions[i * 3 + 2] <= thresholdZ) countAtMinZ++;
-  }
-  
-  // The height axis should have a meaningful portion of vertices at the bottom (the flat base)
-  // but not ALL vertices (that would be a flat plane)
-  const ratioX = countAtMinX / vertexCount;
-  const ratioY = countAtMinY / vertexCount;
-  const ratioZ = countAtMinZ / vertexCount;
-  
-  // Auto-detect height axis: prefer the axis with ratio between 10-40% (typical for heightmap meshes)
-  // This indicates a flat bottom with walls and top surface
-  let detectedAxis: 'y' | 'z' | '-y' | '-z' = heightAxis;
-  
-  // Only auto-detect if heightAxis is the default 'y' and it doesn't look right
-  if (heightAxis === 'y') {
-    const idealRange = (r: number) => r >= 0.10 && r <= 0.40;
+  if (hasTilt) {
+    // The inverse rotation is: RotX(-180° - yzAngle) * RotZ(-xzAngle)
+    // We need to find where +Y axis in rotated space maps to in world space.
+    // 
+    // Apply RotX(-180° - yzAngle) to (0, 1, 0):
+    //   x' = 0
+    //   y' = cos(-180° - yzAngle) = -cos(yzAngle)
+    //   z' = sin(-180° - yzAngle) = sin(yzAngle)
+    //
+    // Apply RotZ(-xzAngle) to (0, -cos(yzAngle), sin(yzAngle)):
+    //   x'' = 0 - (-cos(yzAngle)) * sin(-xzAngle) = -cos(yzAngle) * sin(xzAngle)
+    //   y'' = 0 + (-cos(yzAngle)) * cos(-xzAngle) = -cos(yzAngle) * cos(xzAngle)
+    //   z'' = sin(yzAngle)
+    //
+    // This gives the direction from flat base toward heightmap in world space.
+    // We want the OPPOSITE (pointing toward flat base for classification).
     
-    if (!idealRange(ratioY) && idealRange(ratioZ)) {
-      detectedAxis = 'z';
-      console.log('[Smoothing] Auto-detected height axis: Z (ratioY:', ratioY.toFixed(2), 'ratioZ:', ratioZ.toFixed(2), ')');
-    } else if (!idealRange(ratioY) && rangeZ > rangeY * 1.5) {
-      // If Z range is significantly larger than Y range, Z is probably height
-      detectedAxis = 'z';
-      console.log('[Smoothing] Auto-detected height axis: Z (rangeY:', rangeY.toFixed(2), 'rangeZ:', rangeZ.toFixed(2), ')');
+    const radXZ = tiltXZ * Math.PI / 180;
+    const radYZ = tiltYZ * Math.PI / 180;
+    
+    const cosYZ = Math.cos(radYZ);
+    const sinYZ = Math.sin(radYZ);
+    const cosXZ = Math.cos(radXZ);
+    const sinXZ = Math.sin(radXZ);
+    
+    // Up vector points toward flat base (opposite of heightmap direction)
+    // Note: X is negated due to coordinate system mirroring
+    upX = -cosYZ * sinXZ;
+    upY = cosYZ * cosXZ;
+    upZ = -sinYZ;
+    
+    // Normalize (should already be normalized, but just in case)
+    const len = Math.sqrt(upX * upX + upY * upY + upZ * upZ);
+    if (len > 0) {
+      upX /= len;
+      upY /= len;
+      upZ /= len;
     }
+    
+    console.log('[Smoothing] Tilt applied - up vector:', { upX: upX.toFixed(3), upY: upY.toFixed(3), upZ: upZ.toFixed(3) }, 'tiltXZ:', tiltXZ, 'tiltYZ:', tiltYZ);
   }
   
-  // Helper function to get the "height" value from a vertex based on detected axis
+  // Helper function to get the "height" value from a vertex
+  // Project onto the up vector to get height
   const getHeight = (vertexIndex: number): number => {
     const baseIdx = vertexIndex * 3;
-    switch (detectedAxis) {
-      case 'y':  return positions[baseIdx + 1];      // Y component
-      case '-y': return -positions[baseIdx + 1];     // Negative Y
-      case 'z':  return positions[baseIdx + 2];      // Z component
-      case '-z': return -positions[baseIdx + 2];     // Negative Z
-      default:   return positions[baseIdx + 1];      // Default to Y
-    }
+    const x = positions[baseIdx];
+    const y = positions[baseIdx + 1];
+    const z = positions[baseIdx + 2];
+    // Dot product with up vector gives height along that direction
+    return x * upX + y * upY + z * upZ;
   };
+  
+  // Keep legacy axis detection for backward compatibility when no tilt
+  let detectedAxis: 'y' | 'z' | '-y' | '-z' = heightAxis;
+  
+  if (!hasTilt) {
+    // Legacy auto-detection for backward compatibility
+    // Find min/max for each axis
+    let minX = Infinity, maxX = -Infinity;
+    let minY = Infinity, maxY = -Infinity;
+    let minZ = Infinity, maxZ = -Infinity;
+    
+    for (let i = 0; i < vertexCount; i++) {
+      const x = positions[i * 3];
+      const y = positions[i * 3 + 1];
+      const z = positions[i * 3 + 2];
+      minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+      minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+      minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z);
+    }
+    
+    const rangeY = maxY - minY;
+    const rangeZ = maxZ - minZ;
+    
+    // Count vertices near min for each axis
+    const thresholdY = minY + rangeY * 0.05;
+    const thresholdZ = minZ + rangeZ * 0.05;
+    
+    let countAtMinY = 0, countAtMinZ = 0;
+    for (let i = 0; i < vertexCount; i++) {
+      if (positions[i * 3 + 1] <= thresholdY) countAtMinY++;
+      if (positions[i * 3 + 2] <= thresholdZ) countAtMinZ++;
+    }
+    
+    const ratioY = countAtMinY / vertexCount;
+    const ratioZ = countAtMinZ / vertexCount;
+    
+    // Auto-detect height axis
+    if (heightAxis === 'y') {
+      const idealRange = (r: number) => r >= 0.10 && r <= 0.40;
+      
+      if (!idealRange(ratioY) && idealRange(ratioZ)) {
+        detectedAxis = 'z';
+        upX = 0; upY = 0; upZ = 1;
+        console.log('[Smoothing] Auto-detected height axis: Z');
+      } else if (!idealRange(ratioY) && rangeZ > rangeY * 1.5) {
+        detectedAxis = 'z';
+        upX = 0; upY = 0; upZ = 1;
+        console.log('[Smoothing] Auto-detected height axis: Z');
+      }
+    }
+  }
 
   // Find height range along the detected axis
   let minHeight = Infinity, maxHeight = -Infinity;
@@ -2105,6 +2176,7 @@ function classifyHeightmapVertices(
     bottomSurfaceVertices,
     wallVertices,
     detectedHeightAxis: detectedAxis,
+    upVector: { x: upX, y: upY, z: upZ },
   };
 }
 
@@ -2149,7 +2221,9 @@ function trCADSmoothing(
   strength: number,
   quality: boolean,
   vertexCount: number,
-  heightAxis: 'y' | 'z' | '-y' | '-z' = 'y'
+  heightAxis: 'y' | 'z' | '-y' | '-z' = 'y',
+  tiltXZ: number = 0,
+  tiltYZ: number = 0
 ): {
   positions: Float32Array;
   heightmapInfo: {
@@ -2161,6 +2235,7 @@ function trCADSmoothing(
     bottomSurfaceVertices: Set<number>;
     wallVertices: Set<number>;
     detectedHeightAxis: 'y' | 'z' | '-y' | '-z';
+    upVector: { x: number; y: number; z: number };
   };
 } {
   // Clamp strength to [0, 1]
@@ -2172,7 +2247,8 @@ function trCADSmoothing(
   const LAPLACIAN_LAMBDA = 0.5;
   
   // Classify vertices by surface type for heightmap-aware smoothing
-  const heightmapInfo = classifyHeightmapVertices(positions, vertexCount, adjacency, vertexGroups, heightAxis);
+  // Pass tilt angles so classification can use proper "up" direction
+  const heightmapInfo = classifyHeightmapVertices(positions, vertexCount, adjacency, vertexGroups, heightAxis, tiltXZ, tiltYZ);
   
   // Build cotangent weights if quality mode
   let cotWeights: Map<string, number> | null = null;
@@ -2244,6 +2320,7 @@ function smoothPassHeightmapAware(
     bottomSurfaceVertices: Set<number>;
     wallVertices: Set<number>;
     detectedHeightAxis: 'y' | 'z' | '-y' | '-z';
+    upVector: { x: number; y: number; z: number };
   }
 ): Float32Array {
   const result = new Float32Array(positions.length);
@@ -2252,18 +2329,12 @@ function smoothPassHeightmapAware(
   // Height tolerance for "same height" neighbor filtering
   const heightTolerance = Math.max(0.001, heightmapInfo.yRange * 0.15);
   
-  // Determine which axis is height based on detected axis
-  const heightAxis = heightmapInfo.detectedHeightAxis;
+  // Get the up vector for proper height calculation with tilt
+  const up = heightmapInfo.upVector;
   
-  // Helper functions based on height axis
+  // Helper function to get height using dot product with up vector
   const getHeight = (idx: number): number => {
-    switch (heightAxis) {
-      case 'y':  return positions[idx * 3 + 1];
-      case '-y': return -positions[idx * 3 + 1];
-      case 'z':  return positions[idx * 3 + 2];
-      case '-z': return -positions[idx * 3 + 2];
-      default:   return positions[idx * 3 + 1];
-    }
+    return positions[idx * 3] * up.x + positions[idx * 3 + 1] * up.y + positions[idx * 3 + 2] * up.z;
   };
   
   for (let i = 0; i < vertexCount; i++) {
@@ -2280,7 +2351,7 @@ function smoothPassHeightmapAware(
     processedGroups.add(groupId);
     
     const px = positions[i * 3];
-    const py = positions[i * 3 + 1]; // Y = height in Three.js (world Z)
+    const py = positions[i * 3 + 1];
     const pz = positions[i * 3 + 2];
     
     // Get vertex surface type
@@ -2310,10 +2381,8 @@ function smoothPassHeightmapAware(
     
     // Compute weighted centroid of FILTERED neighbors in the horizontal plane
     // Only WALL and TOP_SURFACE_BOUNDARY vertices reach here
-    // Based on height axis, we smooth different coordinate pairs:
-    // - Y is height: smooth X-Z, preserve Y
-    // - Z is height: smooth X-Y, preserve Z
-    let sumH1 = 0, sumH2 = 0; // Horizontal coordinates to smooth
+    // We smooth in the plane perpendicular to the up vector
+    let sumH1 = 0, sumH2 = 0, sumH3 = 0; // Full 3D position accumulator
     let totalWeight = 0;
     const visitedNeighborGroups = new Set<number>();
     
@@ -2341,36 +2410,35 @@ function smoothPassHeightmapAware(
         weight = cotWeights.get(edgeKey) ?? 1.0;
       }
       
-      // Accumulate horizontal coordinates based on height axis
-      if (heightAxis === 'y' || heightAxis === '-y') {
-        // Y is height: smooth X and Z
-        sumH1 += nx * weight;
-        sumH2 += nz * weight;
-      } else {
-        // Z is height: smooth X and Y
-        sumH1 += nx * weight;
-        sumH2 += ny * weight;
-      }
+      // Accumulate neighbor positions (we'll project to horizontal plane later)
+      sumH1 += nx * weight;
+      sumH2 += ny * weight;
+      sumH3 += nz * weight;
       totalWeight += weight;
     }
     
     if (totalWeight > 0) {
-      const ch1 = sumH1 / totalWeight;
-      const ch2 = sumH2 / totalWeight;
+      // Compute centroid of filtered neighbors
+      const cx = sumH1 / totalWeight;
+      const cy = sumH2 / totalWeight;
+      const cz = sumH3 / totalWeight;
       
-      let newX: number, newY: number, newZ: number;
+      // Project the displacement onto the horizontal plane (perpendicular to up vector)
+      // Displacement from current to centroid
+      let dx = cx - px;
+      let dy = cy - py;
+      let dz = cz - pz;
       
-      if (heightAxis === 'y' || heightAxis === '-y') {
-        // Y is height: smooth X-Z, preserve Y
-        newX = px + factor * (ch1 - px);
-        newY = py; // Preserve height
-        newZ = pz + factor * (ch2 - pz);
-      } else {
-        // Z is height: smooth X-Y, preserve Z
-        newX = px + factor * (ch1 - px);
-        newY = py + factor * (ch2 - py);
-        newZ = pz; // Preserve height
-      }
+      // Remove the component along the up vector (preserve height)
+      const dotUp = dx * up.x + dy * up.y + dz * up.z;
+      dx -= dotUp * up.x;
+      dy -= dotUp * up.y;
+      dz -= dotUp * up.z;
+      
+      // Apply the horizontal displacement with factor
+      const newX = px + factor * dx;
+      const newY = py + factor * dy;
+      const newZ = pz + factor * dz;
       
       for (const vi of group) {
         result[vi * 3] = newX;

@@ -1406,6 +1406,8 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
                 const strength = settings.smoothingStrength ?? 0;
                 const quality = settings.smoothingQuality ?? true;
                 const debugColors = settings.debugSmoothingColors ?? false;
+                const tiltXZ = settings.rotationXZ ?? 0;
+                const tiltYZ = settings.rotationYZ ?? 0;
                 
                 const strengthLabel = strength === 0 ? 'Taubin' : strength === 1 ? 'Laplacian' : `${(strength * 100).toFixed(0)}%`;
                 
@@ -1421,6 +1423,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
                 await new Promise(resolve => setTimeout(resolve, 0));
                 
                 // Use blended Taubin/Laplacian smoothing based on trCAD approach
+                // Pass tilt angles so smoothing can classify vertices correctly
                 const smoothingResult = await laplacianSmooth(
                   currentGeometry,
                   {
@@ -1428,6 +1431,8 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
                     strength,
                     quality,
                     debugColors,
+                    tiltXZ,
+                    tiltYZ,
                   }
                 );
                 
