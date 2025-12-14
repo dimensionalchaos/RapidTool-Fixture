@@ -2082,6 +2082,13 @@ function classifyHeightmapVertices(
     const neighborHeightSpan = neighborMaxH - neighborMinH;
     const hasLargeVerticalSpan = neighborHeightSpan > heightRange * 0.3; // Neighbors span >30% of total height
     
+    // For internal walls within heightmap (undercuts): detect significant LOCAL height variation
+    // These walls don't span the full height but have steep local gradients
+    // Use a smaller threshold relative to the bottom zone thickness
+    const bottomZoneHeight = bottomZoneThreshold - minHeight;
+    const internalWallThreshold = Math.max(heightRange * 0.08, bottomZoneHeight * 0.5); // 8% of total or 50% of bottom zone
+    const hasInternalWallSpan = neighborHeightSpan > internalWallThreshold;
+    
     // Classify the vertex
     // NOTE: Due to 180-degree rotation applied in mesh generation (to project from below),
     // the coordinate system is flipped:
@@ -2098,6 +2105,9 @@ function classifyHeightmapVertices(
       if (hasTopZoneNeighbor || hasLargeVerticalSpan) {
         // Connected to flat base zone or has large span = wall at heightmap edge
         surfaceType = VertexSurfaceType.WALL;
+      } else if (hasInternalWallSpan) {
+        // Internal wall within heightmap (undercut) - significant local height variation
+        surfaceType = VertexSurfaceType.WALL;
       } else {
         // All neighbors in bottom zone = potential heightmap surface (will refine in pass 2)
         potentialTopSurfaceGroups.add(groupId);
@@ -2106,7 +2116,7 @@ function classifyHeightmapVertices(
     } else {
       // Vertex is in middle zone - likely a wall vertex (connects heightmap to flat base)
       // After decimation, wall vertices often end up here
-      if (hasBottomZoneNeighbor || hasTopZoneNeighbor || hasLargeVerticalSpan) {
+      if (hasBottomZoneNeighbor || hasTopZoneNeighbor || hasLargeVerticalSpan || hasInternalWallSpan) {
         surfaceType = VertexSurfaceType.WALL;
       } else {
         // Middle height but no vertical connections - could be decimated heightmap surface
