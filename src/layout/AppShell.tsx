@@ -194,6 +194,17 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
     const [selectedSupportType, setSelectedSupportType] = useState<SupportType>('cylindrical');
     const [selectedSupportId, setSelectedSupportId] = useState<string | null>(null);
 
+    // Labels state
+    const [labels, setLabels] = useState<Array<{
+      id: string;
+      text: string;
+      fontSize: number;
+      depth: number;
+      position: { x: number; y: number; z: number };
+      rotation: { x: number; y: number; z: number };
+    }>>([]);
+    const [selectedLabelId, setSelectedLabelId] = useState<string | null>(null);
+
     // Model colors state - tracks colors assigned to models in 3D scene
     const [modelColors, setModelColors] = useState<Map<string, string>>(new Map());
 
@@ -921,6 +932,41 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
       };
     }, [selectedSupportId, completedSteps]);
 
+    // Listen for label events from 3D scene (e.g., when using pivot controls)
+    React.useEffect(() => {
+      const onLabelUpdate = (e: CustomEvent) => {
+        const { labelId, updates } = e.detail as { labelId: string; updates: any };
+        setLabels(prev => prev.map(l => l.id === labelId ? { ...l, ...updates } : l));
+      };
+
+      const onLabelAdded = (e: CustomEvent) => {
+        const label = e.detail;
+        if (label && label.id) {
+          setLabels(prev => {
+            // Avoid duplicates
+            if (prev.some(l => l.id === label.id)) return prev;
+            return [...prev, label];
+          });
+          setSelectedLabelId(label.id);
+        }
+      };
+
+      const onLabelSelect = (e: CustomEvent) => {
+        const labelId = e.detail as string | null;
+        setSelectedLabelId(labelId);
+      };
+
+      window.addEventListener('label-update', onLabelUpdate as EventListener);
+      window.addEventListener('label-added', onLabelAdded as EventListener);
+      window.addEventListener('label-selected', onLabelSelect as EventListener);
+
+      return () => {
+        window.removeEventListener('label-update', onLabelUpdate as EventListener);
+        window.removeEventListener('label-added', onLabelAdded as EventListener);
+        window.removeEventListener('label-selected', onLabelSelect as EventListener);
+      };
+    }, []);
+
     // Handle support update from properties panel
     const handleSupportUpdate = useCallback((support: AnySupport) => {
       setSupports(prev => prev.map(s => s.id === support.id ? support : s));
@@ -1237,6 +1283,26 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
                   {activeStep === 'labels' && (
                     <LabelsStepContent
                       hasWorkpiece={!!actualFile || !!currentBaseplate}
+                      hasBaseplate={!!currentBaseplate}
+                      hasSupports={supports.length > 0}
+                      labels={labels as any}
+                      selectedLabelId={selectedLabelId}
+                      onAddLabel={(label) => setLabels(prev => [...prev, {
+                        id: label.id,
+                        text: label.text,
+                        fontSize: label.fontSize,
+                        depth: label.depth,
+                        position: { x: label.position.x, y: label.position.y, z: label.position.z },
+                        rotation: { x: label.rotation.x, y: label.rotation.y, z: label.rotation.z }
+                      }])}
+                      onUpdateLabel={(labelId, updates) => setLabels(prev => prev.map(l => 
+                        l.id === labelId ? { ...l, ...updates } as any : l
+                      ))}
+                      onDeleteLabel={(labelId) => {
+                        setLabels(prev => prev.filter(l => l.id !== labelId));
+                        if (selectedLabelId === labelId) setSelectedLabelId(null);
+                      }}
+                      onSelectLabel={setSelectedLabelId}
                     />
                   )}
                   {activeStep === 'drill' && (
@@ -1400,6 +1466,25 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
                   cavitySettings={cavitySettings}
                   isCavityProcessing={isCavityProcessing}
                   hasCavityPreview={hasCavityPreview}
+                  // Labels props
+                  labels={labels as any}
+                  selectedLabelId={selectedLabelId}
+                  onLabelSelect={setSelectedLabelId}
+                  onLabelUpdate={(labelId, updates) => {
+                    setLabels(prev => prev.map(l => 
+                      l.id === labelId ? { ...l, ...updates } : l
+                    ));
+                    // Dispatch event for 3D scene
+                    window.dispatchEvent(new CustomEvent('label-update', { 
+                      detail: { labelId, updates } 
+                    }));
+                  }}
+                  onLabelDelete={(labelId) => {
+                    setLabels(prev => prev.filter(l => l.id !== labelId));
+                    if (selectedLabelId === labelId) setSelectedLabelId(null);
+                    // Dispatch event for 3D scene
+                    window.dispatchEvent(new CustomEvent('label-delete', { detail: labelId }));
+                  }}
                 />
               </div>
             )}

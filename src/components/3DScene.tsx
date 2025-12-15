@@ -1,4 +1,4 @@
-import React, { useRef, useState, useCallback, useMemo, useEffect } from 'react';
+import React, { useRef, useState, useCallback, useMemo, useEffect, Suspense } from 'react';
 import { useThree, ThreeEvent } from '@react-three/fiber';
 import { OrbitControls as DreiOrbitControls, Html, GizmoHelper, GizmoViewport } from '@react-three/drei';
 import { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
@@ -18,6 +18,8 @@ import { createOffsetMesh, extractVertices, csgSubtract, initManifold } from '@/
 import { performBatchCSGSubtractionInWorker, performBatchCSGUnionInWorker } from '@/lib/workers';
 import { decimateMesh, repairMesh, analyzeMesh, laplacianSmooth, cleanupCSGResult } from '@/modules/FileImport/services/meshAnalysisService';
 import SupportTransformControls from './Supports/SupportTransformControls';
+import { LabelMesh, LabelTransformControls } from './Labels';
+import { LabelConfig } from './Labels/types';
 
 /** Target triangle count for offset mesh decimation */
 const OFFSET_MESH_DECIMATION_TARGET = 50_000;
@@ -783,6 +785,10 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   const [supportsTrimPreview, setSupportsTrimPreview] = useState<THREE.Mesh[]>([]);
   const [supportsTrimProcessing, setSupportsTrimProcessing] = useState(false);
   
+  // Labels state
+  const [labels, setLabels] = useState<LabelConfig[]>([]);
+  const [selectedLabelId, setSelectedLabelId] = useState<string | null>(null);
+  
   // Debug: perimeter visualization from auto-placement (disabled by default)
   // Set DEBUG_SHOW_PERIMETER to true to enable red boundary line visualization
   const DEBUG_SHOW_PERIMETER = false;
@@ -844,6 +850,88 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     prevSupportHullPointsRef.current = points;
     return points;
   }, [supports]);
+
+  // Calculate label footprint points for baseplate expansion
+  // Labels need the baseplate to extend underneath them
+  const prevLabelHullPointsRef = useRef<Array<{x: number; z: number}>>([]);
+  const labelHullPoints = useMemo(() => {
+    const points: Array<{x: number; z: number}> = [];
+    for (const label of labels) {
+      // Use actual computed bounds from rendered geometry if available,
+      // otherwise fall back to estimates
+      let textWidth: number;
+      let textHeight: number;
+      
+      if (label.computedWidth !== undefined && label.computedHeight !== undefined) {
+        // Use actual computed dimensions from LabelMesh
+        textWidth = label.computedWidth;
+        textHeight = label.computedHeight;
+      } else {
+        // Fall back to estimates until geometry is rendered
+        const charWidthFactor = 0.65;
+        textWidth = label.text.length * label.fontSize * charWidthFactor;
+        textHeight = label.fontSize * 0.8;
+      }
+      
+      const pos = label.position;
+      // No additional padding - baseplate already has its own padding
+      
+      // Get label's rotation around Y axis (which is Z rotation when label is flat)
+      // Label lies flat with X rotation of -PI/2, so its "spin" is stored in rotation.z
+      const rot = label.rotation;
+      const rotationAngle = typeof rot === 'object' ? ((rot as any).z || 0) : 0;
+      
+      // Label lies flat with rotation.x = -PI/2, which flips the Y axis:
+      // - Text width runs along world X
+      // - Text height (font size) runs along world -Z (inverted)
+      const halfW = textWidth / 2;
+      const halfH = textHeight / 2;
+      
+      // Define corner points in the world XZ plane (accounting for the Y flip)
+      // In local label space: +localY (font height "up") maps to world -Z
+      const localCorners = [
+        { x: -halfW, z:  halfH },  // local bottom-left  → world: -X, +Z (front-left)
+        { x:  halfW, z:  halfH },  // local bottom-right → world: +X, +Z (front-right)  
+        { x:  halfW, z: -halfH },  // local top-right    → world: +X, -Z (back-right)
+        { x: -halfW, z: -halfH }   // local top-left     → world: -X, -Z (back-left)
+      ];
+      
+      // Rotate corners and translate to world position
+      // Use same rotation formula as supports (Three.js Y-rotation)
+      const cos = Math.cos(rotationAngle);
+      const sin = Math.sin(rotationAngle);
+      for (const corner of localCorners) {
+        // Three.js Y-rotation: x' = x*cos + z*sin, z' = -x*sin + z*cos
+        const rx = corner.x * cos + corner.z * sin;
+        const rz = -corner.x * sin + corner.z * cos;
+        // Translate to world position
+        points.push({
+          x: (pos as any).x + rx,
+          z: (pos as any).z + rz
+        });
+      }
+    }
+    
+    // Check if points are the same as before
+    const prev = prevLabelHullPointsRef.current;
+    if (prev.length === points.length) {
+      let same = true;
+      for (let i = 0; i < points.length && same; i++) {
+        if (Math.abs(prev[i].x - points[i].x) > 0.001 || Math.abs(prev[i].z - points[i].z) > 0.001) {
+          same = false;
+        }
+      }
+      if (same) return prev;
+    }
+    
+    prevLabelHullPointsRef.current = points;
+    return points;
+  }, [labels]);
+
+  // Combined hull points for baseplate (supports + labels)
+  const combinedHullPoints = useMemo(() => {
+    return [...supportHullPoints, ...labelHullPoints];
+  }, [supportHullPoints, labelHullPoints]);
 
   const csgEngineRef = useRef<CSGEngine | null>(null);
   if (!csgEngineRef.current) {
@@ -1843,6 +1931,104 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       window.removeEventListener('viewer-redo', onRedo as EventListener);
     };
   }, []);
+
+  // Label event handlers
+  React.useEffect(() => {
+    const onLabelAdd = (e: CustomEvent) => {
+      const newLabel = e.detail as LabelConfig;
+      
+      // Calculate rectangular bounding box of supports + part
+      // Label should be placed at the lower-left boundary (outside)
+      let minX = Infinity, maxX = -Infinity;
+      let minZ = Infinity, maxZ = -Infinity;
+      
+      // Include support footprint points in bounds
+      for (const support of supports) {
+        const footprintPoints = getSupportFootprintPoints(support);
+        for (const pt of footprintPoints) {
+          minX = Math.min(minX, pt.x);
+          maxX = Math.max(maxX, pt.x);
+          minZ = Math.min(minZ, pt.z);
+          maxZ = Math.max(maxZ, pt.z);
+        }
+      }
+      
+      // Include part bounds if available
+      if (modelBounds) {
+        const center = modelBounds.center;
+        const halfX = modelBounds.size.x / 2;
+        const halfZ = modelBounds.size.z / 2;
+        minX = Math.min(minX, center.x - halfX);
+        maxX = Math.max(maxX, center.x + halfX);
+        minZ = Math.min(minZ, center.z - halfZ);
+        maxZ = Math.max(maxZ, center.z + halfZ);
+      }
+      
+      // Fallback if no supports or parts
+      if (!isFinite(minX) || !isFinite(maxX) || !isFinite(minZ) || !isFinite(maxZ)) {
+        minX = -50; maxX = 50;
+        minZ = -50; maxZ = 50;
+      }
+      
+      const bpDepth = basePlate?.depth ?? 4;
+      
+      // Estimate label width based on text length and font size
+      const estimatedLabelWidth = newLabel.fontSize * newLabel.text.length * 0.6;
+      
+      // Position label at front-center (centered X, maxZ is front in world coords)
+      // No padding - label edge touches the boundary
+      const labelX = (minX + maxX) / 2; // Center X
+      const labelZ = maxZ + newLabel.fontSize / 2; // Front edge (positive Z)
+      const labelY = bpDepth; // On top of baseplate surface
+      
+      newLabel.position = new THREE.Vector3(labelX, labelY, labelZ);
+      // Rotate to face up (readable from above)
+      newLabel.rotation = new THREE.Euler(-Math.PI / 2, 0, 0);
+      
+      setLabels(prev => [...prev, newLabel]);
+      setSelectedLabelId(newLabel.id);
+      
+      // Notify LabelsStepContent about the label position update
+      window.dispatchEvent(new CustomEvent('label-added', { detail: newLabel }));
+    };
+
+    const onLabelUpdate = (e: CustomEvent) => {
+      const { labelId, updates } = e.detail as { labelId: string; updates: Partial<LabelConfig> };
+      setLabels(prev => prev.map(l => l.id === labelId ? { ...l, ...updates } : l));
+    };
+
+    const onLabelDelete = (e: CustomEvent) => {
+      const labelId = e.detail as string;
+      setLabels(prev => prev.filter(l => l.id !== labelId));
+      if (selectedLabelId === labelId) {
+        setSelectedLabelId(null);
+      }
+    };
+
+    const onLabelSelect = (e: CustomEvent) => {
+      const labelId = e.detail as string | null;
+      setSelectedLabelId(labelId);
+    };
+
+    const onLabelsClearAll = () => {
+      setLabels([]);
+      setSelectedLabelId(null);
+    };
+
+    window.addEventListener('label-add', onLabelAdd as EventListener);
+    window.addEventListener('label-update', onLabelUpdate as EventListener);
+    window.addEventListener('label-delete', onLabelDelete as EventListener);
+    window.addEventListener('label-select', onLabelSelect as EventListener);
+    window.addEventListener('labels-clear-all', onLabelsClearAll);
+
+    return () => {
+      window.removeEventListener('label-add', onLabelAdd as EventListener);
+      window.removeEventListener('label-update', onLabelUpdate as EventListener);
+      window.removeEventListener('label-delete', onLabelDelete as EventListener);
+      window.removeEventListener('label-select', onLabelSelect as EventListener);
+      window.removeEventListener('labels-clear-all', onLabelsClearAll);
+    };
+  }, [basePlate, selectedLabelId, supports, modelBounds]);
 
   // Build a THREE.Mesh for a support using the same dimensions/origining as SupportMesh
   const buildSupportMesh = useCallback((support: AnySupport, baseTop: number) => {
@@ -2844,6 +3030,44 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       box.max.z = Math.max(box.max.z, footprintBounds.maxZ);
     }
     
+    // Expand the bounding box to include label footprints
+    // Labels stay fixed, so use their actual positions (with rotation)
+    for (const label of labels) {
+      const textWidth = label.text.length * label.fontSize * 0.6;
+      const textHeight = label.fontSize;
+      const padding = 5;
+      
+      // Get label's rotation (Z rotation when lying flat)
+      const rot = label.rotation;
+      const rotationAngle = typeof rot === 'object' ? ((rot as any).z || 0) : 0;
+      
+      const halfW = textWidth / 2 + padding;
+      const halfH = textHeight / 2 + padding;
+      const cos = Math.cos(rotationAngle);
+      const sin = Math.sin(rotationAngle);
+      
+      // Calculate rotated corners and find bounds
+      const corners = [
+        { x: -halfW, z: -halfH },
+        { x:  halfW, z: -halfH },
+        { x:  halfW, z:  halfH },
+        { x: -halfW, z:  halfH }
+      ];
+      
+      const pos = label.position;
+      const px = (pos as any).x || 0;
+      const pz = (pos as any).z || 0;
+      
+      for (const corner of corners) {
+        const rx = corner.x * cos - corner.z * sin + px;
+        const rz = corner.x * sin + corner.z * cos + pz;
+        box.min.x = Math.min(box.min.x, rx);
+        box.max.x = Math.max(box.max.x, rx);
+        box.min.z = Math.min(box.min.z, rz);
+        box.max.z = Math.max(box.max.z, rz);
+      }
+    }
+    
     const size = new THREE.Vector3();
     const center = new THREE.Vector3();
     box.getSize(size);
@@ -2872,7 +3096,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
         position: newPosition
       } : null);
     }
-  }, [modelTransform.position, modelTransform.rotation, basePlate?.type, supports, livePositionDelta]);
+  }, [modelTransform.position, modelTransform.rotation, basePlate?.type, supports, labels, livePositionDelta]);
 
   // Handle check-baseplate-collision event (triggered when position is reset from Properties panel)
   // This lifts the part above the baseplate if there's a collision
@@ -3267,7 +3491,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
             const firstPartRef = modelMeshRefs.current.get(importedParts[0].id);
             return firstPartRef?.current?.position;
           })() : undefined}
-          additionalHullPoints={basePlate.type === 'convex-hull' ? supportHullPoints : undefined}
+          additionalHullPoints={basePlate.type === 'convex-hull' ? combinedHullPoints : undefined}
           livePositionDelta={livePositionDelta}
           selected={false}
           meshRef={basePlateMeshRef}
@@ -3434,6 +3658,79 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
               }}
               onDeselect={() => {
                 onSupportSelect?.(null);
+              }}
+            />
+          );
+        })()
+      )}
+
+      {/* Labels rendering - on top of baseplate */}
+      <Suspense fallback={null}>
+        {labels.map((label) => (
+          <LabelMesh
+            key={label.id}
+            label={label}
+            selected={selectedLabelId === label.id}
+            onSelect={(id) => {
+              setSelectedLabelId(id);
+              window.dispatchEvent(new CustomEvent('label-selected', { detail: id }));
+            }}
+            onDoubleClick={(id) => {
+              // Activate pivot controls for this label
+              window.dispatchEvent(new CustomEvent('pivot-control-activated', { detail: { labelId: id } }));
+              setSelectedLabelId(id);
+              window.dispatchEvent(new CustomEvent('label-selected', { detail: id }));
+            }}
+            onBoundsComputed={(id, width, height) => {
+              // Update label with computed bounds from actual geometry
+              setLabels(prev => prev.map(l => 
+                l.id === id ? { ...l, computedWidth: width, computedHeight: height } : l
+              ));
+            }}
+          />
+        ))}
+      </Suspense>
+
+      {/* Label transform controls - activated on double-click */}
+      {selectedLabelId && (
+        (() => {
+          const selectedLabel = labels.find(l => l.id === selectedLabelId);
+          if (!selectedLabel) return null;
+          return (
+            <LabelTransformControls
+              label={selectedLabel}
+              onTransformChange={(position, rotation, depth) => {
+                // Live update label position, rotation, and depth
+                setLabels(prev => prev.map(l => {
+                  if (l.id === selectedLabelId) {
+                    return {
+                      ...l,
+                      position,
+                      rotation,
+                      depth: depth ?? l.depth,
+                    };
+                  }
+                  return l;
+                }));
+                // Also dispatch event for AppShell to update Properties panel live
+                const updates = { position, rotation, depth: depth ?? selectedLabel.depth };
+                window.dispatchEvent(new CustomEvent('label-update', { 
+                  detail: { labelId: selectedLabelId, updates } 
+                }));
+              }}
+              onTransformEnd={(position, rotation, depth) => {
+                // Dispatch event for AppShell to update its state
+                const finalLabel = labels.find(l => l.id === selectedLabelId);
+                if (finalLabel) {
+                  const updates = { position, rotation, depth: depth ?? finalLabel.depth };
+                  window.dispatchEvent(new CustomEvent('label-update', { 
+                    detail: { labelId: selectedLabelId, updates } 
+                  }));
+                }
+              }}
+              onDeselect={() => {
+                setSelectedLabelId(null);
+                window.dispatchEvent(new CustomEvent('label-selected', { detail: null }));
               }}
             />
           );

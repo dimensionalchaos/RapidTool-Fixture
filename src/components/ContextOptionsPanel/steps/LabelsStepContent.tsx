@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, Suspense, useEffect } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -6,32 +6,109 @@ import { Label } from '@/components/ui/label';
 import { Slider } from '@/components/ui/slider';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
+import { Separator } from '@/components/ui/separator';
 import { AlertCircle, Type, Plus } from 'lucide-react';
+import { Canvas } from '@react-three/fiber';
+import { OrbitControls, Center, Text3D } from '@react-three/drei';
+import * as THREE from 'three';
+import {
+  LabelConfig,
+  DEFAULT_LABEL_CONFIG,
+  MIN_FONT_SIZE,
+  MAX_FONT_SIZE,
+  MIN_DEPTH,
+  MAX_DEPTH,
+  DEFAULT_DEPTH,
+} from '@/components/Labels/types';
 
 interface LabelsStepContentProps {
   hasWorkpiece?: boolean;
-  onAddLabel?: (label: LabelConfig) => void;
+  hasBaseplate?: boolean;
+  hasSupports?: boolean;
   labels?: LabelConfig[];
+  selectedLabelId?: string | null;
+  onAddLabel?: (label: LabelConfig) => void;
+  onUpdateLabel?: (labelId: string, updates: Partial<LabelConfig>) => void;
+  onDeleteLabel?: (labelId: string) => void;
+  onSelectLabel?: (labelId: string | null) => void;
 }
 
-interface LabelConfig {
-  id: string;
+// 3D Preview component for the label
+const Label3DPreview: React.FC<{
   text: string;
   fontSize: number;
   depth: number;
-  type: 'emboss' | 'deboss';
-}
+}> = ({ text, fontSize, depth }) => {
+  // Scale factor to fit preview nicely
+  const scale = 30 / Math.max(fontSize, 10);
+  
+  return (
+    <Center scale={scale}>
+      <Text3D
+        font="/fonts/helvetiker_bold.typeface.json"
+        size={fontSize}
+        height={depth}
+        curveSegments={4}
+        bevelEnabled={false}
+      >
+        {text || 'Label'}
+        <meshStandardMaterial
+          color="#4080ff"
+          metalness={0.2}
+          roughness={0.6}
+        />
+      </Text3D>
+    </Center>
+  );
+};
 
 const LabelsStepContent: React.FC<LabelsStepContentProps> = ({
   hasWorkpiece = false,
+  hasBaseplate = false,
+  hasSupports = false,
+  labels = [],
+  selectedLabelId = null,
   onAddLabel,
-  labels = []
+  onUpdateLabel,
+  onDeleteLabel,
+  onSelectLabel,
 }) => {
-  const [labelText, setLabelText] = useState('V1.0');
-  const [fontSize, setFontSize] = useState(10);
-  const [depth, setDepth] = useState(1);
-  const [labelType, setLabelType] = useState<'emboss' | 'deboss'>('deboss');
+  // Form state for new label
+  const [labelText, setLabelText] = useState(DEFAULT_LABEL_CONFIG.text);
+  const [fontSize, setFontSize] = useState(DEFAULT_LABEL_CONFIG.fontSize);
+  const [depth, setDepth] = useState(DEFAULT_LABEL_CONFIG.depth);
+
+  // Get the selected label for properties panel
+  const selectedLabel = labels.find(l => l.id === selectedLabelId);
+
+  // Update form when a label is selected
+  useEffect(() => {
+    if (selectedLabel) {
+      setLabelText(selectedLabel.text);
+      setFontSize(selectedLabel.fontSize);
+      setDepth(selectedLabel.depth);
+    }
+  }, [selectedLabel]);
+
+  // Listen for label selection from 3D scene
+  useEffect(() => {
+    const handleLabelSelected = (e: CustomEvent) => {
+      onSelectLabel?.(e.detail);
+    };
+    window.addEventListener('label-selected', handleLabelSelected as EventListener);
+    return () => window.removeEventListener('label-selected', handleLabelSelected as EventListener);
+  }, [onSelectLabel]);
+
+  // Listen for label added event (position update from 3DScene)
+  useEffect(() => {
+    const handleLabelAdded = (e: CustomEvent) => {
+      const label = e.detail as LabelConfig;
+      // Update the labels array with the positioned label
+      onUpdateLabel?.(label.id, { position: label.position, rotation: label.rotation });
+    };
+    window.addEventListener('label-added', handleLabelAdded as EventListener);
+    return () => window.removeEventListener('label-added', handleLabelAdded as EventListener);
+  }, [onUpdateLabel]);
 
   if (!hasWorkpiece) {
     return (
@@ -39,7 +116,33 @@ const LabelsStepContent: React.FC<LabelsStepContentProps> = ({
         <Alert className="font-tech">
           <AlertCircle className="h-4 w-4" />
           <AlertDescription className="text-xs">
-            Import a workpiece or create a fixture to add labels.
+            Import a workpiece to add labels.
+          </AlertDescription>
+        </Alert>
+      </div>
+    );
+  }
+
+  if (!hasBaseplate) {
+    return (
+      <div className="p-4">
+        <Alert className="font-tech">
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription className="text-xs">
+            Create a baseplate first before adding labels.
+          </AlertDescription>
+        </Alert>
+      </div>
+    );
+  }
+
+  if (!hasSupports) {
+    return (
+      <div className="p-4">
+        <Alert className="font-tech">
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription className="text-xs">
+            Add supports first before adding labels. Labels are positioned outside the support area.
           </AlertDescription>
         </Alert>
       </div>
@@ -47,17 +150,63 @@ const LabelsStepContent: React.FC<LabelsStepContentProps> = ({
   }
 
   const handleAddLabel = () => {
-    onAddLabel?.({
+    const newLabel: LabelConfig = {
       id: `label-${Date.now()}`,
       text: labelText,
       fontSize,
       depth,
-      type: labelType
-    });
+      position: new THREE.Vector3(0, 10, 0), // Will be positioned by 3DScene
+      rotation: new THREE.Euler(-Math.PI / 2, 0, 0), // Face up by default
+    };
+    // Dispatch event for 3DScene to handle positioning and rendering
+    // AppShell listens to 'label-added' event (dispatched by 3DScene after positioning)
+    // so we don't call onAddLabel here to avoid duplicates
+    window.dispatchEvent(new CustomEvent('label-add', { detail: newLabel }));
+  };
+
+  const handleUpdateSelectedLabel = (updates: Partial<LabelConfig>) => {
+    if (selectedLabelId) {
+      window.dispatchEvent(new CustomEvent('label-update', { detail: { labelId: selectedLabelId, updates } }));
+      onUpdateLabel?.(selectedLabelId, updates);
+    }
+  };
+
+  const handleDeleteSelected = () => {
+    if (selectedLabelId) {
+      window.dispatchEvent(new CustomEvent('label-delete', { detail: selectedLabelId }));
+      onDeleteLabel?.(selectedLabelId);
+      onSelectLabel?.(null);
+    }
   };
 
   return (
-    <div className="p-4 space-y-4">
+    <div className="p-4 space-y-4 overflow-auto max-h-[calc(100vh-200px)]">
+      {/* 3D Preview */}
+      <Card className="tech-glass overflow-hidden">
+        <div className="h-[140px] bg-gradient-to-b from-background to-muted/20">
+          <Canvas camera={{ position: [0, 0, 80], fov: 50 }}>
+            <ambientLight intensity={0.6} />
+            <directionalLight position={[10, 10, 10]} intensity={0.8} />
+            <Suspense fallback={null}>
+              <Label3DPreview
+                text={labelText}
+                fontSize={fontSize}
+                depth={depth}
+              />
+            </Suspense>
+            <OrbitControls
+              enablePan={false}
+              enableZoom={false}
+              minPolarAngle={Math.PI / 3}
+              maxPolarAngle={Math.PI / 2}
+            />
+          </Canvas>
+        </div>
+        <div className="p-2 text-center border-t border-border/50">
+          <p className="text-[10px] text-muted-foreground font-tech">3D Preview</p>
+        </div>
+      </Card>
+
       {/* Label Text Input */}
       <div className="space-y-2">
         <Label className="text-xs font-tech text-muted-foreground uppercase tracking-wider">
@@ -65,46 +214,33 @@ const LabelsStepContent: React.FC<LabelsStepContentProps> = ({
         </Label>
         <Input
           value={labelText}
-          onChange={(e) => setLabelText(e.target.value)}
+          onChange={(e) => {
+            setLabelText(e.target.value);
+            if (selectedLabelId) {
+              handleUpdateSelectedLabel({ text: e.target.value });
+            }
+          }}
           placeholder="Enter label text..."
           className="font-tech"
         />
       </div>
 
-      {/* Label Type */}
-      <div className="space-y-2">
-        <Label className="text-xs font-tech text-muted-foreground uppercase tracking-wider">
-          Label Type
-        </Label>
-        <RadioGroup value={labelType} onValueChange={(v) => setLabelType(v as 'emboss' | 'deboss')}>
-          <div className="flex gap-4">
-            <div className="flex items-center space-x-2">
-              <RadioGroupItem value="deboss" id="deboss" />
-              <Label htmlFor="deboss" className="text-sm font-tech cursor-pointer">
-                Deboss (inset)
-              </Label>
-            </div>
-            <div className="flex items-center space-x-2">
-              <RadioGroupItem value="emboss" id="emboss" />
-              <Label htmlFor="emboss" className="text-sm font-tech cursor-pointer">
-                Emboss (raised)
-              </Label>
-            </div>
-          </div>
-        </RadioGroup>
-      </div>
-
       {/* Font Size */}
       <div className="space-y-3">
         <Label className="text-xs font-tech text-muted-foreground uppercase tracking-wider">
-          Font Size
+          Font Size (min {MIN_FONT_SIZE}mm)
         </Label>
         <div className="flex items-center gap-3">
           <Slider
             value={[fontSize]}
-            onValueChange={([v]) => setFontSize(v)}
-            min={5}
-            max={30}
+            onValueChange={([v]) => {
+              setFontSize(v);
+              if (selectedLabelId) {
+                handleUpdateSelectedLabel({ fontSize: v });
+              }
+            }}
+            min={MIN_FONT_SIZE}
+            max={MAX_FONT_SIZE}
             step={1}
             className="flex-1"
           />
@@ -114,43 +250,35 @@ const LabelsStepContent: React.FC<LabelsStepContentProps> = ({
         </div>
       </div>
 
-      {/* Depth */}
+      {/* Emboss Height */}
       <div className="space-y-3">
         <Label className="text-xs font-tech text-muted-foreground uppercase tracking-wider">
-          Depth
+          Emboss Height
         </Label>
         <div className="flex items-center gap-3">
           <Slider
             value={[depth]}
-            onValueChange={([v]) => setDepth(v)}
-            min={0.5}
-            max={5}
-            step={0.5}
+            onValueChange={([v]) => {
+              setDepth(v);
+              if (selectedLabelId) {
+                handleUpdateSelectedLabel({ depth: v });
+              }
+            }}
+            min={MIN_DEPTH}
+            max={MAX_DEPTH}
+            step={0.1}
             className="flex-1"
           />
           <Badge variant="secondary" className="font-tech min-w-[50px] justify-center">
-            {depth}mm
+            {depth.toFixed(1)}mm
           </Badge>
         </div>
+        <p className="text-[10px] text-muted-foreground font-tech">
+          Default: {DEFAULT_DEPTH}mm. Use Z-axis gizmo to adjust after placing.
+        </p>
       </div>
 
-      {/* Preview */}
-      <Card className="tech-glass p-4">
-        <div className="text-center">
-          <p className="text-xs text-muted-foreground font-tech mb-2">Preview</p>
-          <div 
-            className={`
-              inline-block px-4 py-2 rounded border-2
-              ${labelType === 'deboss' 
-                ? 'bg-muted/50 border-muted-foreground/30' 
-                : 'bg-primary/10 border-primary/30'}
-            `}
-            style={{ fontSize: `${Math.min(fontSize, 20)}px` }}
-          >
-            <span className="font-tech font-bold">{labelText || 'Label'}</span>
-          </div>
-        </div>
-      </Card>
+      <Separator />
 
       {/* Add Label Button */}
       <Button
@@ -161,31 +289,20 @@ const LabelsStepContent: React.FC<LabelsStepContentProps> = ({
         disabled={!labelText.trim()}
       >
         <Plus className="w-4 h-4 mr-2" />
-        Add Label
+        Add Label to Scene
       </Button>
 
-      {/* Existing Labels */}
+      <p className="text-[10px] text-muted-foreground font-tech text-center">
+        Click on the baseplate or fixture to position the label.
+        <br />
+        Use the gizmo to reposition. Z-axis adjusts emboss depth.
+      </p>
+
+      {/* Labels count indicator */}
       {labels.length > 0 && (
-        <div className="space-y-2">
-          <p className="text-xs font-tech text-muted-foreground uppercase tracking-wider">
-            Labels ({labels.length})
-          </p>
-          <div className="space-y-1 max-h-[100px] overflow-auto">
-            {labels.map((label, index) => (
-              <Card key={label.id} className="tech-glass p-2">
-                <div className="flex items-center gap-2">
-                  <Type className="w-3 h-3 text-muted-foreground" />
-                  <span className="text-xs font-tech flex-1 truncate">
-                    "{label.text}"
-                  </span>
-                  <Badge variant="outline" className="text-[8px]">
-                    {label.type}
-                  </Badge>
-                </div>
-              </Card>
-            ))}
-          </div>
-        </div>
+        <p className="text-[10px] text-muted-foreground font-tech text-center">
+          {labels.length} label{labels.length !== 1 ? 's' : ''} added. View and edit in Properties panel.
+        </p>
       )}
     </div>
   );

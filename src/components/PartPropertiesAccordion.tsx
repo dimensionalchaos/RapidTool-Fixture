@@ -15,6 +15,7 @@ import { ProcessedFile } from '@/modules/FileImport/types';
 import SupportsAccordion from './Supports/SupportsAccordion';
 import BaseplateAccordion from './BaseplateAccordion';
 import CavityAccordion from './CavityAccordion';
+import { LabelsAccordion, LabelConfig } from './Labels';
 import { AnySupport } from './Supports/types';
 import { CavitySettings, DEFAULT_CAVITY_SETTINGS } from '@/lib/offset/types';
 import PartThumbnail from './PartThumbnail';
@@ -50,6 +51,12 @@ interface PartPropertiesAccordionProps {
   cavitySettings?: CavitySettings;
   isCavityProcessing?: boolean;
   hasCavityPreview?: boolean;
+  // Labels
+  labels?: LabelConfig[];
+  selectedLabelId?: string | null;
+  onLabelSelect?: (id: string | null) => void;
+  onLabelUpdate?: (id: string, updates: Partial<LabelConfig>) => void;
+  onLabelDelete?: (id: string) => void;
 }
 
 const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({ 
@@ -78,6 +85,12 @@ const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({
   cavitySettings = DEFAULT_CAVITY_SETTINGS,
   isCavityProcessing = false,
   hasCavityPreview = false,
+  // Labels props
+  labels = [],
+  selectedLabelId = null,
+  onLabelSelect,
+  onLabelUpdate,
+  onLabelDelete,
 }) => {
   // Map of partId -> transform (stores transforms for ALL parts)
   const [partTransforms, setPartTransforms] = useState<Map<string, PartTransform>>(new Map());
@@ -577,6 +590,15 @@ const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({
         onSupportSelect={onSupportSelect || (() => {})}
         onSupportUpdate={onSupportUpdate || (() => {})}
         onSupportDelete={onSupportDelete || (() => {})}
+      />
+
+      {/* Labels Accordion */}
+      <LabelsAccordion
+        labels={labels}
+        selectedLabelId={selectedLabelId}
+        onLabelSelect={onLabelSelect || (() => {})}
+        onLabelUpdate={onLabelUpdate || (() => {})}
+        onLabelDelete={onLabelDelete || (() => {})}
       />
 
       {/* Cavity Accordion - Status view only, main controls in CavityStepContent */}
