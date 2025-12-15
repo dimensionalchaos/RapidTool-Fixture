@@ -1687,193 +1687,368 @@ function gaussianSmoothing(
  * @param onProgress - Optional progress callback
  * @returns SmoothingResult with the smoothed geometry
  */
+/**
+ * Applies heightmap-aware Laplacian/Taubin smoothing to a mesh.
+ *
+ * This function smoothes boundary and wall vertices in the horizontal plane
+ * while preserving height values for heightmap-derived meshes.
+ *
+ * @param geometry - The mesh geometry to smooth
+ * @param options - Smoothing options or legacy iteration count
+ * @param lambdaOrProgress - Legacy lambda parameter or progress callback
+ * @param onProgress - Progress callback
+ * @returns Promise with smoothing result
+ */
 export async function laplacianSmooth(
   geometry: THREE.BufferGeometry,
   options: SmoothingOptions | number = 5,
   lambdaOrProgress?: number | ProgressCallback,
   onProgress?: ProgressCallback,
 ): Promise<SmoothingResult> {
-  // Handle backward compatibility
-  let opts: SmoothingOptions;
-  let progressCb: ProgressCallback | undefined;
-  
-  if (typeof options === 'number') {
-    opts = {
-      iterations: options,
-      strength: 0, // Default to pure Taubin for backward compat
-    };
-    progressCb = typeof lambdaOrProgress === 'function' ? lambdaOrProgress : onProgress;
-  } else {
-    opts = options;
-    progressCb = typeof lambdaOrProgress === 'function' ? lambdaOrProgress : onProgress;
-  }
-  
-  // Extract parameters (trCAD-style interface)
+  const { opts, progressCb } = parseOptions(options, lambdaOrProgress, onProgress);
   const {
-    iterations = 1,       // Default: 1 iteration
-    strength = 0,         // Default: pure Taubin (volume-preserving)
-    quality = false,      // Default: faster processing
-    debugColors = false,  // Default: no debug coloring
-    heightAxis = 'y',     // Default: Y is up (standard Three.js)
-    tiltXZ = 0,           // Default: no left/right tilt
-    tiltYZ = 0,           // Default: no front/back tilt
+    iterations = 1,
+    strength = 0,
+    quality = false,
+    debugColors = false,
+    heightAxis = 'y',
+    tiltXZ = 0,
+    tiltYZ = 0,
   } = opts;
-  
+
   try {
-    const strengthLabel = strength === 0 ? 'Taubin' : strength >= 1 ? 'Laplacian' : `${(strength * 100).toFixed(0)}%`;
-    reportProgress(progressCb, 'smoothing', 0, `Starting smoothing (${strengthLabel}, ${iterations} iter)...`);
-    
-    // Clone geometry to avoid modifying the original
-    const workGeometry = geometry.clone();
-    const posAttr = workGeometry.getAttribute('position') as THREE.BufferAttribute;
-    const positions = posAttr.array as Float32Array;
-    const vertexCount = posAttr.count;
-    const triangleCount = vertexCount / 3;
-    
-    // Safety check for very large meshes
-    const MAX_VERTICES = 1_000_000;
-    if (vertexCount > MAX_VERTICES) {
-      console.warn(`[laplacianSmooth] Mesh has ${vertexCount.toLocaleString()} vertices, exceeds limit. Skipping.`);
-      reportProgress(progressCb, 'smoothing', 100, 'Mesh too large for smoothing');
-      return {
-        success: true,
-        geometry: workGeometry,
-        iterations: 0,
-        method: 'blended',
-        error: `Mesh too large (${vertexCount.toLocaleString()} vertices)`,
-      };
-    }
-    
-    reportProgress(progressCb, 'smoothing', 10, 'Building adjacency map...');
-    
-    // Build vertex adjacency
-    const { adjacency, vertexGroups } = buildAdjacencyMap(positions, vertexCount, triangleCount);
-    
-    reportProgress(progressCb, 'smoothing', 20, `Smoothing (${iterations} iterations)...`);
-    
-    // Apply trCAD-style smoothing
-    const smoothingResult = trCADSmoothing(
-      positions,
-      adjacency,
-      vertexGroups,
-      iterations,
-      strength,
-      quality,
-      vertexCount,
-      heightAxis,
-      tiltXZ,
-      tiltYZ
+    return await performSmoothing(
+      geometry,
+      { iterations, strength, quality, debugColors, heightAxis, tiltXZ, tiltYZ },
+      progressCb
     );
-    
-    reportProgress(progressCb, 'smoothing', 90, 'Updating geometry...');
-    
-    // Update positions
-    posAttr.array.set(smoothingResult.positions);
-    posAttr.needsUpdate = true;
-    
-    // Add debug vertex colors if requested
-    if (debugColors && smoothingResult.heightmapInfo) {
-      const colors = new Float32Array(vertexCount * 3);
-      const info = smoothingResult.heightmapInfo;
-      
-      // Color mapping:
-      // RED (1,0,0): WALL - smoothed
-      // GREEN (0,1,0): TOP_SURFACE_BOUNDARY - smoothed
-      // BLUE (0,0,1): TOP_SURFACE_INTERIOR - NOT smoothed
-      // YELLOW (1,1,0): BOTTOM_SURFACE - NOT smoothed
-      
-      for (let i = 0; i < vertexCount; i++) {
-        const vertexType = info.vertexTypes.get(i) ?? VertexSurfaceType.TOP_SURFACE_INTERIOR;
-        
-        switch (vertexType) {
-          case VertexSurfaceType.WALL:
-            colors[i * 3] = 1;     // R
-            colors[i * 3 + 1] = 0; // G
-            colors[i * 3 + 2] = 0; // B
-            break;
-          case VertexSurfaceType.TOP_SURFACE_BOUNDARY:
-            colors[i * 3] = 0;     // R
-            colors[i * 3 + 1] = 1; // G
-            colors[i * 3 + 2] = 0; // B
-            break;
-          case VertexSurfaceType.TOP_SURFACE_INTERIOR:
-            colors[i * 3] = 0;     // R
-            colors[i * 3 + 1] = 0; // G
-            colors[i * 3 + 2] = 1; // B
-            break;
-          case VertexSurfaceType.BOTTOM_SURFACE:
-            colors[i * 3] = 1;     // R
-            colors[i * 3 + 1] = 1; // G
-            colors[i * 3 + 2] = 0; // B
-            break;
-        }
-      }
-      
-      workGeometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-      
-      // Log classification stats for debugging
-      console.log('[Smoothing Debug] Vertex classification:', {
-        total: vertexCount,
-        wall: info.wallVertices.size,
-        topBoundary: info.topSurfaceBoundaryVertices.size,
-        topInterior: info.topSurfaceInteriorVertices.size,
-        bottom: info.bottomSurfaceVertices.size,
-        heightRange: info.yRange,
-        bottomHeight: info.bottomY,
-        detectedHeightAxis: info.detectedHeightAxis,
-        upVector: info.upVector,
-        tiltXZ,
-        tiltYZ,
-      });
-    }
-    
-    // Recompute normals
-    workGeometry.computeVertexNormals();
-    
-    reportProgress(progressCb, 'smoothing', 100, 'Smoothing complete');
-    
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown smoothing error';
+    return { success: false, geometry: null, iterations: 0, error: errorMessage };
+  }
+}
+
+/** Parses smoothing options for backward compatibility */
+function parseOptions(
+  options: SmoothingOptions | number,
+  lambdaOrProgress?: number | ProgressCallback,
+  onProgress?: ProgressCallback
+): { opts: SmoothingOptions; progressCb?: ProgressCallback } {
+  if (typeof options === 'number') {
+    return {
+      opts: { iterations: options, strength: 0 },
+      progressCb: typeof lambdaOrProgress === 'function' ? lambdaOrProgress : onProgress,
+    };
+  }
+  return {
+    opts: options,
+    progressCb: typeof lambdaOrProgress === 'function' ? lambdaOrProgress : onProgress,
+  };
+}
+
+/** Maximum vertices allowed for smoothing */
+const MAX_SMOOTHING_VERTICES = 1_000_000;
+
+/** Core smoothing implementation */
+async function performSmoothing(
+  geometry: THREE.BufferGeometry,
+  params: {
+    iterations: number;
+    strength: number;
+    quality: boolean;
+    debugColors: boolean;
+    heightAxis: 'y' | 'z' | '-y' | '-z';
+    tiltXZ: number;
+    tiltYZ: number;
+  },
+  progressCb?: ProgressCallback
+): Promise<SmoothingResult> {
+  const { iterations, strength, quality, debugColors, heightAxis, tiltXZ, tiltYZ } = params;
+  const strengthLabel = getStrengthLabel(strength);
+
+  reportProgress(progressCb, 'smoothing', 0, `Starting smoothing (${strengthLabel}, ${iterations} iter)...`);
+
+  const workGeometry = geometry.clone();
+  const posAttr = workGeometry.getAttribute('position') as THREE.BufferAttribute;
+  const positions = posAttr.array as Float32Array;
+  const vertexCount = posAttr.count;
+
+  if (vertexCount > MAX_SMOOTHING_VERTICES) {
+    reportProgress(progressCb, 'smoothing', 100, 'Mesh too large for smoothing');
     return {
       success: true,
       geometry: workGeometry,
-      iterations,
-      method: 'blended',
-    };
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : 'Unknown smoothing error';
-    return {
-      success: false,
-      geometry: null,
       iterations: 0,
-      error: errorMessage,
+      method: 'blended',
+      error: `Mesh too large (${vertexCount.toLocaleString()} vertices)`,
     };
+  }
+
+  reportProgress(progressCb, 'smoothing', 10, 'Building adjacency map...');
+  const { adjacency, vertexGroups } = buildAdjacencyMap(positions, vertexCount, vertexCount / 3);
+
+  reportProgress(progressCb, 'smoothing', 20, `Smoothing (${iterations} iterations)...`);
+  const smoothingResult = trCADSmoothing(
+    positions,
+    adjacency,
+    vertexGroups,
+    iterations,
+    strength,
+    quality,
+    vertexCount,
+    heightAxis,
+    tiltXZ,
+    tiltYZ
+  );
+
+  reportProgress(progressCb, 'smoothing', 90, 'Updating geometry...');
+  posAttr.array.set(smoothingResult.positions);
+  posAttr.needsUpdate = true;
+
+  if (debugColors && smoothingResult.heightmapInfo) {
+    applyDebugColors(workGeometry, smoothingResult.heightmapInfo, vertexCount);
+  }
+
+  workGeometry.computeVertexNormals();
+  reportProgress(progressCb, 'smoothing', 100, 'Smoothing complete');
+
+  return { success: true, geometry: workGeometry, iterations, method: 'blended' };
+}
+
+/** Gets human-readable strength label */
+function getStrengthLabel(strength: number): string {
+  if (strength === 0) return 'Taubin';
+  if (strength >= 1) return 'Laplacian';
+  return `${(strength * 100).toFixed(0)}%`;
+}
+
+// ============================================================================
+// Heightmap-Aware Mesh Smoothing
+// Based on Taubin's "A Signal Processing Approach To Fair Surface Design" (SIGGRAPH 95)
+// ============================================================================
+
+/** Vertex classification for heightmap-derived meshes */
+enum VertexSurfaceType {
+  /** Interior of top surface - no smoothing needed */
+  TOP_SURFACE_INTERIOR,
+  /** Edge/boundary of top surface - smooth in horizontal plane only */
+  TOP_SURFACE_BOUNDARY,
+  /** Flat bottom surface - no smoothing */
+  BOTTOM_SURFACE,
+  /** Wall connecting top to bottom - smooth in horizontal plane only */
+  WALL,
+}
+
+/** Result of vertex classification */
+interface HeightmapClassification {
+  bottomY: number;
+  yRange: number;
+  vertexTypes: Map<number, VertexSurfaceType>;
+  topSurfaceInteriorVertices: Set<number>;
+  topSurfaceBoundaryVertices: Set<number>;
+  bottomSurfaceVertices: Set<number>;
+  wallVertices: Set<number>;
+  detectedHeightAxis: 'y' | 'z' | '-y' | '-z';
+  upVector: Vector3;
+}
+
+/** Simple 3D vector type */
+interface Vector3 {
+  x: number;
+  y: number;
+  z: number;
+}
+
+/** Debug color mapping for vertex types */
+const DEBUG_COLORS: Record<VertexSurfaceType, [number, number, number]> = {
+  [VertexSurfaceType.WALL]: [1, 0, 0],                    // Red
+  [VertexSurfaceType.TOP_SURFACE_BOUNDARY]: [0, 1, 0],    // Green
+  [VertexSurfaceType.TOP_SURFACE_INTERIOR]: [0, 0, 1],    // Blue
+  [VertexSurfaceType.BOTTOM_SURFACE]: [1, 1, 0],          // Yellow
+};
+
+/** Applies debug vertex colors based on classification */
+function applyDebugColors(
+  geometry: THREE.BufferGeometry,
+  heightmapInfo: HeightmapClassification,
+  vertexCount: number
+): void {
+  const colors = new Float32Array(vertexCount * 3);
+
+  for (let i = 0; i < vertexCount; i++) {
+    const vertexType = heightmapInfo.vertexTypes.get(i) ?? VertexSurfaceType.TOP_SURFACE_INTERIOR;
+    const [r, g, b] = DEBUG_COLORS[vertexType];
+    colors[i * 3] = r;
+    colors[i * 3 + 1] = g;
+    colors[i * 3 + 2] = b;
+  }
+
+  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+}
+
+// ============================================================================
+// Up Vector Computation
+// ============================================================================
+
+/**
+ * Computes the "up" direction vector based on tilt angles.
+ * This vector points toward the flat base (high height in the mesh).
+ */
+function computeUpVector(tiltXZ: number, tiltYZ: number): Vector3 {
+  if (tiltXZ === 0 && tiltYZ === 0) {
+    return { x: 0, y: 1, z: 0 };
+  }
+
+  const radXZ = (tiltXZ * Math.PI) / 180;
+  const radYZ = (tiltYZ * Math.PI) / 180;
+  const cosYZ = Math.cos(radYZ);
+  const sinYZ = Math.sin(radYZ);
+  const cosXZ = Math.cos(radXZ);
+  const sinXZ = Math.sin(radXZ);
+
+  // Computed from inverse rotation matrix: RotX(-180° - yzAngle) * RotZ(-xzAngle)
+  const up: Vector3 = {
+    x: -cosYZ * sinXZ,
+    y: cosYZ * cosXZ,
+    z: -sinYZ,
+  };
+
+  return normalizeVector(up);
+}
+
+/** Normalizes a vector in place and returns it */
+function normalizeVector(v: Vector3): Vector3 {
+  const len = Math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+  if (len > 0) {
+    v.x /= len;
+    v.y /= len;
+    v.z /= len;
+  }
+  return v;
+}
+
+/** Computes height of a vertex by projecting onto the up vector */
+function computeVertexHeight(
+  positions: Float32Array,
+  index: number,
+  up: Vector3
+): number {
+  const i = index * 3;
+  return positions[i] * up.x + positions[i + 1] * up.y + positions[i + 2] * up.z;
+}
+
+// ============================================================================
+// Normal Computation
+// ============================================================================
+
+/**
+ * Computes averaged vertex normals and stores vertex positions.
+ * Returns a map of groupId to normalized normal vector.
+ */
+function computeVertexNormals(
+  positions: Float32Array,
+  vertexCount: number,
+  vertexGroups: number[][]
+): {
+  normals: Map<number, Vector3>;
+  vertexPositions: Map<number, Vector3>;
+} {
+  const normals = new Map<number, Vector3>();
+  const vertexPositions = new Map<number, Vector3>();
+  const triangleCount = vertexCount / 3;
+
+  for (let t = 0; t < triangleCount; t++) {
+    const indices = [t * 3, t * 3 + 1, t * 3 + 2];
+    const faceNormal = computeFaceNormal(positions, indices);
+
+    for (const vi of indices) {
+      const groupId = vertexGroups[vi][0];
+      accumulateNormal(normals, groupId, faceNormal);
+      storeVertexPosition(vertexPositions, positions, vi, groupId);
+    }
+  }
+
+  // Normalize all accumulated normals
+  for (const normal of normals.values()) {
+    normalizeVector(normal);
+  }
+
+  return { normals, vertexPositions };
+}
+
+/** Computes the normal of a triangle face */
+function computeFaceNormal(positions: Float32Array, indices: number[]): Vector3 {
+  const [i0, i1, i2] = indices;
+  const v0 = getVertex(positions, i0);
+  const v1 = getVertex(positions, i1);
+  const v2 = getVertex(positions, i2);
+
+  // Edge vectors
+  const e1 = { x: v1.x - v0.x, y: v1.y - v0.y, z: v1.z - v0.z };
+  const e2 = { x: v2.x - v0.x, y: v2.y - v0.y, z: v2.z - v0.z };
+
+  // Cross product
+  const normal: Vector3 = {
+    x: e1.y * e2.z - e1.z * e2.y,
+    y: e1.z * e2.x - e1.x * e2.z,
+    z: e1.x * e2.y - e1.y * e2.x,
+  };
+
+  return normalizeVector(normal);
+}
+
+/** Gets vertex position at index */
+function getVertex(positions: Float32Array, index: number): Vector3 {
+  const i = index * 3;
+  return { x: positions[i], y: positions[i + 1], z: positions[i + 2] };
+}
+
+/** Accumulates a normal to an existing normal or creates new entry */
+function accumulateNormal(
+  normals: Map<number, Vector3>,
+  groupId: number,
+  normal: Vector3
+): void {
+  const existing = normals.get(groupId);
+  if (existing) {
+    existing.x += normal.x;
+    existing.y += normal.y;
+    existing.z += normal.z;
+  } else {
+    normals.set(groupId, { ...normal });
+  }
+}
+
+/** Stores vertex position if not already stored */
+function storeVertexPosition(
+  vertexPositions: Map<number, Vector3>,
+  positions: Float32Array,
+  vertexIndex: number,
+  groupId: number
+): void {
+  if (!vertexPositions.has(groupId)) {
+    vertexPositions.set(groupId, getVertex(positions, vertexIndex));
   }
 }
 
 // ============================================================================
-// trCAD-Style Mesh Smoothing Implementation
-// Based on: https://docs.trcad.trinckle.com/trcad_manual/modifier_ref_mod_smoothing.php
-// Reference: Taubin, G. "A Signal Processing Approach To Fair Surface Design" (SIGGRAPH 95)
+// Vertex Classification
 // ============================================================================
 
-/**
- * Vertex classification for heightmap-derived meshes.
- */
-enum VertexSurfaceType {
-  TOP_SURFACE_INTERIOR,  // Interior of top surface - NO smoothing needed
-  TOP_SURFACE_BOUNDARY,  // Edge/boundary of top surface - smooth X-Z only
-  BOTTOM_SURFACE,        // On the bottom (flat) surface - constant Y = clipYMin
-  WALL,                  // On the wall connecting top to bottom
-}
+/** Wall detection threshold: cos(84°) for averaged normals */
+const WALL_THRESHOLD = 0.1;
+
+/** Boundary distance as percentage of mesh height */
+const BOUNDARY_DISTANCE_RATIO = 0.02;
+
+/** Flat base threshold as percentage of height range */
+const FLAT_BASE_RATIO = 0.90;
 
 /**
- * Analyze the mesh to classify vertices by surface type.
- * 
- * For heightmap meshes:
- * - TOP_SURFACE: Vertices at variable heights (the offset surface)
- * - BOTTOM_SURFACE: Vertices at the minimum Y (flat bottom)
- * - WALL: Vertices that connect top to bottom (have neighbors at different Y levels)
- * 
- * This is more accurate than just checking Y position because it considers connectivity.
+ * Classifies vertices by surface type for heightmap-aware smoothing.
+ * Uses a hybrid approach robust to decimation:
+ * 1. WALL detection uses averaged vertex normals (dilutes large triangle effects)
+ * 2. BOUNDARY detection uses geometric distance (not adjacency)
  */
 function classifyHeightmapVertices(
   positions: Float32Array,
@@ -1883,409 +2058,319 @@ function classifyHeightmapVertices(
   heightAxis: 'y' | 'z' | '-y' | '-z' = 'y',
   tiltXZ: number = 0,
   tiltYZ: number = 0
-): {
-  bottomY: number;
-  yRange: number;
-  vertexTypes: Map<number, VertexSurfaceType>;
-  topSurfaceInteriorVertices: Set<number>;
-  topSurfaceBoundaryVertices: Set<number>;
-  bottomSurfaceVertices: Set<number>;
-  wallVertices: Set<number>;
-  detectedHeightAxis: 'y' | 'z' | '-y' | '-z';
-  upVector: { x: number; y: number; z: number };
-} {
-  // When tilt is applied, we need to compute the proper "up" direction.
-  // The mesh is generated with:
-  //   1. Forward rotation: RotZ(xzAngle) * RotX(180° + yzAngle)
-  //   2. Heightmap generated (projecting from -Y direction in rotated space)
-  //   3. Inverse rotation applied: RotX(-180° - yzAngle) * RotZ(-xzAngle)
-  //
-  // In rotated space: flat base is at low Y (clipYMin), heightmap surface is at higher Y
-  // After inverse rotation, we need to find where the +Y axis points.
-  //
-  // The "up" direction for classification should point toward the flat base
-  // (high height = BOTTOM_SURFACE = flat base)
-  
-  const hasTilt = tiltXZ !== 0 || tiltYZ !== 0;
-  
-  // Calculate the "up" direction vector based on tilt
-  // Default: Y is up (flat base at high Y after 180° baseline rotation inverse)
-  let upX = 0, upY = 1, upZ = 0;
-  
-  if (hasTilt) {
-    // The inverse rotation is: RotX(-180° - yzAngle) * RotZ(-xzAngle)
-    // We need to find where +Y axis in rotated space maps to in world space.
-    // 
-    // Apply RotX(-180° - yzAngle) to (0, 1, 0):
-    //   x' = 0
-    //   y' = cos(-180° - yzAngle) = -cos(yzAngle)
-    //   z' = sin(-180° - yzAngle) = sin(yzAngle)
-    //
-    // Apply RotZ(-xzAngle) to (0, -cos(yzAngle), sin(yzAngle)):
-    //   x'' = 0 - (-cos(yzAngle)) * sin(-xzAngle) = -cos(yzAngle) * sin(xzAngle)
-    //   y'' = 0 + (-cos(yzAngle)) * cos(-xzAngle) = -cos(yzAngle) * cos(xzAngle)
-    //   z'' = sin(yzAngle)
-    //
-    // This gives the direction from flat base toward heightmap in world space.
-    // We want the OPPOSITE (pointing toward flat base for classification).
-    
-    const radXZ = tiltXZ * Math.PI / 180;
-    const radYZ = tiltYZ * Math.PI / 180;
-    
-    const cosYZ = Math.cos(radYZ);
-    const sinYZ = Math.sin(radYZ);
-    const cosXZ = Math.cos(radXZ);
-    const sinXZ = Math.sin(radXZ);
-    
-    // Up vector points toward flat base (opposite of heightmap direction)
-    // Note: X is negated due to coordinate system mirroring
-    upX = -cosYZ * sinXZ;
-    upY = cosYZ * cosXZ;
-    upZ = -sinYZ;
-    
-    // Normalize (should already be normalized, but just in case)
-    const len = Math.sqrt(upX * upX + upY * upY + upZ * upZ);
-    if (len > 0) {
-      upX /= len;
-      upY /= len;
-      upZ /= len;
-    }
-    
-    console.log('[Smoothing] Tilt applied - up vector:', { upX: upX.toFixed(3), upY: upY.toFixed(3), upZ: upZ.toFixed(3) }, 'tiltXZ:', tiltXZ, 'tiltYZ:', tiltYZ);
-  }
-  
-  // Helper function to get the "height" value from a vertex
-  // Project onto the up vector to get height
-  const getHeight = (vertexIndex: number): number => {
-    const baseIdx = vertexIndex * 3;
-    const x = positions[baseIdx];
-    const y = positions[baseIdx + 1];
-    const z = positions[baseIdx + 2];
-    // Dot product with up vector gives height along that direction
-    return x * upX + y * upY + z * upZ;
-  };
-  
-  // Keep legacy axis detection for backward compatibility when no tilt
-  let detectedAxis: 'y' | 'z' | '-y' | '-z' = heightAxis;
-  
-  if (!hasTilt) {
-    // Legacy auto-detection for backward compatibility
-    // Find min/max for each axis
-    let minX = Infinity, maxX = -Infinity;
-    let minY = Infinity, maxY = -Infinity;
-    let minZ = Infinity, maxZ = -Infinity;
-    
-    for (let i = 0; i < vertexCount; i++) {
-      const x = positions[i * 3];
-      const y = positions[i * 3 + 1];
-      const z = positions[i * 3 + 2];
-      minX = Math.min(minX, x); maxX = Math.max(maxX, x);
-      minY = Math.min(minY, y); maxY = Math.max(maxY, y);
-      minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z);
-    }
-    
-    const rangeY = maxY - minY;
-    const rangeZ = maxZ - minZ;
-    
-    // Count vertices near min for each axis
-    const thresholdY = minY + rangeY * 0.05;
-    const thresholdZ = minZ + rangeZ * 0.05;
-    
-    let countAtMinY = 0, countAtMinZ = 0;
-    for (let i = 0; i < vertexCount; i++) {
-      if (positions[i * 3 + 1] <= thresholdY) countAtMinY++;
-      if (positions[i * 3 + 2] <= thresholdZ) countAtMinZ++;
-    }
-    
-    const ratioY = countAtMinY / vertexCount;
-    const ratioZ = countAtMinZ / vertexCount;
-    
-    // Auto-detect height axis
-    if (heightAxis === 'y') {
-      const idealRange = (r: number) => r >= 0.10 && r <= 0.40;
-      
-      if (!idealRange(ratioY) && idealRange(ratioZ)) {
-        detectedAxis = 'z';
-        upX = 0; upY = 0; upZ = 1;
-        console.log('[Smoothing] Auto-detected height axis: Z');
-      } else if (!idealRange(ratioY) && rangeZ > rangeY * 1.5) {
-        detectedAxis = 'z';
-        upX = 0; upY = 0; upZ = 1;
-        console.log('[Smoothing] Auto-detected height axis: Z');
-      }
-    }
-  }
+): HeightmapClassification {
+  const up = computeUpVector(tiltXZ, tiltYZ);
+  const detectedAxis = detectHeightAxis(positions, vertexCount, heightAxis, tiltXZ, tiltYZ);
 
-  // Find height range along the detected axis
-  let minHeight = Infinity, maxHeight = -Infinity;
+  // Compute height bounds
+  const { minHeight, maxHeight } = computeHeightBounds(positions, vertexCount, up);
+  const heightRange = maxHeight - minHeight;
+  const flatBaseThreshold = minHeight + heightRange * FLAT_BASE_RATIO;
+
+  // Compute normals for classification
+  const { normals, vertexPositions } = computeVertexNormals(
+    positions,
+    vertexCount,
+    vertexGroups
+  );
+
+  // First pass: classify vertices
+  const result = initializeClassificationResult(minHeight, heightRange, detectedAxis, up);
+  const processedGroups = new Set<number>();
+
+  classifyVerticesFirstPass(
+    positions,
+    vertexCount,
+    vertexGroups,
+    normals,
+    up,
+    flatBaseThreshold,
+    processedGroups,
+    result
+  );
+
+  // Second pass: identify boundaries by geometric distance
+  const wallPositions = collectWallPositions(normals, result.vertexTypes, vertexPositions);
+  const boundaryThreshold = Math.max(heightRange, 1) * BOUNDARY_DISTANCE_RATIO;
+
+  classifyBoundaries(
+    vertexCount,
+    vertexGroups,
+    vertexPositions,
+    wallPositions,
+    boundaryThreshold,
+    result
+  );
+
+  return result;
+}
+
+/** Computes min/max height along the up vector */
+function computeHeightBounds(
+  positions: Float32Array,
+  vertexCount: number,
+  up: Vector3
+): { minHeight: number; maxHeight: number } {
+  let minHeight = Infinity;
+  let maxHeight = -Infinity;
+
   for (let i = 0; i < vertexCount; i++) {
-    const h = getHeight(i);
+    const h = computeVertexHeight(positions, i, up);
     minHeight = Math.min(minHeight, h);
     maxHeight = Math.max(maxHeight, h);
   }
-  
-  const heightRange = maxHeight - minHeight;
-  
-  // Only need to identify the flat base zone (high height values = flat base after 180° rotation)
-  const flatBaseThreshold = minHeight + heightRange * 0.90; // Top 10% is flat base
-  
-  // HYBRID CLASSIFICATION APPROACH:
-  // Problem: Decimation creates large triangles that span from flat areas to walls.
-  // - Face-based wall detection marks ALL vertices of a wall face as walls (bad for decimated meshes)
-  // - Adjacency-based boundary detection connects distant vertices through large triangles
-  //
-  // Solution:
-  // 1. WALL: Use averaged vertex normals (dilutes effect of one large spanning triangle)
-  // 2. BOUNDARY: Require geometric proximity to wall vertices, not just adjacency
-  
-  const vertexNormals = new Map<number, { x: number; y: number; z: number }>();
-  const vertexPositions = new Map<number, { x: number; y: number; z: number }>();
-  
-  const WALL_THRESHOLD = 0.1; // cos(~84°) - for averaged normals, use less strict threshold
-  
-  // Debug: track stats
-  let totalFaces = 0;
-  let wallFaceCount = 0;
-  let minFaceDot = 1.0;
-  let maxFaceDot = 0.0;
-  
-  // Compute face normals and ACCUMULATE to vertices (averaging approach)
-  const triangleCount = vertexCount / 3;
-  for (let t = 0; t < triangleCount; t++) {
-    const i0 = t * 3;
-    const i1 = t * 3 + 1;
-    const i2 = t * 3 + 2;
-    
-    // Get triangle vertices
-    const v0x = positions[i0 * 3], v0y = positions[i0 * 3 + 1], v0z = positions[i0 * 3 + 2];
-    const v1x = positions[i1 * 3], v1y = positions[i1 * 3 + 1], v1z = positions[i1 * 3 + 2];
-    const v2x = positions[i2 * 3], v2y = positions[i2 * 3 + 1], v2z = positions[i2 * 3 + 2];
-    
-    // Compute face normal (cross product of edges)
-    const e1x = v1x - v0x, e1y = v1y - v0y, e1z = v1z - v0z;
-    const e2x = v2x - v0x, e2y = v2y - v0y, e2z = v2z - v0z;
-    let nx = e1y * e2z - e1z * e2y;
-    let ny = e1z * e2x - e1x * e2z;
-    let nz = e1x * e2y - e1y * e2x;
-    
-    // Normalize face normal
-    const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
-    if (len > 0) {
-      nx /= len;
-      ny /= len;
-      nz /= len;
-    }
-    
-    // Debug: track face stats
-    const faceDot = Math.abs(nx * upX + ny * upY + nz * upZ);
-    totalFaces++;
-    minFaceDot = Math.min(minFaceDot, faceDot);
-    maxFaceDot = Math.max(maxFaceDot, faceDot);
-    if (faceDot < 0.1) wallFaceCount++;
-    
-    // Accumulate normals to vertices (will be averaged later)
-    for (const vi of [i0, i1, i2]) {
-      const groupId = vertexGroups[vi][0];
-      const existing = vertexNormals.get(groupId);
-      if (existing) {
-        existing.x += nx;
-        existing.y += ny;
-        existing.z += nz;
-      } else {
-        vertexNormals.set(groupId, { x: nx, y: ny, z: nz });
-      }
-      
-      // Also store vertex position for distance-based boundary check
-      if (!vertexPositions.has(groupId)) {
-        vertexPositions.set(groupId, {
-          x: positions[vi * 3],
-          y: positions[vi * 3 + 1],
-          z: positions[vi * 3 + 2]
-        });
-      }
-    }
-  }
-  
-  // Debug: log wall detection stats
-  console.log(`[Smoothing] Hybrid classification stats:`);
-  console.log(`  - Up vector: (${upX.toFixed(3)}, ${upY.toFixed(3)}, ${upZ.toFixed(3)})`);
-  console.log(`  - Total faces: ${totalFaces}`);
-  console.log(`  - Wall-like faces: ${wallFaceCount} (${(wallFaceCount/totalFaces*100).toFixed(1)}%)`);
-  console.log(`  - Face dot range: [${minFaceDot.toFixed(4)}, ${maxFaceDot.toFixed(4)}]`);
-  console.log(`  - Wall threshold (averaged): ${WALL_THRESHOLD}`);
-  
-  // Normalize the accumulated normals to get averaged vertex normals
-  for (const [, n] of vertexNormals) {
-    const len = Math.sqrt(n.x * n.x + n.y * n.y + n.z * n.z);
-    if (len > 0) {
-      n.x /= len;
-      n.y /= len;
-      n.z /= len;
-    }
-  }
-  
-  // Helper: get dot product of averaged vertex normal with up direction
-  const getVertexNormalDot = (groupId: number): number => {
-    const n = vertexNormals.get(groupId);
-    if (!n) return 1; // Default to flat if no normal
-    return Math.abs(n.x * upX + n.y * upY + n.z * upZ);
+
+  return { minHeight, maxHeight };
+}
+
+/** Initializes the classification result structure */
+function initializeClassificationResult(
+  bottomY: number,
+  yRange: number,
+  detectedAxis: 'y' | 'z' | '-y' | '-z',
+  up: Vector3
+): HeightmapClassification {
+  return {
+    bottomY,
+    yRange,
+    vertexTypes: new Map(),
+    topSurfaceInteriorVertices: new Set(),
+    topSurfaceBoundaryVertices: new Set(),
+    bottomSurfaceVertices: new Set(),
+    wallVertices: new Set(),
+    detectedHeightAxis: detectedAxis,
+    upVector: up,
   };
-  
-  const vertexTypes = new Map<number, VertexSurfaceType>();
-  const topSurfaceInteriorVertices = new Set<number>();
-  const topSurfaceBoundaryVertices = new Set<number>();
-  const bottomSurfaceVertices = new Set<number>();
-  const wallVertices = new Set<number>();
-  
-  const processedGroups = new Set<number>();
-  
-  // FIRST PASS: Classify using averaged vertex normals
-  // This is robust to decimation because large triangles' wall normals get diluted by many flat faces
-  
+}
+
+/** First pass: classify vertices as WALL, BOTTOM_SURFACE, or TOP_SURFACE_INTERIOR */
+function classifyVerticesFirstPass(
+  positions: Float32Array,
+  vertexCount: number,
+  vertexGroups: number[][],
+  normals: Map<number, Vector3>,
+  up: Vector3,
+  flatBaseThreshold: number,
+  processedGroups: Set<number>,
+  result: HeightmapClassification
+): void {
   for (let i = 0; i < vertexCount; i++) {
     const group = vertexGroups[i];
     const groupId = group[0];
-    
+
     if (processedGroups.has(groupId)) continue;
     processedGroups.add(groupId);
-    
-    const h = getHeight(i);
-    const normalDot = getVertexNormalDot(groupId);
-    const isWall = normalDot < WALL_THRESHOLD; // Averaged normal is wall-like
-    const isAtFlatBase = h >= flatBaseThreshold;
-    
-    let surfaceType: VertexSurfaceType;
-    
-    if (isWall) {
-      // Averaged normal is wall-like = WALL (smoothed)
-      surfaceType = VertexSurfaceType.WALL;
-    } else if (isAtFlatBase) {
-      // Flat normal, at high height = FLAT BASE (never smoothed)
-      surfaceType = VertexSurfaceType.BOTTOM_SURFACE;
-    } else {
-      // Flat normal, NOT at flat base = HEIGHTMAP SURFACE (will refine in pass 2)
-      surfaceType = VertexSurfaceType.TOP_SURFACE_INTERIOR; // Temporary
-    }
-    
-    // Apply to all vertices in this group
-    for (const vi of group) {
-      vertexTypes.set(vi, surfaceType);
-      switch (surfaceType) {
-        case VertexSurfaceType.BOTTOM_SURFACE:
-          bottomSurfaceVertices.add(vi);
-          break;
-        case VertexSurfaceType.WALL:
-          wallVertices.add(vi);
-          break;
-      }
+
+    const height = computeVertexHeight(positions, i, up);
+    const normalDot = computeNormalDot(normals, groupId, up);
+    const isWall = normalDot < WALL_THRESHOLD;
+    const isAtFlatBase = height >= flatBaseThreshold;
+
+    const surfaceType = determineSurfaceType(isWall, isAtFlatBase);
+    applyClassificationToGroup(group, surfaceType, result);
+  }
+}
+
+/** Computes dot product of vertex normal with up vector */
+function computeNormalDot(
+  normals: Map<number, Vector3>,
+  groupId: number,
+  up: Vector3
+): number {
+  const n = normals.get(groupId);
+  if (!n) return 1;
+  return Math.abs(n.x * up.x + n.y * up.y + n.z * up.z);
+}
+
+/** Determines surface type based on wall and height flags */
+function determineSurfaceType(isWall: boolean, isAtFlatBase: boolean): VertexSurfaceType {
+  if (isWall) return VertexSurfaceType.WALL;
+  if (isAtFlatBase) return VertexSurfaceType.BOTTOM_SURFACE;
+  return VertexSurfaceType.TOP_SURFACE_INTERIOR;
+}
+
+/** Applies classification to all vertices in a group */
+function applyClassificationToGroup(
+  group: number[],
+  surfaceType: VertexSurfaceType,
+  result: HeightmapClassification
+): void {
+  for (const vi of group) {
+    result.vertexTypes.set(vi, surfaceType);
+    switch (surfaceType) {
+      case VertexSurfaceType.BOTTOM_SURFACE:
+        result.bottomSurfaceVertices.add(vi);
+        break;
+      case VertexSurfaceType.WALL:
+        result.wallVertices.add(vi);
+        break;
     }
   }
-  
-  // Collect wall vertex positions for distance-based boundary check
-  const wallPositions: Array<{ x: number; y: number; z: number }> = [];
-  for (const [groupId] of vertexNormals) {
+}
+
+/** Collects positions of all wall vertices */
+function collectWallPositions(
+  normals: Map<number, Vector3>,
+  vertexTypes: Map<number, VertexSurfaceType>,
+  vertexPositions: Map<number, Vector3>
+): Vector3[] {
+  const wallPositions: Vector3[] = [];
+
+  for (const [groupId] of normals) {
     if (vertexTypes.get(groupId) === VertexSurfaceType.WALL) {
       const pos = vertexPositions.get(groupId);
       if (pos) wallPositions.push(pos);
     }
   }
-  
-  // Compute a reasonable distance threshold based on mesh size
-  const meshSize = Math.max(maxHeight - minHeight, 1);
-  const BOUNDARY_DISTANCE_THRESHOLD = meshSize * 0.02; // 2% of mesh size
-  console.log(`  - Boundary distance threshold: ${BOUNDARY_DISTANCE_THRESHOLD.toFixed(4)}`);
-  
-  // Second pass: distinguish TOP_SURFACE_BOUNDARY from TOP_SURFACE_INTERIOR
-  // Use GEOMETRIC DISTANCE to wall vertices, not just adjacency
-  processedGroups.clear();
+
+  return wallPositions;
+}
+
+/** Second pass: classify TOP_SURFACE_INTERIOR vertices near walls as BOUNDARY */
+function classifyBoundaries(
+  vertexCount: number,
+  vertexGroups: number[][],
+  vertexPositions: Map<number, Vector3>,
+  wallPositions: Vector3[],
+  boundaryThreshold: number,
+  result: HeightmapClassification
+): void {
+  const processedGroups = new Set<number>();
+
   for (let i = 0; i < vertexCount; i++) {
     const group = vertexGroups[i];
     const groupId = group[0];
-    
+
     if (processedGroups.has(groupId)) continue;
     processedGroups.add(groupId);
-    
-    const currentType = vertexTypes.get(groupId);
-    if (currentType !== VertexSurfaceType.TOP_SURFACE_INTERIOR) continue;
-    
-    // Get this vertex's position
+
+    if (result.vertexTypes.get(groupId) !== VertexSurfaceType.TOP_SURFACE_INTERIOR) continue;
+
     const pos = vertexPositions.get(groupId);
     if (!pos) continue;
-    
-    // Check distance to any wall vertex
-    let isBoundary = false;
-    for (const wallPos of wallPositions) {
-      const dx = pos.x - wallPos.x;
-      const dy = pos.y - wallPos.y;
-      const dz = pos.z - wallPos.z;
-      const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-      
-      if (dist < BOUNDARY_DISTANCE_THRESHOLD) {
-        isBoundary = true;
-        break;
-      }
-    }
-    
-    const surfaceType = isBoundary 
-      ? VertexSurfaceType.TOP_SURFACE_BOUNDARY 
+
+    const isBoundary = isNearWall(pos, wallPositions, boundaryThreshold);
+    const surfaceType = isBoundary
+      ? VertexSurfaceType.TOP_SURFACE_BOUNDARY
       : VertexSurfaceType.TOP_SURFACE_INTERIOR;
-    
-    // Apply to all vertices in this group
+
     for (const vi of group) {
-      vertexTypes.set(vi, surfaceType);
+      result.vertexTypes.set(vi, surfaceType);
       if (surfaceType === VertexSurfaceType.TOP_SURFACE_BOUNDARY) {
-        topSurfaceBoundaryVertices.add(vi);
+        result.topSurfaceBoundaryVertices.add(vi);
       } else {
-        topSurfaceInteriorVertices.add(vi);
+        result.topSurfaceInteriorVertices.add(vi);
       }
     }
   }
-  
+}
+
+/** Checks if a position is within threshold distance of any wall vertex */
+function isNearWall(pos: Vector3, wallPositions: Vector3[], threshold: number): boolean {
+  const thresholdSq = threshold * threshold;
+
+  for (const wallPos of wallPositions) {
+    const dx = pos.x - wallPos.x;
+    const dy = pos.y - wallPos.y;
+    const dz = pos.z - wallPos.z;
+    const distSq = dx * dx + dy * dy + dz * dz;
+
+    if (distSq < thresholdSq) return true;
+  }
+
+  return false;
+}
+
+/** Auto-detects height axis for backward compatibility when no tilt is applied */
+function detectHeightAxis(
+  positions: Float32Array,
+  vertexCount: number,
+  defaultAxis: 'y' | 'z' | '-y' | '-z',
+  tiltXZ: number,
+  tiltYZ: number
+): 'y' | 'z' | '-y' | '-z' {
+  if (tiltXZ !== 0 || tiltYZ !== 0) return defaultAxis;
+  if (defaultAxis !== 'y') return defaultAxis;
+
+  const bounds = computeAxisBounds(positions, vertexCount);
+  const ratioY = computeVertexRatioAtMin(positions, vertexCount, 1, bounds.minY, bounds.rangeY);
+  const ratioZ = computeVertexRatioAtMin(positions, vertexCount, 2, bounds.minZ, bounds.rangeZ);
+
+  const isIdealRange = (r: number) => r >= 0.1 && r <= 0.4;
+
+  if (!isIdealRange(ratioY) && isIdealRange(ratioZ)) return 'z';
+  if (!isIdealRange(ratioY) && bounds.rangeZ > bounds.rangeY * 1.5) return 'z';
+
+  return defaultAxis;
+}
+
+/** Computes axis bounds for the mesh */
+function computeAxisBounds(positions: Float32Array, vertexCount: number) {
+  let minY = Infinity, maxY = -Infinity;
+  let minZ = Infinity, maxZ = -Infinity;
+
+  for (let i = 0; i < vertexCount; i++) {
+    const y = positions[i * 3 + 1];
+    const z = positions[i * 3 + 2];
+    minY = Math.min(minY, y);
+    maxY = Math.max(maxY, y);
+    minZ = Math.min(minZ, z);
+    maxZ = Math.max(maxZ, z);
+  }
+
   return {
-    bottomY: minHeight,
-    yRange: heightRange,
-    vertexTypes,
-    topSurfaceInteriorVertices,
-    topSurfaceBoundaryVertices,
-    bottomSurfaceVertices,
-    wallVertices,
-    detectedHeightAxis: detectedAxis,
-    upVector: { x: upX, y: upY, z: upZ },
+    minY,
+    rangeY: maxY - minY,
+    minZ,
+    rangeZ: maxZ - minZ,
   };
 }
 
+/** Computes ratio of vertices near minimum value for an axis */
+function computeVertexRatioAtMin(
+  positions: Float32Array,
+  vertexCount: number,
+  axisOffset: number,
+  minValue: number,
+  range: number
+): number {
+  const threshold = minValue + range * 0.05;
+  let count = 0;
+
+  for (let i = 0; i < vertexCount; i++) {
+    if (positions[i * 3 + axisOffset] <= threshold) count++;
+  }
+
+  return count / vertexCount;
+}
+
+// ============================================================================
+// Smoothing Algorithm Implementation
+// ============================================================================
+
+/** Taubin smoothing parameters (from Taubin95 paper) */
+const TAUBIN_LAMBDA = 0.5;
+const TAUBIN_MU = -0.53;
+const LAPLACIAN_LAMBDA = 0.5;
+
+/** Height tolerance as ratio of height range */
+const HEIGHT_TOLERANCE_RATIO = 0.15;
+
+/** Smoothing result type */
+interface SmoothingInternalResult {
+  positions: Float32Array;
+  heightmapInfo: HeightmapClassification;
+}
+
 /**
- * trCAD-style mesh smoothing that blends between Taubin and Laplacian smoothing.
- * 
- * HEIGHTMAP-AWARE HORIZONTAL SMOOTHING:
- * For heightmap-derived meshes, jagged edges occur in the HORIZONTAL plane (X-Z in Three.js).
- * The Y coordinate (Three.js) represents HEIGHT and must be preserved to maintain the
- * correct offset/clearance from the part.
- * 
- * Coordinate mapping:
- * - Three.js: X, Z = horizontal plane, Y = up (height)
- * - World:    X, Y = horizontal plane, Z = up (height)
- * 
- * Smoothing behavior:
- * - TOP_SURFACE & WALL: Smooth X-Z only (horizontal), PRESERVE Y (height)
- * - BOTTOM_SURFACE: No smoothing (keeps flat bottom intact)
- * 
- * The algorithm works as follows:
- * - Taubin smoothing (strength=0): Two-pass algorithm that preserves volume.
- *   Pass 1: Shrink with λ (moves vertices toward neighbors)
- *   Pass 2: Inflate with μ (moves vertices away from neighbors to counteract shrinkage)
- * 
- * - Laplacian smoothing (strength=1): Single-pass algorithm with stronger effect.
- *   Only shrinks, causing the mesh to progressively shrink with more iterations.
- * 
- * @param positions - Vertex positions as Float32Array
- * @param adjacency - Adjacency map for each vertex
- * @param vertexGroups - Groups of vertices at the same position
- * @param iterations - Number of smoothing iterations (iter parameter)
- * @param strength - Blend factor 0-1: 0=pure Taubin (weak), 1=pure Laplacian (strong)
- * @param quality - If true, use cotangent weights for better quality (slower)
- * @param vertexCount - Total number of vertices
- * @returns Smoothed positions
+ * Applies trCAD-style smoothing that blends between Taubin and Laplacian algorithms.
+ *
+ * - Taubin (strength=0): Volume-preserving, two-pass shrink/inflate per iteration
+ * - Laplacian (strength=1): Stronger effect but causes mesh shrinkage
+ * - Blended (0 < strength < 1): Interpolated result
+ *
+ * For heightmap meshes, only boundary and wall vertices are smoothed in the
+ * horizontal plane to preserve height values.
  */
 function trCADSmoothing(
   positions: Float32Array,
@@ -2298,84 +2383,121 @@ function trCADSmoothing(
   heightAxis: 'y' | 'z' | '-y' | '-z' = 'y',
   tiltXZ: number = 0,
   tiltYZ: number = 0
-): {
-  positions: Float32Array;
-  heightmapInfo: {
-    bottomY: number;
-    yRange: number;
-    vertexTypes: Map<number, VertexSurfaceType>;
-    topSurfaceInteriorVertices: Set<number>;
-    topSurfaceBoundaryVertices: Set<number>;
-    bottomSurfaceVertices: Set<number>;
-    wallVertices: Set<number>;
-    detectedHeightAxis: 'y' | 'z' | '-y' | '-z';
-    upVector: { x: number; y: number; z: number };
-  };
-} {
-  // Clamp strength to [0, 1]
-  const s = Math.max(0, Math.min(1, strength));
-  
-  // Taubin smoothing parameters from the original paper (Taubin95)
-  const TAUBIN_LAMBDA = 0.5;
-  const TAUBIN_MU = -0.53;
-  const LAPLACIAN_LAMBDA = 0.5;
-  
-  // Classify vertices by surface type for heightmap-aware smoothing
-  // Pass tilt angles so classification can use proper "up" direction
-  const heightmapInfo = classifyHeightmapVertices(positions, vertexCount, adjacency, vertexGroups, heightAxis, tiltXZ, tiltYZ);
-  
-  // Build cotangent weights if quality mode
-  let cotWeights: Map<string, number> | null = null;
-  if (quality) {
-    cotWeights = buildCotangentWeights(positions, vertexCount, vertexGroups);
-  }
-  
-  let current: any = new Float32Array(positions);
-  
+): SmoothingInternalResult {
+  const clampedStrength = Math.max(0, Math.min(1, strength));
+  const heightmapInfo = classifyHeightmapVertices(
+    positions,
+    vertexCount,
+    adjacency,
+    vertexGroups,
+    heightAxis,
+    tiltXZ,
+    tiltYZ
+  );
+
+  const cotWeights = quality
+    ? buildCotangentWeights(positions, vertexCount, vertexGroups)
+    : null;
+
+  let current: Float32Array = new Float32Array(positions);
+
   for (let iter = 0; iter < iterations; iter++) {
-    if (s === 0) {
-      // Pure Taubin: two passes per iteration
-      current = smoothPassHeightmapAware(current, adjacency, vertexGroups, TAUBIN_LAMBDA, quality, cotWeights, vertexCount, heightmapInfo);
-      current = smoothPassHeightmapAware(current, adjacency, vertexGroups, TAUBIN_MU, quality, cotWeights, vertexCount, heightmapInfo);
-    } else if (s >= 1) {
-      // Pure Laplacian
-      current = smoothPassHeightmapAware(current, adjacency, vertexGroups, LAPLACIAN_LAMBDA, quality, cotWeights, vertexCount, heightmapInfo);
-    } else {
-      // Blended: compute both and interpolate
-      let taubinResult = smoothPassHeightmapAware(current, adjacency, vertexGroups, TAUBIN_LAMBDA, quality, cotWeights, vertexCount, heightmapInfo);
-      taubinResult = smoothPassHeightmapAware(taubinResult, adjacency, vertexGroups, TAUBIN_MU, quality, cotWeights, vertexCount, heightmapInfo);
-      
-      const laplacianResult = smoothPassHeightmapAware(current, adjacency, vertexGroups, LAPLACIAN_LAMBDA, quality, cotWeights, vertexCount, heightmapInfo);
-      
-      const blended = new Float32Array(current.length);
-      for (let i = 0; i < current.length; i++) {
-        blended[i] = (1 - s) * taubinResult[i] + s * laplacianResult[i];
-      }
-      current = blended;
-    }
+    current = applySmoothingIteration(
+      current,
+      adjacency,
+      vertexGroups,
+      clampedStrength,
+      quality,
+      cotWeights,
+      vertexCount,
+      heightmapInfo
+    ) as Float32Array;
   }
-  
-  return {
-    positions: current as Float32Array,
-    heightmapInfo,
-  };
+
+  return { positions: current, heightmapInfo };
+}
+
+/** Applies a single smoothing iteration based on strength */
+function applySmoothingIteration(
+  positions: Float32Array,
+  adjacency: Map<number, Set<number>>,
+  vertexGroups: number[][],
+  strength: number,
+  quality: boolean,
+  cotWeights: Map<string, number> | null,
+  vertexCount: number,
+  heightmapInfo: HeightmapClassification
+): Float32Array {
+  const smoothPass = (factor: number) =>
+    smoothPassHeightmapAware(
+      positions,
+      adjacency,
+      vertexGroups,
+      factor,
+      quality,
+      cotWeights,
+      vertexCount,
+      heightmapInfo
+    );
+
+  if (strength === 0) {
+    // Pure Taubin: shrink then inflate
+    const shrunk = smoothPass(TAUBIN_LAMBDA);
+    return smoothPassHeightmapAware(
+      shrunk,
+      adjacency,
+      vertexGroups,
+      TAUBIN_MU,
+      quality,
+      cotWeights,
+      vertexCount,
+      heightmapInfo
+    );
+  }
+
+  if (strength >= 1) {
+    // Pure Laplacian
+    return smoothPass(LAPLACIAN_LAMBDA);
+  }
+
+  // Blended: interpolate between Taubin and Laplacian
+  const taubinResult = applySmoothingIteration(
+    positions,
+    adjacency,
+    vertexGroups,
+    0,
+    quality,
+    cotWeights,
+    vertexCount,
+    heightmapInfo
+  );
+
+  const laplacianResult = smoothPass(LAPLACIAN_LAMBDA);
+
+  return blendPositions(taubinResult, laplacianResult, strength);
+}
+
+/** Blends two position arrays by strength factor */
+function blendPositions(
+  taubin: Float32Array,
+  laplacian: Float32Array,
+  strength: number
+): Float32Array {
+  const result = new Float32Array(taubin.length);
+  const invStrength = 1 - strength;
+
+  for (let i = 0; i < taubin.length; i++) {
+    result[i] = invStrength * taubin[i] + strength * laplacian[i];
+  }
+
+  return result;
 }
 
 /**
  * Single smoothing pass with heightmap-aware vertex handling.
- * 
- * For heightmap-derived meshes, the jagged edges are in the HORIZONTAL plane.
- * The height coordinate should be PRESERVED to maintain the correct offset/clearance from the part.
- * 
- * The height axis is auto-detected and stored in heightmapInfo.detectedHeightAxis:
- * - 'y': Y is height, smooth X-Z (standard Three.js)
- * - 'z': Z is height, smooth X-Y (after rotation around X axis)
- * 
- * Smoothing behavior:
- * - TOP_SURFACE_BOUNDARY & WALL: Smooth in horizontal plane, preserve height
- * - TOP_SURFACE_INTERIOR & BOTTOM_SURFACE: No smoothing at all
- * 
- * This ensures the boundary contour becomes smoother without affecting the height profile.
+ *
+ * Only smoothes WALL and TOP_SURFACE_BOUNDARY vertices in the horizontal plane.
+ * BOTTOM_SURFACE and TOP_SURFACE_INTERIOR vertices are unchanged.
  */
 function smoothPassHeightmapAware(
   positions: Float32Array,
@@ -2385,263 +2507,200 @@ function smoothPassHeightmapAware(
   quality: boolean,
   cotWeights: Map<string, number> | null,
   vertexCount: number,
-  heightmapInfo: {
-    bottomY: number;
-    yRange: number;
-    vertexTypes: Map<number, VertexSurfaceType>;
-    topSurfaceInteriorVertices: Set<number>;
-    topSurfaceBoundaryVertices: Set<number>;
-    bottomSurfaceVertices: Set<number>;
-    wallVertices: Set<number>;
-    detectedHeightAxis: 'y' | 'z' | '-y' | '-z';
-    upVector: { x: number; y: number; z: number };
-  }
+  heightmapInfo: HeightmapClassification
 ): Float32Array {
   const result = new Float32Array(positions.length);
   const processedGroups = new Set<number>();
-  
-  // Height tolerance for "same height" neighbor filtering
-  const heightTolerance = Math.max(0.001, heightmapInfo.yRange * 0.15);
-  
-  // Get the up vector for proper height calculation with tilt
+  const heightTolerance = Math.max(0.001, heightmapInfo.yRange * HEIGHT_TOLERANCE_RATIO);
   const up = heightmapInfo.upVector;
-  
-  // Helper function to get height using dot product with up vector
-  const getHeight = (idx: number): number => {
-    return positions[idx * 3] * up.x + positions[idx * 3 + 1] * up.y + positions[idx * 3 + 2] * up.z;
-  };
-  
+
   for (let i = 0; i < vertexCount; i++) {
     const group = vertexGroups[i];
     const groupId = group[0];
-    
-    // Process each unique position only once
+
     if (processedGroups.has(groupId)) {
-      result[i * 3] = result[groupId * 3];
-      result[i * 3 + 1] = result[groupId * 3 + 1];
-      result[i * 3 + 2] = result[groupId * 3 + 2];
+      copyPosition(result, groupId, i);
       continue;
     }
     processedGroups.add(groupId);
-    
-    const px = positions[i * 3];
-    const py = positions[i * 3 + 1];
-    const pz = positions[i * 3 + 2];
-    
-    // Get vertex surface type
+
+    const vertex = getVertex(positions, i);
     const surfaceType = heightmapInfo.vertexTypes.get(i) ?? VertexSurfaceType.TOP_SURFACE_INTERIOR;
-    
-    // BOTTOM_SURFACE and TOP_SURFACE_INTERIOR vertices: No smoothing - keep original position
-    // Interior top surface vertices don't need smoothing as their XZ position is accurate from heightmap
-    if (surfaceType === VertexSurfaceType.BOTTOM_SURFACE || 
-        surfaceType === VertexSurfaceType.TOP_SURFACE_INTERIOR) {
-      for (const vi of group) {
-        result[vi * 3] = px;
-        result[vi * 3 + 1] = py;
-        result[vi * 3 + 2] = pz;
-      }
+
+    // Skip non-smoothable surfaces
+    if (shouldSkipSmoothing(surfaceType)) {
+      setGroupPosition(result, group, vertex);
       continue;
     }
-    
+
     const neighbors = adjacency.get(i);
     if (!neighbors || neighbors.size === 0) {
-      for (const vi of group) {
-        result[vi * 3] = px;
-        result[vi * 3 + 1] = py;
-        result[vi * 3 + 2] = pz;
-      }
+      setGroupPosition(result, group, vertex);
       continue;
     }
-    
-    // Compute weighted centroid of FILTERED neighbors in the horizontal plane
-    // Only WALL and TOP_SURFACE_BOUNDARY vertices reach here
-    // We smooth in the plane perpendicular to the up vector
-    let sumH1 = 0, sumH2 = 0, sumH3 = 0; // Full 3D position accumulator
-    let totalWeight = 0;
-    const visitedNeighborGroups = new Set<number>();
-    
-    for (const ni of neighbors) {
-      const neighborGroupId = vertexGroups[ni][0];
-      if (visitedNeighborGroups.has(neighborGroupId)) continue;
-      visitedNeighborGroups.add(neighborGroupId);
-      
-      const nx = positions[ni * 3];
-      const ny = positions[ni * 3 + 1];
-      const nz = positions[ni * 3 + 2];
-      const neighborType = heightmapInfo.vertexTypes.get(ni);
-      
-      // ALWAYS exclude BOTTOM_SURFACE neighbors - they don't move
-      if (neighborType === VertexSurfaceType.BOTTOM_SURFACE) continue;
-      
-      // Filter to same-height neighbors for horizontal smoothing
-      const nh = getHeight(ni);
-      const ph = getHeight(i);
-      if (Math.abs(nh - ph) > heightTolerance) continue;
-      
-      let weight = 1.0;
-      if (quality && cotWeights) {
-        const edgeKey = makeEdgeKey(groupId, neighborGroupId);
-        weight = cotWeights.get(edgeKey) ?? 1.0;
-      }
-      
-      // Accumulate neighbor positions (we'll project to horizontal plane later)
-      sumH1 += nx * weight;
-      sumH2 += ny * weight;
-      sumH3 += nz * weight;
-      totalWeight += weight;
-    }
-    
-    if (totalWeight > 0) {
-      // Compute centroid of filtered neighbors
-      const cx = sumH1 / totalWeight;
-      const cy = sumH2 / totalWeight;
-      const cz = sumH3 / totalWeight;
-      
-      // Project the displacement onto the horizontal plane (perpendicular to up vector)
-      // Displacement from current to centroid
-      let dx = cx - px;
-      let dy = cy - py;
-      let dz = cz - pz;
-      
-      // Remove the component along the up vector (preserve height)
-      const dotUp = dx * up.x + dy * up.y + dz * up.z;
-      dx -= dotUp * up.x;
-      dy -= dotUp * up.y;
-      dz -= dotUp * up.z;
-      
-      // Apply the horizontal displacement with factor
-      const newX = px + factor * dx;
-      const newY = py + factor * dy;
-      const newZ = pz + factor * dz;
-      
-      for (const vi of group) {
-        result[vi * 3] = newX;
-        result[vi * 3 + 1] = newY;
-        result[vi * 3 + 2] = newZ;
-      }
-    } else {
-      // No valid neighbors after filtering - keep original position
-      for (const vi of group) {
-        result[vi * 3] = px;
-        result[vi * 3 + 1] = py;
-        result[vi * 3 + 2] = pz;
-      }
-    }
+
+    const newPosition = computeSmoothedPosition(
+      positions,
+      vertex,
+      i,
+      neighbors,
+      vertexGroups,
+      heightmapInfo,
+      heightTolerance,
+      up,
+      quality,
+      cotWeights,
+      factor,
+      groupId
+    );
+
+    setGroupPosition(result, group, newPosition);
   }
-  
+
   return result;
 }
 
-/**
- * Original smoothPass function for non-heightmap meshes.
- * Kept for backwards compatibility and general 3D smoothing.
- * 
- * @param factor - Positive = shrink toward centroid, negative = inflate away
- */
-function smoothPass(
+/** Checks if a surface type should skip smoothing */
+function shouldSkipSmoothing(surfaceType: VertexSurfaceType): boolean {
+  return (
+    surfaceType === VertexSurfaceType.BOTTOM_SURFACE ||
+    surfaceType === VertexSurfaceType.TOP_SURFACE_INTERIOR
+  );
+}
+
+/** Copies position from one vertex to another */
+function copyPosition(result: Float32Array, fromIdx: number, toIdx: number): void {
+  result[toIdx * 3] = result[fromIdx * 3];
+  result[toIdx * 3 + 1] = result[fromIdx * 3 + 1];
+  result[toIdx * 3 + 2] = result[fromIdx * 3 + 2];
+}
+
+/** Sets position for all vertices in a group */
+function setGroupPosition(result: Float32Array, group: number[], pos: Vector3): void {
+  for (const vi of group) {
+    result[vi * 3] = pos.x;
+    result[vi * 3 + 1] = pos.y;
+    result[vi * 3 + 2] = pos.z;
+  }
+}
+
+/** Computes smoothed position for a vertex */
+function computeSmoothedPosition(
   positions: Float32Array,
-  adjacency: Map<number, Set<number>>,
+  vertex: Vector3,
+  vertexIdx: number,
+  neighbors: Set<number>,
   vertexGroups: number[][],
-  factor: number,
+  heightmapInfo: HeightmapClassification,
+  heightTolerance: number,
+  up: Vector3,
   quality: boolean,
   cotWeights: Map<string, number> | null,
-  vertexCount: number
-): Float32Array {
-  const result = new Float32Array(positions.length);
-  const processedGroups = new Set<number>();
-  
-  for (let i = 0; i < vertexCount; i++) {
-    const group = vertexGroups[i];
-    const groupId = group[0];
-    
-    // Process each unique position only once
-    if (processedGroups.has(groupId)) {
-      // Copy from already computed position
-      result[i * 3] = result[groupId * 3];
-      result[i * 3 + 1] = result[groupId * 3 + 1];
-      result[i * 3 + 2] = result[groupId * 3 + 2];
-      continue;
-    }
-    processedGroups.add(groupId);
-    
-    const px = positions[i * 3];
-    const py = positions[i * 3 + 1];
-    const pz = positions[i * 3 + 2];
-    
-    const neighbors = adjacency.get(i);
-    if (!neighbors || neighbors.size === 0) {
-      // No neighbors - keep original position
-      for (const vi of group) {
-        result[vi * 3] = px;
-        result[vi * 3 + 1] = py;
-        result[vi * 3 + 2] = pz;
-      }
-      continue;
-    }
-    
-    // Compute weighted centroid of neighbors (Laplacian)
-    let sumX = 0, sumY = 0, sumZ = 0;
-    let totalWeight = 0;
-    const visitedNeighborGroups = new Set<number>();
-    
-    for (const ni of neighbors) {
-      const neighborGroupId = vertexGroups[ni][0];
-      
-      // Skip if we've already counted this neighbor group
-      if (visitedNeighborGroups.has(neighborGroupId)) continue;
-      visitedNeighborGroups.add(neighborGroupId);
-      
-      // Get weight: cotangent weight for quality mode, uniform otherwise
-      let weight = 1.0;
-      if (quality && cotWeights) {
-        const edgeKey = makeEdgeKey(groupId, neighborGroupId);
-        weight = cotWeights.get(edgeKey) ?? 1.0;
-      }
-      
-      sumX += positions[ni * 3] * weight;
-      sumY += positions[ni * 3 + 1] * weight;
-      sumZ += positions[ni * 3 + 2] * weight;
-      totalWeight += weight;
-    }
-    
-    if (totalWeight > 0) {
-      // Centroid of neighbors
-      const cx = sumX / totalWeight;
-      const cy = sumY / totalWeight;
-      const cz = sumZ / totalWeight;
-      
-      // Laplacian: L(p) = centroid - p
-      // New position: p' = p + factor * L(p) = p + factor * (centroid - p)
-      const newX = px + factor * (cx - px);
-      const newY = py + factor * (cy - py);
-      const newZ = pz + factor * (cz - pz);
-      
-      // Apply to all vertices in this group
-      for (const vi of group) {
-        result[vi * 3] = newX;
-        result[vi * 3 + 1] = newY;
-        result[vi * 3 + 2] = newZ;
-      }
-    } else {
-      // Fallback: keep original
-      for (const vi of group) {
-        result[vi * 3] = px;
-        result[vi * 3 + 1] = py;
-        result[vi * 3 + 2] = pz;
-      }
-    }
-  }
-  
-  return result;
+  factor: number,
+  groupId: number
+): Vector3 {
+  const vertexHeight = computeVertexHeight(positions, vertexIdx, up);
+  const centroid = computeFilteredCentroid(
+    positions,
+    neighbors,
+    vertexGroups,
+    heightmapInfo,
+    vertexHeight,
+    heightTolerance,
+    up,
+    quality,
+    cotWeights,
+    groupId
+  );
+
+  if (!centroid) return vertex;
+
+  return applyHorizontalDisplacement(vertex, centroid, up, factor);
 }
 
+/** Computes weighted centroid of valid neighbors */
+function computeFilteredCentroid(
+  positions: Float32Array,
+  neighbors: Set<number>,
+  vertexGroups: number[][],
+  heightmapInfo: HeightmapClassification,
+  vertexHeight: number,
+  heightTolerance: number,
+  up: Vector3,
+  quality: boolean,
+  cotWeights: Map<string, number> | null,
+  groupId: number
+): Vector3 | null {
+  let sumX = 0, sumY = 0, sumZ = 0;
+  let totalWeight = 0;
+  const visitedGroups = new Set<number>();
+
+  for (const ni of neighbors) {
+    const neighborGroupId = vertexGroups[ni][0];
+    if (visitedGroups.has(neighborGroupId)) continue;
+    visitedGroups.add(neighborGroupId);
+
+    const neighborType = heightmapInfo.vertexTypes.get(ni);
+    if (neighborType === VertexSurfaceType.BOTTOM_SURFACE) continue;
+
+    const neighborHeight = computeVertexHeight(positions, ni, up);
+    if (Math.abs(neighborHeight - vertexHeight) > heightTolerance) continue;
+
+    const weight = quality && cotWeights
+      ? (cotWeights.get(makeEdgeKey(groupId, neighborGroupId)) ?? 1.0)
+      : 1.0;
+
+    sumX += positions[ni * 3] * weight;
+    sumY += positions[ni * 3 + 1] * weight;
+    sumZ += positions[ni * 3 + 2] * weight;
+    totalWeight += weight;
+  }
+
+  if (totalWeight === 0) return null;
+
+  return {
+    x: sumX / totalWeight,
+    y: sumY / totalWeight,
+    z: sumZ / totalWeight,
+  };
+}
+
+/** Applies displacement in the horizontal plane (perpendicular to up vector) */
+function applyHorizontalDisplacement(
+  vertex: Vector3,
+  centroid: Vector3,
+  up: Vector3,
+  factor: number
+): Vector3 {
+  // Displacement from vertex to centroid
+  let dx = centroid.x - vertex.x;
+  let dy = centroid.y - vertex.y;
+  let dz = centroid.z - vertex.z;
+
+  // Remove component along up vector to preserve height
+  const dotUp = dx * up.x + dy * up.y + dz * up.z;
+  dx -= dotUp * up.x;
+  dy -= dotUp * up.y;
+  dz -= dotUp * up.z;
+
+  return {
+    x: vertex.x + factor * dx,
+    y: vertex.y + factor * dy,
+    z: vertex.z + factor * dz,
+  };
+}
+
+// ============================================================================
+// Cotangent Weights for Quality Smoothing
+// ============================================================================
+
+/** Weight bounds to prevent numerical instability */
+const MIN_COTANGENT_WEIGHT = 0.01;
+const MAX_COTANGENT_WEIGHT = 10.0;
+
 /**
- * Build cotangent weights for quality smoothing.
- * Cotangent weights (Laplacian-Beltrami) provide more geometrically accurate
- * smoothing by considering triangle shapes.
- * 
- * IMPORTANT: Edge keys are built using vertex GROUP IDs (first vertex of each
- * position group) to match how smoothPass looks up weights.
+ * Builds cotangent weights (Laplacian-Beltrami) for quality smoothing.
+ * These weights consider triangle geometry for more accurate smoothing.
  */
 function buildCotangentWeights(
   positions: Float32Array,
@@ -2650,85 +2709,87 @@ function buildCotangentWeights(
 ): Map<string, number> {
   const weights = new Map<string, number>();
   const triangleCount = vertexCount / 3;
-  
+
   for (let t = 0; t < triangleCount; t++) {
-    const i0 = t * 3;
-    const i1 = t * 3 + 1;
-    const i2 = t * 3 + 2;
-    
-    // Get GROUP IDs for each vertex (first vertex of each position group)
-    const g0 = vertexGroups[i0][0];
-    const g1 = vertexGroups[i1][0];
-    const g2 = vertexGroups[i2][0];
-    
-    // Skip degenerate triangles where vertices share the same position
-    if (g0 === g1 || g1 === g2 || g2 === g0) continue;
-    
-    // Triangle vertices
-    const p0 = [positions[i0 * 3], positions[i0 * 3 + 1], positions[i0 * 3 + 2]];
-    const p1 = [positions[i1 * 3], positions[i1 * 3 + 1], positions[i1 * 3 + 2]];
-    const p2 = [positions[i2 * 3], positions[i2 * 3 + 1], positions[i2 * 3 + 2]];
-    
-    // Edge vectors
-    const v01 = [p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]];
-    const v02 = [p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2]];
-    const v12 = [p2[0] - p1[0], p2[1] - p1[1], p2[2] - p1[2]];
-    const v10 = [-v01[0], -v01[1], -v01[2]];
-    const v20 = [-v02[0], -v02[1], -v02[2]];
-    const v21 = [-v12[0], -v12[1], -v12[2]];
-    
-    // Cotangent of each angle
-    const cot0 = computeCot(v01, v02); // Angle at vertex 0
-    const cot1 = computeCot(v10, v12); // Angle at vertex 1
-    const cot2 = computeCot(v20, v21); // Angle at vertex 2
-    
-    // For edge opposite to vertex i, weight = cot(angle at i)
-    // Edge 1-2 is opposite to vertex 0, so weight = cot0
-    // Edge 0-2 is opposite to vertex 1, so weight = cot1
-    // Edge 0-1 is opposite to vertex 2, so weight = cot2
-    // Use GROUP IDs for edge keys to match smoothPass lookups
-    addEdgeWeight(weights, g1, g2, cot0);
-    addEdgeWeight(weights, g0, g2, cot1);
-    addEdgeWeight(weights, g0, g1, cot2);
+    processTriangleWeights(positions, t, vertexGroups, weights);
   }
-  
-  // Normalize and clamp weights to prevent extreme values
+
+  // Clamp weights to prevent extreme values
   for (const [key, weight] of weights) {
-    weights.set(key, Math.max(0.01, Math.min(weight, 10.0)));
+    weights.set(key, Math.max(MIN_COTANGENT_WEIGHT, Math.min(weight, MAX_COTANGENT_WEIGHT)));
   }
-  
+
   return weights;
 }
 
-/**
- * Compute cotangent of angle between two vectors.
- * cot(θ) = cos(θ) / sin(θ) = (a·b) / |a×b|
- */
-function computeCot(a: number[], b: number[]): number {
-  const dot = a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-  const crossX = a[1] * b[2] - a[2] * b[1];
-  const crossY = a[2] * b[0] - a[0] * b[2];
-  const crossZ = a[0] * b[1] - a[1] * b[0];
-  const crossMag = Math.sqrt(crossX * crossX + crossY * crossY + crossZ * crossZ);
-  
-  if (crossMag < 1e-12) return 0;
-  return dot / crossMag;
+/** Processes a single triangle and adds cotangent weights */
+function processTriangleWeights(
+  positions: Float32Array,
+  triangleIdx: number,
+  vertexGroups: number[][],
+  weights: Map<string, number>
+): void {
+  const i0 = triangleIdx * 3;
+  const i1 = triangleIdx * 3 + 1;
+  const i2 = triangleIdx * 3 + 2;
+
+  const g0 = vertexGroups[i0][0];
+  const g1 = vertexGroups[i1][0];
+  const g2 = vertexGroups[i2][0];
+
+  // Skip degenerate triangles
+  if (g0 === g1 || g1 === g2 || g2 === g0) return;
+
+  const p0 = getVertexArray(positions, i0);
+  const p1 = getVertexArray(positions, i1);
+  const p2 = getVertexArray(positions, i2);
+
+  const v01 = subtractVectors(p1, p0);
+  const v02 = subtractVectors(p2, p0);
+  const v12 = subtractVectors(p2, p1);
+
+  // Cotangent weights: edge opposite to vertex gets that vertex's angle cotangent
+  addEdgeWeight(weights, g1, g2, computeCotangent(v01, v02));
+  addEdgeWeight(weights, g0, g2, computeCotangent(negateVector(v01), v12));
+  addEdgeWeight(weights, g0, g1, computeCotangent(negateVector(v02), negateVector(v12)));
 }
 
-/**
- * Create a consistent edge key for two vertex indices.
- */
+/** Gets vertex position as array */
+function getVertexArray(positions: Float32Array, index: number): number[] {
+  const i = index * 3;
+  return [positions[i], positions[i + 1], positions[i + 2]];
+}
+
+/** Subtracts two vectors */
+function subtractVectors(a: number[], b: number[]): number[] {
+  return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+}
+
+/** Negates a vector */
+function negateVector(v: number[]): number[] {
+  return [-v[0], -v[1], -v[2]];
+}
+
+/** Computes cotangent of angle between two vectors: cot(θ) = (a·b) / |a×b| */
+function computeCotangent(a: number[], b: number[]): number {
+  const dot = a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  const crossMag = Math.sqrt(
+    (a[1] * b[2] - a[2] * b[1]) ** 2 +
+    (a[2] * b[0] - a[0] * b[2]) ** 2 +
+    (a[0] * b[1] - a[1] * b[0]) ** 2
+  );
+  return crossMag < 1e-12 ? 0 : dot / crossMag;
+}
+
+/** Creates consistent edge key for two vertex indices */
 function makeEdgeKey(a: number, b: number): string {
   return a < b ? `${a}-${b}` : `${b}-${a}`;
 }
 
-/**
- * Add weight to an edge, accumulating if it already exists.
- */
+/** Adds weight to an edge, accumulating if exists */
 function addEdgeWeight(weights: Map<string, number>, a: number, b: number, w: number): void {
   const key = makeEdgeKey(a, b);
-  const existing = weights.get(key) ?? 0;
-  weights.set(key, existing + w);
+  weights.set(key, (weights.get(key) ?? 0) + w);
 }
 
 // ============================================================================
