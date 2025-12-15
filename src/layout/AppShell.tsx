@@ -22,6 +22,7 @@ import {
 } from "@/components/ContextOptionsPanel/steps";
 import { SupportType } from "@/components/ContextOptionsPanel/steps/SupportsStepContent";
 import { AnySupport } from "@/components/Supports/types";
+import { PlacedClamp } from "@/components/Clamps/types";
 import { autoPlaceSupports, AutoPlacementStrategy } from "@/components/Supports/autoPlacement";
 import { CavitySettings, DEFAULT_CAVITY_SETTINGS, getAdaptivePixelsPerUnit } from "@/lib/offset/types";
 import UnitsDialog from "@/modules/FileImport/components/UnitsDialog";
@@ -204,6 +205,10 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
       rotation: { x: number; y: number; z: number };
     }>>([]);
     const [selectedLabelId, setSelectedLabelId] = useState<string | null>(null);
+
+    // Clamps state
+    const [clamps, setClamps] = useState<PlacedClamp[]>([]);
+    const [selectedClampId, setSelectedClampId] = useState<string | null>(null);
 
     // Model colors state - tracks colors assigned to models in 3D scene
     const [modelColors, setModelColors] = useState<Map<string, string>>(new Map());
@@ -967,6 +972,68 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
       };
     }, []);
 
+    // Listen for clamp events from 3D scene
+    React.useEffect(() => {
+      const onClampPlaced = (e: CustomEvent) => {
+        const clamp = e.detail as PlacedClamp;
+        if (clamp && clamp.id) {
+          setClamps(prev => {
+            // Avoid duplicates
+            if (prev.some(c => c.id === clamp.id)) return prev;
+            return [...prev, clamp];
+          });
+          setSelectedClampId(clamp.id);
+        }
+      };
+
+      const onClampUpdate = (e: CustomEvent) => {
+        const { clampId, updates } = e.detail as { clampId: string; updates: Partial<PlacedClamp> };
+        setClamps(prev => prev.map(c => c.id === clampId ? { ...c, ...updates } : c));
+      };
+
+      const onClampSelect = (e: CustomEvent) => {
+        const clampId = e.detail as string | null;
+        setSelectedClampId(clampId);
+      };
+
+      const onClampDelete = (e: CustomEvent) => {
+        const clampId = e.detail as string;
+        setClamps(prev => prev.filter(c => c.id !== clampId));
+        if (selectedClampId === clampId) {
+          setSelectedClampId(null);
+        }
+      };
+
+      window.addEventListener('clamp-placed', onClampPlaced as EventListener);
+      window.addEventListener('clamp-update', onClampUpdate as EventListener);
+      window.addEventListener('clamp-selected', onClampSelect as EventListener);
+      window.addEventListener('clamp-delete', onClampDelete as EventListener);
+
+      return () => {
+        window.removeEventListener('clamp-placed', onClampPlaced as EventListener);
+        window.removeEventListener('clamp-update', onClampUpdate as EventListener);
+        window.removeEventListener('clamp-selected', onClampSelect as EventListener);
+        window.removeEventListener('clamp-delete', onClampDelete as EventListener);
+      };
+    }, [selectedClampId]);
+
+    // Handle clamp update from properties panel
+    const handleClampUpdate = useCallback((clampId: string, updates: Partial<PlacedClamp>) => {
+      setClamps(prev => prev.map(c => c.id === clampId ? { ...c, ...updates } : c));
+      // Dispatch to 3D scene
+      window.dispatchEvent(new CustomEvent('clamp-update', { detail: { clampId, updates } }));
+    }, []);
+
+    // Handle clamp delete from properties panel
+    const handleClampDelete = useCallback((clampId: string) => {
+      setClamps(prev => prev.filter(c => c.id !== clampId));
+      if (selectedClampId === clampId) {
+        setSelectedClampId(null);
+      }
+      // Dispatch to 3D scene
+      window.dispatchEvent(new CustomEvent('clamp-delete', { detail: clampId }));
+    }, [selectedClampId]);
+
     // Handle support update from properties panel
     const handleSupportUpdate = useCallback((support: AnySupport) => {
       setSupports(prev => prev.map(s => s.id === support.id ? support : s));
@@ -1485,6 +1552,12 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
                     // Dispatch event for 3D scene
                     window.dispatchEvent(new CustomEvent('label-delete', { detail: labelId }));
                   }}
+                  // Clamps props
+                  clamps={clamps}
+                  selectedClampId={selectedClampId}
+                  onClampSelect={setSelectedClampId}
+                  onClampUpdate={handleClampUpdate}
+                  onClampDelete={handleClampDelete}
                 />
               </div>
             )}

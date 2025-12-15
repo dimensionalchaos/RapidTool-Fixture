@@ -16,6 +16,7 @@ import SupportsAccordion from './Supports/SupportsAccordion';
 import BaseplateAccordion from './BaseplateAccordion';
 import CavityAccordion from './CavityAccordion';
 import { LabelsAccordion, LabelConfig } from './Labels';
+import { ClampsAccordion, PlacedClamp } from './Clamps';
 import { AnySupport } from './Supports/types';
 import { CavitySettings, DEFAULT_CAVITY_SETTINGS } from '@/lib/offset/types';
 import PartThumbnail from './PartThumbnail';
@@ -57,6 +58,12 @@ interface PartPropertiesAccordionProps {
   onLabelSelect?: (id: string | null) => void;
   onLabelUpdate?: (id: string, updates: Partial<LabelConfig>) => void;
   onLabelDelete?: (id: string) => void;
+  // Clamps
+  clamps?: PlacedClamp[];
+  selectedClampId?: string | null;
+  onClampSelect?: (id: string | null) => void;
+  onClampUpdate?: (id: string, updates: Partial<PlacedClamp>) => void;
+  onClampDelete?: (id: string) => void;
 }
 
 const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({ 
@@ -91,6 +98,12 @@ const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({
   onLabelSelect,
   onLabelUpdate,
   onLabelDelete,
+  // Clamps props
+  clamps = [],
+  selectedClampId = null,
+  onClampSelect,
+  onClampUpdate,
+  onClampDelete,
 }) => {
   // Map of partId -> transform (stores transforms for ALL parts)
   const [partTransforms, setPartTransforms] = useState<Map<string, PartTransform>>(new Map());
@@ -107,6 +120,13 @@ const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({
       setOpenSection("supports");
     }
   }, [selectedSupportId]);
+
+  // Auto-switch to clamps section when a clamp is selected (e.g., via click in 3D)
+  useEffect(() => {
+    if (selectedClampId) {
+      setOpenSection("clamps");
+    }
+  }, [selectedClampId]);
 
   // Convert radians to degrees for display
   const radToDeg = (rad: number) => (rad * 180) / Math.PI;
@@ -590,6 +610,15 @@ const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({
         onSupportSelect={onSupportSelect || (() => {})}
         onSupportUpdate={onSupportUpdate || (() => {})}
         onSupportDelete={onSupportDelete || (() => {})}
+      />
+
+      {/* Clamps Accordion */}
+      <ClampsAccordion
+        clamps={clamps}
+        selectedClampId={selectedClampId}
+        onClampSelect={onClampSelect || (() => {})}
+        onClampUpdate={onClampUpdate || (() => {})}
+        onClampDelete={onClampDelete || (() => {})}
       />
 
       {/* Labels Accordion */}

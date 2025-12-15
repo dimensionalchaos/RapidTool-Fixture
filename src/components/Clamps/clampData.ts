@@ -44,15 +44,15 @@ function buildClampPaths(category: ClampCategory, modelId: string) {
 const CLAMP_REGISTRY: ClampModel[] = [
   // Toggle Clamps Vertical
   {
-    id: 'c-ld-101a-vertical',
-    name: 'C-LD-101A',
+    id: 'misumi-c-ld-101a-vertical',
+    name: 'Misumi-C-LD-101A',
     category: 'Toggle Clamps Vertical',
     info: {
-      name: 'C-LD-101A',
+      name: 'Misumi-C-LD-101A',
       url: 'https://in.misumi-ec.com/vona2/detail/110310216449?HissuCode=C-LD-101A',
       force: '441N'
     },
-    ...buildClampPaths('Toggle Clamps Vertical', 'C-LD-101A'),
+    ...buildClampPaths('Toggle Clamps Vertical', 'Misumi-C-LD-101A'),
   },
   // Toggle Clamps Side Push
   // Add side push clamps here when available

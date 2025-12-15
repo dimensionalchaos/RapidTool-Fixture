@@ -20,6 +20,7 @@ import { decimateMesh, repairMesh, analyzeMesh, laplacianSmooth, cleanupCSGResul
 import SupportTransformControls from './Supports/SupportTransformControls';
 import { LabelMesh, LabelTransformControls } from './Labels';
 import { LabelConfig } from './Labels/types';
+import { ClampMesh, ClampTransformControls, PlacedClamp, ClampModel, getClampById } from './Clamps';
 
 /** Target triangle count for offset mesh decimation */
 const OFFSET_MESH_DECIMATION_TARGET = 50_000;
@@ -788,6 +789,11 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   // Labels state
   const [labels, setLabels] = useState<LabelConfig[]>([]);
   const [selectedLabelId, setSelectedLabelId] = useState<string | null>(null);
+  
+  // Clamps state
+  const [placedClamps, setPlacedClamps] = useState<PlacedClamp[]>([]);
+  const [selectedClampId, setSelectedClampId] = useState<string | null>(null);
+  const [showClampDebug, setShowClampDebug] = useState(true); // Show debug geometries for clamps
   
   // Debug: perimeter visualization from auto-placement (disabled by default)
   // Set DEBUG_SHOW_PERIMETER to true to enable red boundary line visualization
@@ -2034,6 +2040,74 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       window.removeEventListener('labels-clear-all', onLabelsClearAll);
     };
   }, [basePlate, selectedLabelId, supports, modelBounds, baseTopY]);
+
+  // Clamp event listeners
+  useEffect(() => {
+    const onClampPlace = (e: CustomEvent) => {
+      const { clampModelId, position } = e.detail as { clampModelId: string; position?: { x: number; y: number; z: number } };
+      
+      // Default position at origin or provided position
+      const defaultPosition = position || { x: 0, y: baseTopY, z: 0 };
+      
+      const newClamp: PlacedClamp = {
+        id: `clamp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        clampModelId,
+        position: defaultPosition,
+        rotation: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+      };
+      
+      setPlacedClamps(prev => [...prev, newClamp]);
+      setSelectedClampId(newClamp.id);
+      
+      // Notify UI about the clamp placement
+      window.dispatchEvent(new CustomEvent('clamp-placed', { detail: newClamp }));
+    };
+
+    const onClampUpdate = (e: CustomEvent) => {
+      const { clampId, updates } = e.detail as { clampId: string; updates: Partial<PlacedClamp> };
+      setPlacedClamps(prev => prev.map(c => c.id === clampId ? { ...c, ...updates } : c));
+    };
+
+    const onClampDelete = (e: CustomEvent) => {
+      const clampId = e.detail as string;
+      setPlacedClamps(prev => prev.filter(c => c.id !== clampId));
+      if (selectedClampId === clampId) {
+        setSelectedClampId(null);
+      }
+    };
+
+    const onClampSelect = (e: CustomEvent) => {
+      const clampId = e.detail as string | null;
+      setSelectedClampId(clampId);
+    };
+
+    const onClampsClearAll = () => {
+      setPlacedClamps([]);
+      setSelectedClampId(null);
+    };
+
+    const onClampToggleDebug = (e: CustomEvent) => {
+      const show = e.detail as boolean;
+      setShowClampDebug(show);
+    };
+
+    window.addEventListener('clamp-place', onClampPlace as EventListener);
+    window.addEventListener('clamp-update', onClampUpdate as EventListener);
+    window.addEventListener('clamp-delete', onClampDelete as EventListener);
+    window.addEventListener('clamp-select', onClampSelect as EventListener);
+    window.addEventListener('clamps-clear-all', onClampsClearAll);
+    window.addEventListener('clamp-toggle-debug', onClampToggleDebug as EventListener);
+
+    return () => {
+      window.removeEventListener('clamp-place', onClampPlace as EventListener);
+      window.removeEventListener('clamp-update', onClampUpdate as EventListener);
+      window.removeEventListener('clamp-delete', onClampDelete as EventListener);
+      window.removeEventListener('clamp-select', onClampSelect as EventListener);
+      window.removeEventListener('clamps-clear-all', onClampsClearAll);
+      window.removeEventListener('clamp-toggle-debug', onClampToggleDebug as EventListener);
+    };
+  }, [selectedClampId, baseTopY]);
 
   // Build a THREE.Mesh for a support using the same dimensions/origining as SupportMesh
   const buildSupportMesh = useCallback((support: AnySupport, baseTop: number) => {
@@ -3738,6 +3812,85 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
               onDeselect={() => {
                 setSelectedLabelId(null);
                 window.dispatchEvent(new CustomEvent('label-selected', { detail: null }));
+              }}
+            />
+          );
+        })()
+      )}
+
+      {/* Clamps rendering */}
+      <Suspense fallback={null}>
+        {placedClamps.map((placedClamp) => {
+          const clampModel = getClampById(placedClamp.clampModelId);
+          if (!clampModel) return null;
+          
+          return (
+            <ClampMesh
+              key={placedClamp.id}
+              clampModel={clampModel}
+              placedClamp={placedClamp}
+              selected={selectedClampId === placedClamp.id}
+              showDebug={showClampDebug}
+              onClick={(id) => {
+                setSelectedClampId(id);
+                window.dispatchEvent(new CustomEvent('clamp-selected', { detail: id }));
+              }}
+              onDoubleClick={(id) => {
+                // Activate pivot controls for this clamp
+                window.dispatchEvent(new CustomEvent('pivot-control-activated', { detail: { clampId: id } }));
+                setSelectedClampId(id);
+                window.dispatchEvent(new CustomEvent('clamp-selected', { detail: id }));
+              }}
+            />
+          );
+        })}
+      </Suspense>
+
+      {/* Clamp transform controls - activated on double-click */}
+      {selectedClampId && (
+        (() => {
+          const selectedClamp = placedClamps.find(c => c.id === selectedClampId);
+          if (!selectedClamp) return null;
+          
+          const clampModel = getClampById(selectedClamp.clampModelId);
+          if (!clampModel) return null;
+          
+          // Calculate fixture point world position (this is where the gizmo should be)
+          const fixturePointWorldPos = new THREE.Vector3(
+            selectedClamp.position.x,
+            selectedClamp.position.y,
+            selectedClamp.position.z
+          );
+          
+          return (
+            <ClampTransformControls
+              placedClamp={selectedClamp}
+              fixturePointWorldPos={fixturePointWorldPos}
+              onTransformChange={(position, rotation) => {
+                // Live update clamp position and rotation
+                setPlacedClamps(prev => prev.map(c => {
+                  if (c.id === selectedClampId) {
+                    return { ...c, position, rotation };
+                  }
+                  return c;
+                }));
+                // Dispatch event for UI sync
+                window.dispatchEvent(new CustomEvent('clamp-update', { 
+                  detail: { clampId: selectedClampId, updates: { position, rotation } } 
+                }));
+              }}
+              onTransformEnd={(position, rotation) => {
+                // Final update
+                const finalClamp = placedClamps.find(c => c.id === selectedClampId);
+                if (finalClamp) {
+                  window.dispatchEvent(new CustomEvent('clamp-update', { 
+                    detail: { clampId: selectedClampId, updates: { position, rotation } } 
+                  }));
+                }
+              }}
+              onDeselect={() => {
+                setSelectedClampId(null);
+                window.dispatchEvent(new CustomEvent('clamp-selected', { detail: null }));
               }}
             />
           );

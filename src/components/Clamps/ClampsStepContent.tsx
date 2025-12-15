@@ -1,27 +1,37 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { Switch } from '@/components/ui/switch';
+import { Label } from '@/components/ui/label';
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from '@/components/ui/accordion';
+import { 
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible';
 import { 
   Pin, 
   AlertCircle, 
   Plus, 
-  GripVertical, 
   ChevronRight,
   ChevronDown,
   ArrowDown,
   ArrowRight,
   ExternalLink,
-  Trash2,
-  Image as ImageIcon
+  Zap
 } from 'lucide-react';
 import { 
   ClampModel, 
   ClampCategory, 
-  ClampCategoryGroup, 
-  PlacedClamp 
+  ClampCategoryGroup
 } from './types';
 import { 
   getClampCategories, 
@@ -30,24 +40,19 @@ import {
 
 interface ClampsStepContentProps {
   hasWorkpiece?: boolean;
-  placedClamps?: PlacedClamp[];
-  onSelectClamp?: (clamp: ClampModel) => void;
-  onPlaceClamp?: (clamp: ClampModel) => void;
-  onRemoveClamp?: (clampId: string) => void;
-  selectedClamp?: ClampModel | null;
 }
 
 const ClampsStepContent: React.FC<ClampsStepContentProps> = ({
   hasWorkpiece = false,
-  placedClamps = [],
-  onSelectClamp,
-  onPlaceClamp,
-  onRemoveClamp,
-  selectedClamp
 }) => {
   const [categories, setCategories] = useState<ClampCategoryGroup[]>([]);
-  const [expandedCategories, setExpandedCategories] = useState<Set<ClampCategory>>(new Set());
   const [imageErrors, setImageErrors] = useState<Set<string>>(new Set());
+  const [selectedClamp, setSelectedClamp] = useState<ClampModel | null>(null);
+  const [expandedClamp, setExpandedClamp] = useState<string | null>(null);
+  const [showDebug, setShowDebug] = useState(true);
+  
+  // Track expanded accordion categories
+  const [expandedCategories, setExpandedCategories] = useState<string[]>([]);
 
   useEffect(() => {
     // Load clamp categories
@@ -55,26 +60,14 @@ const ClampsStepContent: React.FC<ClampsStepContentProps> = ({
     setCategories(clampCategories);
     
     // Expand categories that have clamps by default
-    const categoriesWithClamps = new Set<ClampCategory>();
+    const categoriesWithClamps: string[] = [];
     clampCategories.forEach(cat => {
       if (cat.clamps.length > 0) {
-        categoriesWithClamps.add(cat.category);
+        categoriesWithClamps.push(cat.category);
       }
     });
     setExpandedCategories(categoriesWithClamps);
   }, []);
-
-  const toggleCategory = (category: ClampCategory) => {
-    setExpandedCategories(prev => {
-      const next = new Set(prev);
-      if (next.has(category)) {
-        next.delete(category);
-      } else {
-        next.add(category);
-      }
-      return next;
-    });
-  };
 
   const handleImageError = (clampId: string) => {
     setImageErrors(prev => new Set(prev).add(clampId));
@@ -109,115 +102,161 @@ const ClampsStepContent: React.FC<ClampsStepContentProps> = ({
         </p>
         
         <ScrollArea className="h-[300px]">
-          <div className="space-y-2 pr-2">
+          <Accordion 
+            type="multiple" 
+            value={expandedCategories}
+            onValueChange={setExpandedCategories}
+            className="space-y-1"
+          >
             {categories.map((categoryGroup) => (
-              <div key={categoryGroup.category} className="space-y-1">
-                {/* Category Header */}
-                <Card
-                  className={`
-                    tech-glass p-3 cursor-pointer transition-all
-                    hover:border-primary/50 hover:bg-primary/5
-                  `}
-                  onClick={() => toggleCategory(categoryGroup.category)}
-                >
-                  <div className="flex items-center gap-3">
+              <AccordionItem 
+                key={categoryGroup.category} 
+                value={categoryGroup.category}
+                className="border rounded-lg tech-glass overflow-hidden"
+              >
+                <AccordionTrigger className="px-3 py-2 hover:no-underline hover:bg-primary/5 [&[data-state=open]]:bg-primary/5">
+                  <div className="flex items-center gap-2 flex-1">
                     {getCategoryIcon(categoryGroup.category)}
-                    <div className="flex-1">
-                      <p className="text-sm font-tech font-medium">
+                    <div className="flex-1 text-left">
+                      <p className="text-xs font-tech font-medium">
                         {categoryGroup.category}
                       </p>
-                      <p className="text-xs text-muted-foreground font-tech">
+                      <p className="text-[10px] text-muted-foreground font-tech">
                         {CATEGORY_INFO[categoryGroup.category]?.description}
                       </p>
                     </div>
-                    <Badge variant="secondary" className="text-xs">
+                    <Badge variant="secondary" className="text-[10px] mr-2">
                       {categoryGroup.clamps.length}
                     </Badge>
-                    {expandedCategories.has(categoryGroup.category) ? (
-                      <ChevronDown className="w-4 h-4 text-muted-foreground" />
-                    ) : (
-                      <ChevronRight className="w-4 h-4 text-muted-foreground" />
-                    )}
                   </div>
-                </Card>
-
-                {/* Clamps in Category */}
-                {expandedCategories.has(categoryGroup.category) && (
-                  <div className="ml-4 space-y-1">
+                </AccordionTrigger>
+                
+                <AccordionContent className="pb-0">
+                  <div className="px-2 pb-2 space-y-1">
                     {categoryGroup.clamps.length === 0 ? (
-                      <Card className="tech-glass p-3">
-                        <p className="text-xs text-muted-foreground font-tech italic">
-                          No clamps available in this category
-                        </p>
-                      </Card>
+                      <p className="text-xs text-muted-foreground font-tech italic py-2 px-1">
+                        No clamps available in this category
+                      </p>
                     ) : (
-                      categoryGroup.clamps.map((clamp) => (
-                        <Card
-                          key={clamp.id}
-                          className={`
-                            tech-glass p-3 cursor-pointer transition-all
-                            hover:border-primary/50 hover:bg-primary/5
-                            ${selectedClamp?.id === clamp.id ? 'border-primary bg-primary/10' : ''}
-                          `}
-                          onClick={() => onSelectClamp?.(clamp)}
-                        >
-                          <div className="flex items-start gap-3">
-                            {/* Clamp Image or Placeholder */}
-                            <div className="w-12 h-12 rounded bg-muted flex items-center justify-center overflow-hidden flex-shrink-0">
-                              {clamp.imagePath && !imageErrors.has(clamp.id) ? (
-                                <img 
-                                  src={clamp.imagePath} 
-                                  alt={clamp.name}
-                                  className="w-full h-full object-cover"
-                                  onError={() => handleImageError(clamp.id)}
-                                />
-                              ) : (
-                                <Pin className="w-6 h-6 text-muted-foreground" />
-                              )}
-                            </div>
-                            
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-2">
-                                <p className="text-sm font-tech font-medium truncate">
+                      categoryGroup.clamps.map((clamp) => {
+                        const isSelected = selectedClamp?.id === clamp.id;
+                        const isExpanded = expandedClamp === clamp.id;
+                        
+                        return (
+                          <Collapsible
+                            key={clamp.id}
+                            open={isExpanded}
+                            onOpenChange={(open) => setExpandedClamp(open ? clamp.id : null)}
+                          >
+                            <Card
+                              className={`
+                                tech-glass transition-all overflow-hidden
+                                ${isSelected ? 'border-primary bg-primary/10 ring-1 ring-primary/30' : 'hover:border-primary/50 hover:bg-primary/5'}
+                              `}
+                            >
+                              {/* Compact Row - Always Visible */}
+                              <div
+                                className="flex items-center gap-2 p-2 cursor-pointer"
+                                onClick={() => setSelectedClamp(clamp)}
+                              >
+                                {/* Thumbnail */}
+                                <div className="w-8 h-8 rounded bg-muted flex items-center justify-center overflow-hidden flex-shrink-0">
+                                  {clamp.imagePath && !imageErrors.has(clamp.id) ? (
+                                    <img 
+                                      src={clamp.imagePath} 
+                                      alt={clamp.name}
+                                      className="w-full h-full object-cover"
+                                      onError={() => handleImageError(clamp.id)}
+                                    />
+                                  ) : (
+                                    <Pin className="w-4 h-4 text-muted-foreground" />
+                                  )}
+                                </div>
+                                
+                                {/* Name */}
+                                <span className="text-xs font-tech font-medium truncate flex-1 min-w-0">
                                   {clamp.name}
-                                </p>
-                                {selectedClamp?.id === clamp.id && (
-                                  <Badge variant="default" className="text-xs flex-shrink-0">
-                                    Selected
+                                </span>
+                                
+                                {/* Force Badge */}
+                                {clamp.info.force && (
+                                  <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-5 font-mono flex-shrink-0">
+                                    <Zap className="w-2.5 h-2.5 mr-0.5" />
+                                    {clamp.info.force}
                                   </Badge>
                                 )}
-                              </div>
-                              
-                              <div className="flex items-center justify-between gap-2">
-                                {clamp.info.force && (
-                                  <p className="text-xs text-muted-foreground font-tech">
-                                    Force: {clamp.info.force}
-                                  </p>
-                                )}
                                 
-                                {clamp.info.url && (
-                                  <a 
-                                    href={clamp.info.url}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="text-xs text-primary hover:underline font-tech inline-flex items-center gap-1 flex-shrink-0"
+                                {/* Expand Toggle */}
+                                <CollapsibleTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-6 w-6 p-0 flex-shrink-0"
                                     onClick={(e) => e.stopPropagation()}
                                   >
-                                    Details
-                                    <ExternalLink className="w-3 h-3" />
-                                  </a>
-                                )}
+                                    {isExpanded ? (
+                                      <ChevronDown className="w-3.5 h-3.5" />
+                                    ) : (
+                                      <ChevronRight className="w-3.5 h-3.5" />
+                                    )}
+                                  </Button>
+                                </CollapsibleTrigger>
                               </div>
-                            </div>
-                          </div>
-                        </Card>
-                      ))
+                              
+                              {/* Expanded Content */}
+                              <CollapsibleContent>
+                                <div className="px-2 pb-2 pt-0 border-t border-border/50">
+                                  <div className="pt-2 space-y-2">
+                                    {/* Full Image */}
+                                    {clamp.imagePath && !imageErrors.has(clamp.id) && (
+                                      <div className="w-full h-24 rounded bg-muted overflow-hidden">
+                                        <img 
+                                          src={clamp.imagePath} 
+                                          alt={clamp.name}
+                                          className="w-full h-full object-contain"
+                                          onError={() => handleImageError(clamp.id)}
+                                        />
+                                      </div>
+                                    )}
+                                    
+                                    {/* Details */}
+                                    <div className="text-xs text-muted-foreground font-tech space-y-1">
+                                      {clamp.info.force && (
+                                        <p>
+                                          <span className="text-foreground">Clamping Force:</span> {clamp.info.force}
+                                        </p>
+                                      )}
+                                      <p>
+                                        <span className="text-foreground">Category:</span> {clamp.category}
+                                      </p>
+                                    </div>
+                                    
+                                    {/* External Link */}
+                                    {clamp.info.url && (
+                                      <a 
+                                        href={clamp.info.url}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="text-xs text-primary hover:underline font-tech inline-flex items-center gap-1"
+                                        onClick={(e) => e.stopPropagation()}
+                                      >
+                                        View Product Details
+                                        <ExternalLink className="w-3 h-3" />
+                                      </a>
+                                    )}
+                                  </div>
+                                </div>
+                              </CollapsibleContent>
+                            </Card>
+                          </Collapsible>
+                        );
+                      })
                     )}
                   </div>
-                )}
-              </div>
+                </AccordionContent>
+              </AccordionItem>
             ))}
-          </div>
+          </Accordion>
         </ScrollArea>
       </div>
 
@@ -227,44 +266,32 @@ const ClampsStepContent: React.FC<ClampsStepContentProps> = ({
           variant="default"
           size="sm"
           className="w-full font-tech"
-          onClick={() => onPlaceClamp?.(selectedClamp)}
+          onClick={() => {
+            // Dispatch event to 3DScene to place the clamp
+            window.dispatchEvent(new CustomEvent('clamp-place', { 
+              detail: { clampModelId: selectedClamp.id } 
+            }));
+          }}
         >
           <Plus className="w-4 h-4 mr-2" />
           Place {selectedClamp.name}
         </Button>
       )}
 
-      {/* Placed Clamps List */}
-      {placedClamps.length > 0 && (
-        <div className="space-y-2">
-          <p className="text-xs font-tech text-muted-foreground uppercase tracking-wider">
-            Placed Clamps ({placedClamps.length})
-          </p>
-          <ScrollArea className="max-h-[150px]">
-            <div className="space-y-1 pr-2">
-              {placedClamps.map((clamp, index) => (
-                <Card key={clamp.id} className="tech-glass p-2">
-                  <div className="flex items-center gap-2">
-                    <GripVertical className="w-3 h-3 text-muted-foreground cursor-grab" />
-                    <Pin className="w-3 h-3 text-muted-foreground" />
-                    <span className="text-xs font-tech flex-1 truncate">
-                      Clamp {index + 1} - {clamp.clampModelId}
-                    </span>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-6 w-6 p-0 hover:bg-destructive/10 hover:text-destructive"
-                      onClick={() => onRemoveClamp?.(clamp.id)}
-                    >
-                      <Trash2 className="w-3 h-3" />
-                    </Button>
-                  </div>
-                </Card>
-              ))}
-            </div>
-          </ScrollArea>
-        </div>
-      )}
+      {/* Debug Toggle */}
+      <div className="flex items-center justify-between">
+        <Label htmlFor="show-debug" className="text-xs font-tech text-muted-foreground">
+          Show Debug Meshes
+        </Label>
+        <Switch
+          id="show-debug"
+          checked={showDebug}
+          onCheckedChange={(checked) => {
+            setShowDebug(checked);
+            window.dispatchEvent(new CustomEvent('clamp-toggle-debug', { detail: checked }));
+          }}
+        />
+      </div>
 
       {/* Info Card */}
       <Card className="tech-glass">
@@ -274,6 +301,9 @@ const ClampsStepContent: React.FC<ClampsStepContentProps> = ({
           </p>
           <p>
             <strong>Toggle Clamps Side Push:</strong> Apply horizontal clamping force, useful for pushing workpieces against stops or edges.
+          </p>
+          <p className="text-[10px] italic">
+            Placed clamps are shown in the Properties Panel.
           </p>
         </div>
       </Card>
