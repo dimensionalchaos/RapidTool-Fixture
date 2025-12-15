@@ -47,14 +47,17 @@ export interface ClampSupportInfo {
  * - Original OBJ: Y-up (X right, Y up, Z toward viewer)
  * - After Z-up conversion (-90° X rotation): X right, Y = old Z, Z = -old Y
  * 
+ * The polygon and localCenter are returned relative to the fixturePointTopCenter,
+ * so that when the clamp is placed, we can rotate around the fixture point.
+ * 
  * @param geometry The fixture_mount_surface BufferGeometry (already converted to Z-up)
- * @param fixturePointY The Y position of fixturePointTopCenter in local Z-up space
+ * @param fixturePointTopCenter The full position of fixturePointTopCenter in local Z-up space
  * @param minPlacementOffset The distance from fixture point to lowest cutout point
  * @returns Support info with polygon and mount surface Y position, or null if extraction fails
  */
 export function extractSupportFromMountSurface(
   geometry: THREE.BufferGeometry,
-  fixturePointY: number = 0,
+  fixturePointTopCenter: THREE.Vector3,
   minPlacementOffset: number = 0
 ): ClampSupportInfo | null {
   if (!geometry || !geometry.attributes.position) {
@@ -80,27 +83,23 @@ export function extractSupportFromMountSurface(
   // - X stays X
   // 
   // The mount surface is a thin shape in the XZ plane with a small Y extent
-  // We need the min Y (bottom of the mount surface in local space)
-  const mountSurfaceLocalY = bbox.min.y;
+  // We need the max Y (top of the mount surface) so the support extends up to it
+  const mountSurfaceLocalY = bbox.max.y;
   
-  console.log('[ClampSupport] Mount surface bbox:', {
-    minY: bbox.min.y,
-    maxY: bbox.max.y,
-    minX: bbox.min.x,
-    maxX: bbox.max.x,
-    minZ: bbox.min.z,
-    maxZ: bbox.max.z,
-  });
+  // The fixture point position in model space (after Z-up conversion)
+  const fpX = fixturePointTopCenter.x;
+  const fpY = fixturePointTopCenter.y;
+  const fpZ = fixturePointTopCenter.z;
   
   // For simplicity, use a rectangular polygon based on the bounding box
-  // This ensures we get a proper solid support shape
-  // The polygon points are [x, z] pairs in the XZ plane
-  const minX = bbox.min.x;
-  const maxX = bbox.max.x;
-  const minZ = bbox.min.z;
-  const maxZ = bbox.max.z;
+  // The polygon is in model space, but we need it relative to the fixture point
+  // so that when we rotate the clamp, we rotate around the fixture point
+  const minX = bbox.min.x - fpX;
+  const maxX = bbox.max.x - fpX;
+  const minZ = bbox.min.z - fpZ;
+  const maxZ = bbox.max.z - fpZ;
   
-  // Create rectangle polygon (counter-clockwise when viewed from above/+Y)
+  // Create rectangle polygon relative to fixture point (counter-clockwise when viewed from above/+Y)
   const polygon: Array<[number, number]> = [
     [minX, minZ],
     [maxX, minZ],
@@ -108,25 +107,15 @@ export function extractSupportFromMountSurface(
     [minX, maxZ],
   ];
   
-  // Calculate center
+  // Calculate center relative to fixture point
   const cx = (minX + maxX) / 2;
   const cz = (minZ + maxZ) / 2;
-
-  console.log('[ClampSupport] Extracted support info (bbox-based):', {
-    polygon,
-    mountSurfaceLocalY,
-    fixturePointY,
-    minPlacementOffset,
-    center: { x: cx, z: cz },
-    width: maxX - minX,
-    depth: maxZ - minZ,
-  });
 
   return {
     polygon,
     mountSurfaceLocalY,
     localCenter: new THREE.Vector2(cx, cz),
-    fixturePointY,
+    fixturePointY: fpY,
     minPlacementOffset,
   };
 }
@@ -208,58 +197,63 @@ export function createClampSupport(
 
   // Transform the polygon from clamp local space to Three.js world space
   // 
-  // After Z-up conversion, clamp local space is:
-  // - X is right (same as Three.js world X)
-  // - Y is up (same as Three.js world Y)
-  // - Z is forward (same as Three.js world Z)
+  // The polygon is defined in the clamp's local coordinate system where:
+  // - The fixture point (pivot) is at the origin (0, 0, 0)
+  // - The polygon points are [localX, localZ] in the horizontal XZ plane
+  // - localCenter is the center of the mount surface in local space
   //
-  // The polygon points are [localX, localZ] in the horizontal XZ plane.
-  // placedClamp.rotation.y is the rotation around the Y axis (vertical).
+  // When the clamp is placed:
+  // - placedClamp.position is where the fixture point is in world space
+  // - placedClamp.rotation.y is the rotation around the Y axis (in degrees)
+  //
+  // To transform the polygon to world space:
+  // 1. Rotate the polygon points around the origin (fixture point) by rotation.y
+  // 2. Add the clamp's world position
+  
   const rotationY = THREE.MathUtils.degToRad(placedClamp.rotation.y);
   const cosR = Math.cos(rotationY);
   const sinR = Math.sin(rotationY);
 
   // Transform each polygon point from clamp local XZ to world XZ
-  // polygon[i] is [localX, localZ] in clamp's horizontal plane (after Z-up conversion)
+  // The polygon points are already in local space relative to fixture point
   const worldPolygon: Array<[number, number]> = supportInfo.polygon.map(([localX, localZ]) => {
     // Apply Y-axis rotation (rotation in the XZ horizontal plane)
     // Standard rotation around Y axis:
-    // newX = x * cos(θ) - z * sin(θ)
-    // newZ = x * sin(θ) + z * cos(θ)
-    const rotatedX = localX * cosR - localZ * sinR;
-    const rotatedZ = localX * sinR + localZ * cosR;
+    // newX = x * cos(θ) + z * sin(θ)
+    // newZ = -x * sin(θ) + z * cos(θ)
+    const rotatedX = localX * cosR + localZ * sinR;
+    const rotatedZ = -localX * sinR + localZ * cosR;
     
-    // Add clamp world position
+    // Add clamp world position (fixture point position)
     const worldX = rotatedX + placedClamp.position.x;
     const worldZ = rotatedZ + placedClamp.position.z;
     
     return [worldX, worldZ] as [number, number];
   });
 
-  // Calculate world center in XZ plane
-  let centerX = 0, centerZ = 0;
-  for (const [x, z] of worldPolygon) {
-    centerX += x;
-    centerZ += z;
-  }
-  centerX /= worldPolygon.length;
-  centerZ /= worldPolygon.length;
+  // Also transform the local center to world space
+  const localCenterX = supportInfo.localCenter.x;
+  const localCenterZ = supportInfo.localCenter.y; // Vector2.y is actually Z
+  const rotatedCenterX = localCenterX * cosR + localCenterZ * sinR;
+  const rotatedCenterZ = -localCenterX * sinR + localCenterZ * cosR;
+  const worldCenterX = rotatedCenterX + placedClamp.position.x;
+  const worldCenterZ = rotatedCenterZ + placedClamp.position.z;
 
-  // Convert polygon to be relative to center
+  // Convert polygon to be relative to center (for the geometry creation)
   const centeredPolygon: Array<[number, number]> = worldPolygon.map(([x, z]) => [
-    x - centerX,
-    z - centerZ,
+    x - worldCenterX,
+    z - worldCenterZ,
   ]);
 
-  // Calculate height: support goes from baseTopY up to the mount surface bottom
+  // Calculate height: support goes from baseTopY up to the mount surface top
   // 
   // In the clamp's local Z-up coordinate system:
   // - fixturePointY = Y position of the pivot point (fixturePointTopCenter)
-  // - mountSurfaceLocalY = Y position of the mount surface bottom
+  // - mountSurfaceLocalY = Y position of the mount surface top
   // 
   // When the clamp is placed at world position.y:
   // - The pivot point is at world Y = placedClamp.position.y
-  // - The mount surface bottom is at:
+  // - The mount surface top is at:
   //   worldMountSurfaceY = placedClamp.position.y + (mountSurfaceLocalY - fixturePointY)
   //
   // The support fills from baseTopY up to worldMountSurfaceY
@@ -268,28 +262,18 @@ export function createClampSupport(
   
   const supportHeight = mountSurfaceWorldY - baseTopY;
 
-  console.log('[ClampSupport] Height calculation:', {
-    clampPositionY: placedClamp.position.y,
-    mountSurfaceLocalY: supportInfo.mountSurfaceLocalY,
-    fixturePointY: supportInfo.fixturePointY,
-    mountSurfaceWorldY,
-    baseTopY,
-    supportHeight,
-  });
-
   // Minimum support height threshold (mm)
   // If the support is too short, don't create it
   const MIN_SUPPORT_HEIGHT = 1.0;
 
   if (supportHeight < MIN_SUPPORT_HEIGHT) {
-    console.log('[ClampSupport] Support height below threshold, skipping:', supportHeight);
     return null;
   }
 
   return {
     id: `clamp-support-${placedClamp.id}`,
     type: 'custom',
-    center: new THREE.Vector2(centerX, centerZ),
+    center: new THREE.Vector2(worldCenterX, worldCenterZ),
     height: supportHeight,
     baseY: baseTopY,
     polygon: centeredPolygon,

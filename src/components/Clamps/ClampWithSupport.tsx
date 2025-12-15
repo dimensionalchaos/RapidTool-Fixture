@@ -78,15 +78,15 @@ const ClampWithSupport: React.FC<ClampWithSupportProps> = ({
         clampGroupRef.current = result.data.clampGroup;
         
         // Extract support info from fixture_mount_surface
-        // Pass the fixturePointTopCenter Y coordinate and minPlacementOffset for proper height calculation
+        // Pass the full fixturePointTopCenter position for proper XZ offset and Y height calculation
         if (result.data.fixtureMountSurfaceGeometry) {
-          const fixturePointY = result.data.fixturePointTopCenter.y;
+          const fixturePointTopCenter = result.data.fixturePointTopCenter;
           const minPlacementOffset = result.data.minPlacementOffset;
-          console.log('[ClampWithSupport] fixturePointTopCenter:', result.data.fixturePointTopCenter);
+          console.log('[ClampWithSupport] fixturePointTopCenter:', fixturePointTopCenter);
           console.log('[ClampWithSupport] minPlacementOffset:', minPlacementOffset);
           const info = extractSupportFromMountSurface(
             result.data.fixtureMountSurfaceGeometry,
-            fixturePointY,
+            fixturePointTopCenter,
             minPlacementOffset
           );
           setSupportInfo(info);
@@ -97,7 +97,7 @@ const ClampWithSupport: React.FC<ClampWithSupportProps> = ({
             detail: {
               clampId: placedClamp.id,
               minPlacementOffset,
-              fixturePointY,
+              fixturePointY: fixturePointTopCenter.y,
             }
           }));
         } else {
@@ -117,7 +117,10 @@ const ClampWithSupport: React.FC<ClampWithSupportProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [clampModel, placedClamp.id, onClampDataLoaded]);
+    // Note: onClampDataLoaded is intentionally omitted from deps to prevent re-loading
+    // when the callback reference changes (it's an inline function in the parent)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clampModel, placedClamp.id]);
 
   // Create materials for debug geometries
   const materials = useMemo(() => createClampMaterials(), []);
@@ -196,6 +199,8 @@ const ClampWithSupport: React.FC<ClampWithSupportProps> = ({
           baseTopY={baseTopY}
           cornerRadius={2}
           visible={true}
+          fixtureCutoutsGeometry={clampData.fixtureCutoutsGeometry}
+          fixturePointTopCenter={clampData.fixturePointTopCenter}
         />
       )}
       

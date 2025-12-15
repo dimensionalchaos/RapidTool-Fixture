@@ -796,6 +796,8 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   const [showClampDebug, setShowClampDebug] = useState(true); // Show debug geometries for clamps
   // Track minimum placement offsets for each clamp (from clamp-data-loaded events)
   const [clampMinOffsets, setClampMinOffsets] = useState<Map<string, number>>(new Map());
+  // Track clamp support info for each clamp (for baseplate bounds calculation)
+  const [clampSupportInfos, setClampSupportInfos] = useState<Map<string, { polygon: Array<[number, number]>; localCenter: { x: number; y: number } }>>(new Map());
   
   // Debug: perimeter visualization from auto-placement (disabled by default)
   // Set DEBUG_SHOW_PERIMETER to true to enable red boundary line visualization
@@ -3159,6 +3161,28 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       box.max.z = Math.max(box.max.z, footprintBounds.maxZ);
     }
     
+    // Expand the bounding box to include clamp support footprints
+    for (const placedClamp of placedClamps) {
+      const supportInfo = clampSupportInfos.get(placedClamp.id);
+      if (!supportInfo) continue;
+      
+      // Transform polygon from clamp local space to world space
+      const rotationY = THREE.MathUtils.degToRad(placedClamp.rotation.y);
+      const cosR = Math.cos(rotationY);
+      const sinR = Math.sin(rotationY);
+      
+      for (const [localX, localZ] of supportInfo.polygon) {
+        // Apply Y-axis rotation and add clamp position
+        const worldX = localX * cosR + localZ * sinR + placedClamp.position.x;
+        const worldZ = -localX * sinR + localZ * cosR + placedClamp.position.z;
+        
+        box.min.x = Math.min(box.min.x, worldX);
+        box.max.x = Math.max(box.max.x, worldX);
+        box.min.z = Math.min(box.min.z, worldZ);
+        box.max.z = Math.max(box.max.z, worldZ);
+      }
+    }
+    
     // Expand the bounding box to include label footprints
     // Labels stay fixed, so use their actual positions (with rotation)
     for (const label of labels) {
@@ -3225,7 +3249,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
         position: newPosition
       } : null);
     }
-  }, [modelTransform.position, modelTransform.rotation, basePlate?.type, supports, labels, livePositionDelta]);
+  }, [modelTransform.position, modelTransform.rotation, basePlate?.type, supports, labels, livePositionDelta, placedClamps, clampSupportInfos]);
 
   // Handle check-baseplate-collision event (triggered when position is reset from Properties panel)
   // This lifts the part above the baseplate if there's a collision
@@ -3891,6 +3915,24 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
                 window.dispatchEvent(new CustomEvent('pivot-control-activated', { detail: { clampId: id } }));
                 setSelectedClampId(id);
                 window.dispatchEvent(new CustomEvent('clamp-selected', { detail: id }));
+              }}
+              onClampDataLoaded={(clampId, supportInfo) => {
+                if (supportInfo) {
+                  setClampSupportInfos(prev => {
+                    const updated = new Map(prev);
+                    updated.set(clampId, {
+                      polygon: supportInfo.polygon,
+                      localCenter: { x: supportInfo.localCenter.x, y: supportInfo.localCenter.y }
+                    });
+                    return updated;
+                  });
+                } else {
+                  setClampSupportInfos(prev => {
+                    const updated = new Map(prev);
+                    updated.delete(clampId);
+                    return updated;
+                  });
+                }
               }}
             />
           );

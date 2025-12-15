@@ -8,6 +8,7 @@
 
 import React, { useMemo } from 'react';
 import * as THREE from 'three';
+import { Brush, Evaluator, SUBTRACTION } from 'three-bvh-csg';
 import { CustomSupport } from '../Supports/types';
 import { ClampSupportInfo, createClampSupport } from './clampSupportUtils';
 import { PlacedClamp } from './types';
@@ -24,6 +25,10 @@ interface ClampSupportMeshProps {
   cornerRadius?: number;
   /** Whether to show the support (default: true) */
   visible?: boolean;
+  /** Fixture cutouts geometry for CSG subtraction (optional) */
+  fixtureCutoutsGeometry?: THREE.BufferGeometry | null;
+  /** Fixture point top center for positioning cutouts */
+  fixturePointTopCenter?: THREE.Vector3;
 }
 
 // Fillet parameters (same as regular supports)
@@ -631,17 +636,100 @@ const ClampSupportMesh: React.FC<ClampSupportMeshProps> = ({
   baseTopY,
   cornerRadius = 2,
   visible = true,
+  fixtureCutoutsGeometry,
+  fixturePointTopCenter,
 }) => {
   // Create the support definition based on current clamp transform
   const support = useMemo(() => {
     return createClampSupport(placedClamp, supportInfo, baseTopY, { cornerRadius });
   }, [placedClamp, supportInfo, baseTopY, cornerRadius]);
 
-  // Create the geometry
-  const geometry = useMemo(() => {
+  // Create the base geometry
+  const baseGeometry = useMemo(() => {
     if (!support) return null;
     return createCustomSupportGeometry(support, baseTopY);
   }, [support, baseTopY]);
+
+  // Apply CSG subtraction with fixture_cutouts
+  const geometry = useMemo(() => {
+    if (!baseGeometry) return null;
+    
+    // If no cutouts geometry, return the base geometry as-is
+    if (!fixtureCutoutsGeometry || !fixturePointTopCenter) {
+      return baseGeometry;
+    }
+
+    try {
+      // Clone and transform the cutouts geometry to world space
+      // The cutouts are in local clamp space, need to transform to world
+      const cutoutsClone = fixtureCutoutsGeometry.clone();
+      
+      // Create transformation matrix for the cutouts:
+      // 1. Translate by -fixturePointTopCenter (to origin)
+      // 2. Apply rotation
+      // 3. Translate to clamp world position
+      const matrix = new THREE.Matrix4();
+      const rotationY = THREE.MathUtils.degToRad(placedClamp.rotation.y);
+      
+      // Build the transformation: translate from local to world
+      // The cutouts are defined relative to the model origin, but the fixture point is the pivot
+      const offsetMatrix = new THREE.Matrix4().makeTranslation(
+        -fixturePointTopCenter.x,
+        -fixturePointTopCenter.y,
+        -fixturePointTopCenter.z
+      );
+      const rotationMatrix = new THREE.Matrix4().makeRotationY(rotationY);
+      const translationMatrix = new THREE.Matrix4().makeTranslation(
+        placedClamp.position.x,
+        placedClamp.position.y,
+        placedClamp.position.z
+      );
+      
+      // Combined: translate to origin -> rotate -> translate to world position
+      matrix.multiplyMatrices(translationMatrix, rotationMatrix);
+      matrix.multiply(offsetMatrix);
+      
+      cutoutsClone.applyMatrix4(matrix);
+      
+      // Ensure UVs exist for CSG
+      if (!cutoutsClone.getAttribute('uv')) {
+        const posAttr = cutoutsClone.getAttribute('position');
+        if (posAttr) {
+          const uvArray = new Float32Array(posAttr.count * 2);
+          cutoutsClone.setAttribute('uv', new THREE.BufferAttribute(uvArray, 2));
+        }
+      }
+      
+      // Ensure base geometry has UVs
+      const baseClone = baseGeometry.clone();
+      if (!baseClone.getAttribute('uv')) {
+        const posAttr = baseClone.getAttribute('position');
+        if (posAttr) {
+          const uvArray = new Float32Array(posAttr.count * 2);
+          baseClone.setAttribute('uv', new THREE.BufferAttribute(uvArray, 2));
+        }
+      }
+      
+      // Create brushes for CSG
+      const supportBrush = new Brush(baseClone);
+      const cutoutsBrush = new Brush(cutoutsClone);
+      
+      // Perform CSG subtraction
+      const evaluator = new Evaluator();
+      const result = evaluator.evaluate(supportBrush, cutoutsBrush, SUBTRACTION);
+      
+      if (result && result.geometry) {
+        result.geometry.computeVertexNormals();
+        return result.geometry;
+      }
+      
+      // Fallback to base geometry if CSG fails
+      return baseGeometry;
+    } catch (error) {
+      console.warn('[ClampSupportMesh] CSG subtraction failed:', error);
+      return baseGeometry;
+    }
+  }, [baseGeometry, fixtureCutoutsGeometry, fixturePointTopCenter, placedClamp.position, placedClamp.rotation.y]);
 
   // Create material
   const material = useMemo(() => createClampSupportMaterial(), []);
