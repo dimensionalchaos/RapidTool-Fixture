@@ -1,4 +1,4 @@
-import React, { useRef, useCallback } from 'react';
+import React, { useRef, useCallback, useMemo } from 'react';
 import * as THREE from 'three';
 import { ThreeEvent } from '@react-three/fiber';
 import { mergeGeometries, mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
@@ -17,6 +17,19 @@ const DOUBLE_CLICK_THRESHOLD_MS = 300;
 
 // Lighter blue color for selection (blue-300 for better contrast with gizmo)
 const SELECTION_COLOR = 0x93c5fd;
+
+// Edge line color - dark gray for visibility
+const EDGE_LINE_COLOR = 0x333333;
+const EDGE_LINE_THRESHOLD_ANGLE = 30; // degrees - edges sharper than this angle will be rendered
+
+// Create edge line material (shared across all supports)
+const createEdgeLineMaterial = () =>
+  new THREE.LineBasicMaterial({
+    color: EDGE_LINE_COLOR,
+    linewidth: 1,
+    transparent: true,
+    opacity: 0.8,
+  });
 
 // Use a non-metallic matte material for supports
 const materialFor = (preview?: boolean, selected?: boolean) =>
@@ -1317,6 +1330,7 @@ const SupportMesh: React.FC<SupportMeshProps> = ({ support, preview, baseTopY = 
   const bodyCenter = effectiveBaseY + effectiveFilletRadius + bodyHeight / 2;
 
   const mat = React.useMemo(() => materialFor(preview, selected), [preview, selected]);
+  const edgeMat = useMemo(() => createEdgeLineMaterial(), []);
 
   if (type === 'cylindrical') {
     const { radius } = support as any;
@@ -1329,12 +1343,18 @@ const SupportMesh: React.FC<SupportMeshProps> = ({ support, preview, baseTopY = 
       return cap;
     }, [radius, effectiveFilletRadius]);
     
+    // Edge geometries for wireframe effect
+    const bodyEdgeGeo = useMemo(() => new THREE.EdgesGeometry(geo, EDGE_LINE_THRESHOLD_ANGLE), [geo]);
+    const capEdgeGeo = useMemo(() => new THREE.EdgesGeometry(bottomCapGeo, EDGE_LINE_THRESHOLD_ANGLE), [bottomCapGeo]);
+    
     return (
       <group onClick={handleClick}>
         <mesh geometry={bottomCapGeo} position={[center.x, effectiveBaseY, center.y]} material={mat} />
+        <lineSegments geometry={capEdgeGeo} position={[center.x, effectiveBaseY, center.y]} material={edgeMat} />
         <mesh geometry={filletGeo} position={[center.x, effectiveBaseY, center.y]} material={mat} />
         <group position={[center.x, bodyCenter, center.y]}>
           <mesh geometry={geo} material={mat} />
+          <lineSegments geometry={bodyEdgeGeo} material={edgeMat} />
         </group>
       </group>
     );
@@ -1376,12 +1396,16 @@ const SupportMesh: React.FC<SupportMeshProps> = ({ support, preview, baseTopY = 
     
     if (cornerRadius <= 0) {
       const geo = React.useMemo(() => new THREE.BoxGeometry(width, bodyHeight, depth), [width, bodyHeight, depth]);
+      const bodyEdgeGeo = useMemo(() => new THREE.EdgesGeometry(geo, EDGE_LINE_THRESHOLD_ANGLE), [geo]);
+      const capEdgeGeo = useMemo(() => new THREE.EdgesGeometry(bottomCapGeo, EDGE_LINE_THRESHOLD_ANGLE), [bottomCapGeo]);
       return (
         <group onClick={handleClick}>
           <mesh geometry={bottomCapGeo} position={[center.x, effectiveBaseY, center.y]} rotation={[0, rotY, 0]} material={mat} />
+          <lineSegments geometry={capEdgeGeo} position={[center.x, effectiveBaseY, center.y]} rotation={[0, rotY, 0]} material={edgeMat} />
           <mesh geometry={filletGeo} position={[center.x, effectiveBaseY, center.y]} rotation={[0, rotY, 0]} material={mat} />
           <group position={[center.x, bodyCenter, center.y]} rotation={[0, rotY, 0]}>
             <mesh geometry={geo} material={mat} />
+            <lineSegments geometry={bodyEdgeGeo} material={edgeMat} />
           </group>
         </group>
       );
@@ -1407,12 +1431,17 @@ const SupportMesh: React.FC<SupportMeshProps> = ({ support, preview, baseTopY = 
       return e;
     }, [width, depth, cornerRadius, bodyHeight]);
     
+    const rrEdgeGeo = useMemo(() => new THREE.EdgesGeometry(rrGeo, EDGE_LINE_THRESHOLD_ANGLE), [rrGeo]);
+    const capEdgeGeo = useMemo(() => new THREE.EdgesGeometry(bottomCapGeo, EDGE_LINE_THRESHOLD_ANGLE), [bottomCapGeo]);
+    
     return (
       <group onClick={handleClick}>
         <mesh geometry={bottomCapGeo} position={[center.x, effectiveBaseY, center.y]} rotation={[0, rotY, 0]} material={mat} />
+        <lineSegments geometry={capEdgeGeo} position={[center.x, effectiveBaseY, center.y]} rotation={[0, rotY, 0]} material={edgeMat} />
         <mesh geometry={filletGeo} position={[center.x, effectiveBaseY, center.y]} rotation={[0, rotY, 0]} material={mat} />
         <group position={[center.x, effectiveBaseY + effectiveFilletRadius, center.y]} rotation={[0, rotY, 0]}>
           <mesh geometry={rrGeo} material={mat} />
+          <lineSegments geometry={rrEdgeGeo} material={edgeMat} />
         </group>
       </group>
     );
@@ -1456,12 +1485,18 @@ const SupportMesh: React.FC<SupportMeshProps> = ({ support, preview, baseTopY = 
       return cap;
     }, [baseRadius, effectiveFilletRadius]);
     
+    // Edge geometries
+    const bodyEdgeGeo = useMemo(() => new THREE.EdgesGeometry(geo, EDGE_LINE_THRESHOLD_ANGLE), [geo]);
+    const capEdgeGeo = useMemo(() => new THREE.EdgesGeometry(bottomCapGeo, EDGE_LINE_THRESHOLD_ANGLE), [bottomCapGeo]);
+    
     return (
       <group onClick={handleClick}>
         <mesh geometry={bottomCapGeo} position={[center.x, effectiveBaseY, center.y]} material={mat} />
+        <lineSegments geometry={capEdgeGeo} position={[center.x, effectiveBaseY, center.y]} material={edgeMat} />
         <mesh geometry={filletGeo} position={[center.x, effectiveBaseY, center.y]} material={mat} />
         <group position={[center.x, conicalBodyCenter, center.y]}>
           <mesh geometry={geo} material={mat} />
+          <lineSegments geometry={bodyEdgeGeo} material={edgeMat} />
         </group>
       </group>
     );
@@ -1588,12 +1623,18 @@ const SupportMesh: React.FC<SupportMeshProps> = ({ support, preview, baseTopY = 
       return e;
     }, [validPolygon, safeCornerRadius, bodyHeight]);
     
+    // Edge geometries for custom supports
+    const bodyEdgeGeo = useMemo(() => geo ? new THREE.EdgesGeometry(geo, EDGE_LINE_THRESHOLD_ANGLE) : null, [geo]);
+    const capEdgeGeo = useMemo(() => bottomCapGeo ? new THREE.EdgesGeometry(bottomCapGeo, EDGE_LINE_THRESHOLD_ANGLE) : null, [bottomCapGeo]);
+    
     return (
       <group onClick={handleClick}>
         {bottomCapGeo && <mesh geometry={bottomCapGeo} position={[center.x, effectiveBaseY, center.y]} rotation={[0, rotY, 0]} material={mat} />}
+        {capEdgeGeo && <lineSegments geometry={capEdgeGeo} position={[center.x, effectiveBaseY, center.y]} rotation={[0, rotY, 0]} material={edgeMat} />}
         <mesh geometry={filletGeo} position={[center.x, effectiveBaseY, center.y]} rotation={[0, rotY, 0]} material={mat} />
         <group position={[center.x, effectiveBaseY + effectiveFilletRadius, center.y]} rotation={[0, rotY, 0]}>
           <mesh geometry={geo} material={mat} />
+          {bodyEdgeGeo && <lineSegments geometry={bodyEdgeGeo} material={edgeMat} />}
         </group>
       </group>
     );

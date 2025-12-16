@@ -23,6 +23,10 @@ const PREVIEW_OPACITY = 0.7;
 const MIN_VALID_DIMENSION = 0.01;
 const OFFSET_CHANGE_THRESHOLD = 0.01;
 
+// Edge line rendering constants
+const EDGE_LINE_COLOR = 0x333333;
+const EDGE_LINE_THRESHOLD_ANGLE = 30;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────────────────────────────────────
@@ -53,6 +57,16 @@ const createLabelMaterial = (preview: boolean, selected: boolean): THREE.MeshSta
     side: THREE.DoubleSide,
     emissive: selected ? SELECTION_COLOR : 0x000000,
     emissiveIntensity: selected ? 0.15 : 0,
+  });
+};
+
+/** Creates the edge line material for the label */
+const createEdgeLineMaterial = (): THREE.LineBasicMaterial => {
+  return new THREE.LineBasicMaterial({
+    color: EDGE_LINE_COLOR,
+    linewidth: 1,
+    transparent: true,
+    opacity: 0.8,
   });
 };
 

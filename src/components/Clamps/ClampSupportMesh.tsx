@@ -23,6 +23,22 @@ import { performClampCSGInWorker } from '@/lib/workers/workerManager';
 // Reusable CSG evaluator for better performance
 const csgEvaluator = new Evaluator();
 
+// Edge line rendering constants
+const EDGE_LINE_COLOR = 0x333333;
+const EDGE_LINE_THRESHOLD_ANGLE = 30;
+
+// Create edge line material
+const createEdgeLineMaterial = () =>
+  new THREE.LineBasicMaterial({
+    color: EDGE_LINE_COLOR,
+    linewidth: 1,
+    transparent: true,
+    opacity: 0.8,
+  });
+
+// Reusable CSG evaluator for better performance
+const csgEvaluator = new Evaluator();
+
 interface ClampSupportMeshProps {
   /** The placed clamp this support belongs to */
   placedClamp: PlacedClamp;
@@ -885,8 +901,15 @@ const ClampSupportMesh: React.FC<ClampSupportMeshProps> = ({
     return lastCSGGeometryRef.current || baseGeometry;
   }, [workerCSGGeometry, isGizmoOpen, isComputingCSG, baseGeometry]);
 
+  // Create edge geometry for wireframe effect
+  const edgeGeometry = useMemo(() => {
+    if (!geometry) return null;
+    return new THREE.EdgesGeometry(geometry, EDGE_LINE_THRESHOLD_ANGLE);
+  }, [geometry]);
+
   // Create material (stable reference)
   const material = useMemo(() => createClampSupportMaterial(), []);
+  const edgeMaterial = useMemo(() => createEdgeLineMaterial(), []);
 
   // Calculate world position for the support
   // The polygon is already defined relative to the fixture point (origin in local space)
@@ -908,14 +931,20 @@ const ClampSupportMesh: React.FC<ClampSupportMeshProps> = ({
   }
 
   return (
-    <mesh
-      geometry={geometry}
-      material={material}
+    <group
       position={[worldPosition.x, worldPosition.y, worldPosition.z]}
       rotation={[0, worldRotationY, 0]}
-      castShadow
-      receiveShadow
-    />
+    >
+      <mesh
+        geometry={geometry}
+        material={material}
+        castShadow
+        receiveShadow
+      />
+      {edgeGeometry && (
+        <lineSegments geometry={edgeGeometry} material={edgeMaterial} />
+      )}
+    </group>
   );
 };
 
