@@ -3125,51 +3125,55 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
 
   // Update rectangular baseplate size and position when model transform changes
   // This recalculates dimensions based on new bounding box after gizmo closes
+  // DEBOUNCED: Clamp drag causes frequent placedClamps updates, so we debounce to avoid lag
   React.useEffect(() => {
     if (!basePlate) return;
-    if (importedParts.length === 0) return;
+    // Allow update if there are imported parts OR clamps with support info
+    if (importedParts.length === 0 && placedClamps.length === 0) return;
     
     // Only update for non-convex-hull types
     // Convex-hull recalculates its geometry from modelGeometry/modelMatrixWorld props automatically
     if (basePlate.type === 'convex-hull') return;
     
-    // Compute combined bounding box of all parts
-    // NOTE: The mesh's matrixWorld already includes the live pivot transform since the mesh
-    // is a child of the PivotControls group, so setFromObject gives us the correct live bounds.
-    const box = new THREE.Box3();
-    importedParts.forEach(part => {
-      const ref = modelMeshRefs.current.get(part.id);
-      if (ref?.current) {
-        ref.current.updateMatrixWorld(true);
-        const partBox = new THREE.Box3().setFromObject(ref.current);
-        box.union(partBox);
+    // Debounce the expensive calculation
+    const timeoutId = setTimeout(() => {
+      // Compute combined bounding box of all parts
+      // NOTE: The mesh's matrixWorld already includes the live pivot transform since the mesh
+      // is a child of the PivotControls group, so setFromObject gives us the correct live bounds.
+      const box = new THREE.Box3();
+      importedParts.forEach(part => {
+        const ref = modelMeshRefs.current.get(part.id);
+        if (ref?.current) {
+          ref.current.updateMatrixWorld(true);
+          const partBox = new THREE.Box3().setFromObject(ref.current);
+          box.union(partBox);
+        }
+      });
+      
+      // Don't return early if box is empty - clamps/supports may still expand it
+      
+      // Expand the bounding box to include support footprints
+      // Supports stay fixed, so use their actual positions
+      for (const support of supports) {
+        // Get footprint bounds for this support
+        const footprintBounds = getSupportFootprintBounds(support);
+        
+        // Expand the box to include this support's footprint
+        box.min.x = Math.min(box.min.x, footprintBounds.minX);
+        box.max.x = Math.max(box.max.x, footprintBounds.maxX);
+        box.min.z = Math.min(box.min.z, footprintBounds.minZ);
+        box.max.z = Math.max(box.max.z, footprintBounds.maxZ);
       }
-    });
-    
-    if (box.isEmpty()) return;
-    
-    // Expand the bounding box to include support footprints
-    // Supports stay fixed, so use their actual positions
-    for (const support of supports) {
-      // Get footprint bounds for this support
-      const footprintBounds = getSupportFootprintBounds(support);
       
-      // Expand the box to include this support's footprint
-      box.min.x = Math.min(box.min.x, footprintBounds.minX);
-      box.max.x = Math.max(box.max.x, footprintBounds.maxX);
-      box.min.z = Math.min(box.min.z, footprintBounds.minZ);
-      box.max.z = Math.max(box.max.z, footprintBounds.maxZ);
-    }
-    
-    // Expand the bounding box to include clamp support footprints
-    for (const placedClamp of placedClamps) {
-      const supportInfo = clampSupportInfos.get(placedClamp.id);
-      if (!supportInfo) continue;
-      
-      // Transform polygon from clamp local space to world space
-      const rotationY = THREE.MathUtils.degToRad(placedClamp.rotation.y);
-      const cosR = Math.cos(rotationY);
-      const sinR = Math.sin(rotationY);
+      // Expand the bounding box to include clamp support footprints
+      for (const placedClamp of placedClamps) {
+        const supportInfo = clampSupportInfos.get(placedClamp.id);
+        if (!supportInfo) continue;
+        
+        // Transform polygon from clamp local space to world space
+        const rotationY = THREE.MathUtils.degToRad(placedClamp.rotation.y);
+        const cosR = Math.cos(rotationY);
+        const sinR = Math.sin(rotationY);
       
       for (const [localX, localZ] of supportInfo.polygon) {
         // Apply Y-axis rotation and add clamp position
@@ -3221,6 +3225,9 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       }
     }
     
+    // If box is still empty after all expansions, nothing to update
+    if (box.isEmpty()) return;
+    
     const size = new THREE.Vector3();
     const center = new THREE.Vector3();
     box.getSize(size);
@@ -3249,6 +3256,9 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
         position: newPosition
       } : null);
     }
+    }, 100); // 100ms debounce to avoid lag during drag
+
+    return () => clearTimeout(timeoutId);
   }, [modelTransform.position, modelTransform.rotation, basePlate?.type, supports, labels, livePositionDelta, placedClamps, clampSupportInfos]);
 
   // Handle check-baseplate-collision event (triggered when position is reset from Properties panel)
@@ -3960,16 +3970,12 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
               placedClamp={selectedClamp}
               fixturePointWorldPos={fixturePointWorldPos}
               onTransformChange={(position, rotation) => {
-                // Live update clamp position and rotation
+                // Live update clamp position and rotation (don't dispatch events during drag)
                 setPlacedClamps(prev => prev.map(c => {
                   if (c.id === selectedClampId) {
                     return { ...c, position, rotation };
                   }
                   return c;
-                }));
-                // Dispatch event for UI sync
-                window.dispatchEvent(new CustomEvent('clamp-update', { 
-                  detail: { clampId: selectedClampId, updates: { position, rotation } } 
                 }));
               }}
               onTransformEnd={(position, rotation) => {

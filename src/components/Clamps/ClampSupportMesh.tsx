@@ -4,9 +4,13 @@
  * Renders a support mesh for a placed clamp based on its fixture_mount_surface.
  * These supports are non-interactive (no selection, no transform controls).
  * Their position and height update automatically based on the clamp's transform.
+ * 
+ * OPTIMIZATION: Geometry is created at origin without baking position.
+ * Position/rotation are applied via React Three Fiber props to avoid
+ * recreating geometry on every clamp transform change during drag.
  */
 
-import React, { useMemo } from 'react';
+import React, { useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { Brush, Evaluator, SUBTRACTION } from 'three-bvh-csg';
 import { CustomSupport } from '../Supports/types';
@@ -47,16 +51,19 @@ const createClampSupportMaterial = () =>
   });
 
 /**
- * Create the extruded geometry for a custom polygon support
- * Based on how SupportMeshes.tsx creates custom support bodies
+ * Create the extruded geometry for a custom polygon support AT ORIGIN
+ * Position will be applied via React transform props for performance.
+ * 
+ * @param polygon - The polygon points relative to center
+ * @param height - The support height
+ * @param cornerRadius - Corner radius for rounded edges
+ * @returns BufferGeometry centered at origin with base at Y=0
  */
-function createCustomSupportGeometry(
-  support: CustomSupport,
-  baseTopY: number
+function createSupportGeometryAtOrigin(
+  polygon: Array<[number, number]>,
+  height: number,
+  cornerRadius: number = 0
 ): THREE.BufferGeometry | null {
-  const { polygon, height, cornerRadius = 0 } = support;
-  const effectiveBaseY = support.baseY ?? baseTopY;
-
   if (!polygon || polygon.length < 3 || height <= 0) {
     console.warn('[ClampSupportMesh] Invalid support config:', { polygonLen: polygon?.length, height });
     return null;
@@ -171,11 +178,64 @@ function createCustomSupportGeometry(
     return null;
   }
 
-  // Translate to world position after merging (same as SupportMeshes.tsx)
-  merged.translate(support.center.x, effectiveBaseY, support.center.y);
+  // Do NOT translate - geometry stays at origin
   merged.computeVertexNormals();
-
   return merged;
+}
+
+/**
+ * Create cutouts geometry transformed to be at origin for CSG
+ * This is pre-computed once and used for CSG subtraction
+ * 
+ * The cutouts need to be positioned relative to the support geometry which:
+ * - Has its XZ centered at the fixture point (origin)
+ * - Has its Y starting at 0 (base of support)
+ * 
+ * The cutouts in clamp local space:
+ * - Are positioned relative to model origin
+ * - Need to be shifted so fixture point is at XZ origin
+ * - Need Y adjusted so they align with support (which starts at Y=0)
+ */
+function createCutoutsGeometryAtOrigin(
+  fixtureCutoutsGeometry: THREE.BufferGeometry,
+  fixturePointTopCenter: THREE.Vector3
+): THREE.BufferGeometry {
+  const cutoutsClone = fixtureCutoutsGeometry.clone();
+  
+  // Transform cutouts to be relative to fixture point in XZ
+  // But keep Y relative to fixture point Y (which aligns with support top when placed)
+  // The support geometry Y=0 corresponds to baseTopY in world space
+  // The cutouts need to be at Y position relative to where they cut the support
+  cutoutsClone.translate(
+    -fixturePointTopCenter.x,
+    0, // Don't offset Y - cutouts Y position is relative to fixture point
+    -fixturePointTopCenter.z
+  );
+  
+  // Ensure UVs exist for CSG
+  if (!cutoutsClone.getAttribute('uv')) {
+    const posAttr = cutoutsClone.getAttribute('position');
+    if (posAttr) {
+      const uvArray = new Float32Array(posAttr.count * 2);
+      cutoutsClone.setAttribute('uv', new THREE.BufferAttribute(uvArray, 2));
+    }
+  }
+  
+  return cutoutsClone;
+}
+
+// Old function kept for backwards compatibility but unused
+function createCustomSupportGeometry(
+  support: CustomSupport,
+  baseTopY: number
+): THREE.BufferGeometry | null {
+  const { polygon, height, cornerRadius = 0 } = support;
+  const effectiveBaseY = support.baseY ?? baseTopY;
+  const geo = createSupportGeometryAtOrigin(polygon, height, cornerRadius);
+  if (geo) {
+    geo.translate(support.center.x, effectiveBaseY, support.center.y);
+  }
+  return geo;
 }
 
 /**
@@ -629,6 +689,10 @@ function createPolygonFilletGeometry(
 
 /**
  * ClampSupportMesh Component
+ * 
+ * OPTIMIZED: Geometry is created at origin without baking position.
+ * Position/rotation are applied via React Three Fiber transform props.
+ * CSG is only computed when height changes (not during XZ drag).
  */
 const ClampSupportMesh: React.FC<ClampSupportMeshProps> = ({
   placedClamp,
@@ -639,79 +703,98 @@ const ClampSupportMesh: React.FC<ClampSupportMeshProps> = ({
   fixtureCutoutsGeometry,
   fixturePointTopCenter,
 }) => {
-  // Create the support definition based on current clamp transform
-  const support = useMemo(() => {
-    return createClampSupport(placedClamp, supportInfo, baseTopY, { cornerRadius });
-  }, [placedClamp, supportInfo, baseTopY, cornerRadius]);
+  // Memoize clamp position/rotation to avoid object recreation
+  const clampPosition = placedClamp.position;
+  const clampRotationY = placedClamp.rotation.y;
+  
+  // Calculate the support height based on clamp Y position
+  // This is the only thing that changes when clamp moves vertically
+  const supportHeight = useMemo(() => {
+    // In the clamp's local Z-up coordinate system:
+    // - fixturePointY = Y position of the pivot point (fixturePointTopCenter)
+    // - mountSurfaceLocalY = Y position of the mount surface top
+    // 
+    // When the clamp is placed at world position.y:
+    // - The pivot point is at world Y = placedClamp.position.y
+    // - The mount surface top is at:
+    //   worldMountSurfaceY = placedClamp.position.y + (mountSurfaceLocalY - fixturePointY)
+    //
+    // The support fills from baseTopY up to worldMountSurfaceY
+    const mountSurfaceWorldY = clampPosition.y + 
+      (supportInfo.mountSurfaceLocalY - supportInfo.fixturePointY);
+    
+    const height = mountSurfaceWorldY - baseTopY;
+    return Math.max(1.0, height); // Minimum 1mm height
+  }, [clampPosition.y, supportInfo.mountSurfaceLocalY, supportInfo.fixturePointY, baseTopY]);
 
-  // Create the base geometry
+  // The polygon from supportInfo is in local clamp space, relative to fixture point
+  // It does NOT change when the clamp moves - only position/rotation change
+  const polygon = supportInfo.polygon;
+  
+  // Create base geometry at origin - only depends on shape and height
   const baseGeometry = useMemo(() => {
-    if (!support) return null;
-    return createCustomSupportGeometry(support, baseTopY);
-  }, [support, baseTopY]);
+    if (supportHeight < 1.0) return null;
+    return createSupportGeometryAtOrigin(polygon, supportHeight, cornerRadius);
+  }, [polygon, supportHeight, cornerRadius]);
 
-  // Apply CSG subtraction with fixture_cutouts
+  // Pre-compute cutouts geometry at origin (relative to fixture point)
+  // This only needs to be computed once since it's based on the clamp model
+  const cutoutsAtOrigin = useMemo(() => {
+    if (!fixtureCutoutsGeometry || !fixturePointTopCenter) return null;
+    return createCutoutsGeometryAtOrigin(fixtureCutoutsGeometry, fixturePointTopCenter);
+  }, [fixtureCutoutsGeometry, fixturePointTopCenter]);
+
+  // Apply CSG subtraction - only depends on shape, not position
+  // The cutouts are at origin, the support is at origin, CSG at origin
   const geometry = useMemo(() => {
     if (!baseGeometry) return null;
     
-    // If no cutouts geometry, return the base geometry as-is
-    if (!fixtureCutoutsGeometry || !fixturePointTopCenter) {
+    // If no cutouts, return base geometry
+    if (!cutoutsAtOrigin) {
+      console.log('[ClampSupportMesh] No cutouts geometry available');
       return baseGeometry;
     }
 
     try {
-      // Clone and transform the cutouts geometry to world space
-      // The cutouts are in local clamp space, need to transform to world
-      const cutoutsClone = fixtureCutoutsGeometry.clone();
+      // Clone geometries for CSG (don't mutate originals)
+      const supportClone = baseGeometry.clone();
+      const cutoutsClone = cutoutsAtOrigin.clone();
       
-      // Create transformation matrix for the cutouts:
-      // 1. Translate by -fixturePointTopCenter (to origin)
-      // 2. Apply rotation
-      // 3. Translate to clamp world position
-      const matrix = new THREE.Matrix4();
-      const rotationY = THREE.MathUtils.degToRad(placedClamp.rotation.y);
+      // The support geometry:
+      // - XZ: polygon is relative to fixture point (origin)
+      // - Y: 0 to supportHeight (bottom to top, where top = mount surface)
+      //
+      // The cutouts geometry (after createCutoutsGeometryAtOrigin):
+      // - XZ: translated so fixture point is at origin
+      // - Y: original Y positions from clamp model
+      //
+      // To align cutouts Y with support Y:
+      // - In local clamp space, mount surface is at Y = mountSurfaceLocalY
+      // - In support space, mount surface (top) is at Y = supportHeight
+      // - So: supportY = localY - mountSurfaceLocalY + supportHeight
+      // - Offset = supportHeight - mountSurfaceLocalY
       
-      // Build the transformation: translate from local to world
-      // The cutouts are defined relative to the model origin, but the fixture point is the pivot
-      const offsetMatrix = new THREE.Matrix4().makeTranslation(
-        -fixturePointTopCenter.x,
-        -fixturePointTopCenter.y,
-        -fixturePointTopCenter.z
-      );
-      const rotationMatrix = new THREE.Matrix4().makeRotationY(rotationY);
-      const translationMatrix = new THREE.Matrix4().makeTranslation(
-        placedClamp.position.x,
-        placedClamp.position.y,
-        placedClamp.position.z
-      );
+      const yOffset = supportHeight - supportInfo.mountSurfaceLocalY;
+      cutoutsClone.translate(0, yOffset, 0);
       
-      // Combined: translate to origin -> rotate -> translate to world position
-      matrix.multiplyMatrices(translationMatrix, rotationMatrix);
-      matrix.multiply(offsetMatrix);
-      
-      cutoutsClone.applyMatrix4(matrix);
+      console.log('[ClampSupportMesh] CSG params:', {
+        supportHeight,
+        mountSurfaceLocalY: supportInfo.mountSurfaceLocalY,
+        fixturePointY: fixturePointTopCenter?.y,
+        yOffset,
+      });
       
       // Ensure UVs exist for CSG
-      if (!cutoutsClone.getAttribute('uv')) {
-        const posAttr = cutoutsClone.getAttribute('position');
+      if (!supportClone.getAttribute('uv')) {
+        const posAttr = supportClone.getAttribute('position');
         if (posAttr) {
           const uvArray = new Float32Array(posAttr.count * 2);
-          cutoutsClone.setAttribute('uv', new THREE.BufferAttribute(uvArray, 2));
-        }
-      }
-      
-      // Ensure base geometry has UVs
-      const baseClone = baseGeometry.clone();
-      if (!baseClone.getAttribute('uv')) {
-        const posAttr = baseClone.getAttribute('position');
-        if (posAttr) {
-          const uvArray = new Float32Array(posAttr.count * 2);
-          baseClone.setAttribute('uv', new THREE.BufferAttribute(uvArray, 2));
+          supportClone.setAttribute('uv', new THREE.BufferAttribute(uvArray, 2));
         }
       }
       
       // Create brushes for CSG
-      const supportBrush = new Brush(baseClone);
+      const supportBrush = new Brush(supportClone);
       const cutoutsBrush = new Brush(cutoutsClone);
       
       // Perform CSG subtraction
@@ -720,21 +803,38 @@ const ClampSupportMesh: React.FC<ClampSupportMeshProps> = ({
       
       if (result && result.geometry) {
         result.geometry.computeVertexNormals();
+        console.log('[ClampSupportMesh] CSG subtraction successful');
         return result.geometry;
       }
       
+      console.warn('[ClampSupportMesh] CSG returned no geometry');
       // Fallback to base geometry if CSG fails
       return baseGeometry;
     } catch (error) {
       console.warn('[ClampSupportMesh] CSG subtraction failed:', error);
       return baseGeometry;
     }
-  }, [baseGeometry, fixtureCutoutsGeometry, fixturePointTopCenter, placedClamp.position, placedClamp.rotation.y]);
+  }, [baseGeometry, cutoutsAtOrigin, supportHeight, supportInfo.mountSurfaceLocalY, fixturePointTopCenter]);
 
-  // Create material
+  // Create material (stable reference)
   const material = useMemo(() => createClampSupportMaterial(), []);
 
-  if (!visible || !geometry || !support) {
+  // Calculate world position for the support
+  // The polygon is already defined relative to the fixture point (origin in local space)
+  // So we just need to position the mesh at the fixture point world position
+  const worldPosition = useMemo(() => {
+    // Position at clamp's fixture point (no offset needed - polygon already has the offset)
+    return new THREE.Vector3(
+      clampPosition.x,
+      baseTopY,
+      clampPosition.z
+    );
+  }, [clampPosition.x, clampPosition.z, baseTopY]);
+
+  // World rotation (only Y rotation matters for support orientation)
+  const worldRotationY = THREE.MathUtils.degToRad(clampRotationY);
+
+  if (!visible || !geometry || supportHeight < 1.0) {
     return null;
   }
 
@@ -742,6 +842,8 @@ const ClampSupportMesh: React.FC<ClampSupportMeshProps> = ({
     <mesh
       geometry={geometry}
       material={material}
+      position={[worldPosition.x, worldPosition.y, worldPosition.z]}
+      rotation={[0, worldRotationY, 0]}
       castShadow
       receiveShadow
     />
