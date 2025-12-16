@@ -9,3 +9,4 @@ export * from './types';
 export * from './clampData';
 export * from './clampLoader';
 export * from './clampSupportUtils';
+export * from './clampPlacement';

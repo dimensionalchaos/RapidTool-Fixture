@@ -6,6 +6,8 @@ export interface ClampInfo {
   name: string;
   url?: string;
   force?: string;
+  feature?: string;
+  type?: string;
 }
 
 export interface ClampModel {

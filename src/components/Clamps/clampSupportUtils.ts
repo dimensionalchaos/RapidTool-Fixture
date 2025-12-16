@@ -121,59 +121,6 @@ export function extractSupportFromMountSurface(
 }
 
 /**
- * Compute convex hull using Graham scan algorithm
- */
-function computeConvexHull(points: Array<[number, number]>): Array<[number, number]> {
-  if (points.length < 3) return points;
-
-  // Find the point with lowest Y (and leftmost if tie)
-  let lowestIdx = 0;
-  for (let i = 1; i < points.length; i++) {
-    if (points[i][1] < points[lowestIdx][1] ||
-        (points[i][1] === points[lowestIdx][1] && points[i][0] < points[lowestIdx][0])) {
-      lowestIdx = i;
-    }
-  }
-
-  // Swap to put lowest point first
-  [points[0], points[lowestIdx]] = [points[lowestIdx], points[0]];
-  const pivot = points[0];
-
-  // Sort remaining points by polar angle with respect to pivot
-  const sorted = points.slice(1).sort((a, b) => {
-    const angleA = Math.atan2(a[1] - pivot[1], a[0] - pivot[0]);
-    const angleB = Math.atan2(b[1] - pivot[1], b[0] - pivot[0]);
-    if (Math.abs(angleA - angleB) < 1e-10) {
-      // Same angle - sort by distance
-      const distA = (a[0] - pivot[0]) ** 2 + (a[1] - pivot[1]) ** 2;
-      const distB = (b[0] - pivot[0]) ** 2 + (b[1] - pivot[1]) ** 2;
-      return distA - distB;
-    }
-    return angleA - angleB;
-  });
-
-  // Graham scan
-  const hull: Array<[number, number]> = [pivot];
-  
-  for (const point of sorted) {
-    // Remove points that make a clockwise turn
-    while (hull.length > 1 && crossProduct(hull[hull.length - 2], hull[hull.length - 1], point) <= 0) {
-      hull.pop();
-    }
-    hull.push(point);
-  }
-
-  return hull;
-}
-
-/**
- * Cross product of vectors OA and OB where O is origin point
- */
-function crossProduct(o: [number, number], a: [number, number], b: [number, number]): number {
-  return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
-}
-
-/**
  * Create a CustomSupport from a placed clamp
  * 
  * Coordinate systems:

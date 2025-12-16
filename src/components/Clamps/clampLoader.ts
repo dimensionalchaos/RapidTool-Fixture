@@ -66,15 +66,12 @@ async function loadOBJGeometry(path: string): Promise<THREE.BufferGeometry> {
           }
         });
         
-        console.log(`[ClampLoader] Found ${geometries.length} mesh(es) in ${path}`);
-        
         if (geometries.length > 0) {
           // Merge all geometries if there are multiple
           let geometry: THREE.BufferGeometry;
           if (geometries.length === 1) {
             geometry = geometries[0];
           } else {
-            console.log(`[ClampLoader] Merging ${geometries.length} geometries from ${path}`);
             const merged = mergeGeometries(geometries);
             if (!merged) {
               reject(new Error(`Failed to merge geometries in OBJ file: ${path}`));
@@ -210,8 +207,6 @@ async function loadOBJWithMTLAsGroup(objPath: string, mtlPath: string): Promise<
                 }
               }
             });
-            
-            console.log(`[ClampLoader] Loaded ${geometries.length} mesh(es) with materials from ${objPath}`);
             
             // Merge geometries for CSG operations
             let mergedGeometry: THREE.BufferGeometry;
@@ -431,11 +426,6 @@ export async function loadClampModel(clamp: ClampModel): Promise<ClampLoadResult
       const fixturePointY = fixturePointTopCenter.y;
       // Offset = how far below the fixture point the cutouts extend
       minPlacementOffset = fixturePointY - cutoutsMinY;
-      console.log('[ClampLoader] Minimum placement offset calculated:', {
-        cutoutsMinY,
-        fixturePointY,
-        minPlacementOffset,
-      });
     }
     
     return {

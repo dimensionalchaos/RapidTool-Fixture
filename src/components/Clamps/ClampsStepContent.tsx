@@ -26,7 +26,9 @@ import {
   ArrowDown,
   ArrowRight,
   ExternalLink,
-  Zap
+  Zap,
+  MousePointer,
+  X
 } from 'lucide-react';
 import { 
   ClampModel, 
@@ -50,6 +52,7 @@ const ClampsStepContent: React.FC<ClampsStepContentProps> = ({
   const [selectedClamp, setSelectedClamp] = useState<ClampModel | null>(null);
   const [expandedClamp, setExpandedClamp] = useState<string | null>(null);
   const [showDebug, setShowDebug] = useState(true);
+  const [isPlacementMode, setIsPlacementMode] = useState(false);
   
   // Track expanded accordion categories
   const [expandedCategories, setExpandedCategories] = useState<string[]>([]);
@@ -69,6 +72,25 @@ const ClampsStepContent: React.FC<ClampsStepContentProps> = ({
     setExpandedCategories(categoriesWithClamps);
   }, []);
 
+  // Listen for clamp placed event to exit placement mode
+  useEffect(() => {
+    const handleClampPlaced = () => {
+      setIsPlacementMode(false);
+    };
+    
+    const handlePlacementCancelled = () => {
+      setIsPlacementMode(false);
+    };
+    
+    window.addEventListener('clamp-placed', handleClampPlaced);
+    window.addEventListener('clamp-placement-cancelled', handlePlacementCancelled);
+    
+    return () => {
+      window.removeEventListener('clamp-placed', handleClampPlaced);
+      window.removeEventListener('clamp-placement-cancelled', handlePlacementCancelled);
+    };
+  }, []);
+
   const handleImageError = (clampId: string) => {
     setImageErrors(prev => new Set(prev).add(clampId));
   };
@@ -78,6 +100,25 @@ const ClampsStepContent: React.FC<ClampsStepContentProps> = ({
       return <ArrowDown className="w-4 h-4" />;
     }
     return <ArrowRight className="w-4 h-4" />;
+  };
+
+  const handleStartPlacement = () => {
+    if (!selectedClamp) return;
+    
+    setIsPlacementMode(true);
+    
+    // Dispatch event to 3DScene to enter placement mode
+    window.dispatchEvent(new CustomEvent('clamp-start-placement', { 
+      detail: { 
+        clampModelId: selectedClamp.id,
+        clampCategory: selectedClamp.category
+      } 
+    }));
+  };
+
+  const handleCancelPlacement = () => {
+    setIsPlacementMode(false);
+    window.dispatchEvent(new CustomEvent('clamp-cancel-placement'));
   };
 
   if (!hasWorkpiece) {
@@ -226,6 +267,11 @@ const ClampsStepContent: React.FC<ClampsStepContentProps> = ({
                                           <span className="text-foreground">Clamping Force:</span> {clamp.info.force}
                                         </p>
                                       )}
+                                      {clamp.info.feature && (
+                                        <p>
+                                          <span className="text-foreground">Feature:</span> {clamp.info.feature}
+                                        </p>
+                                      )}
                                       <p>
                                         <span className="text-foreground">Category:</span> {clamp.category}
                                       </p>
@@ -260,21 +306,52 @@ const ClampsStepContent: React.FC<ClampsStepContentProps> = ({
         </ScrollArea>
       </div>
 
+      {/* Placement Mode Prompt */}
+      {isPlacementMode && selectedClamp && (
+        <Alert className="bg-primary/10 border-primary/30">
+          <MousePointer className="h-4 w-4 text-primary" />
+          <AlertDescription className="text-xs font-tech">
+            <span className="font-semibold text-primary">Click on part surface</span> to place the clamp.
+            {selectedClamp.category === 'Toggle Clamps Vertical' && (
+              <span className="block mt-1 text-muted-foreground">
+                The fixture point will rest on the selected surface.
+              </span>
+            )}
+          </AlertDescription>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="absolute right-2 top-2 h-6 w-6 p-0"
+            onClick={handleCancelPlacement}
+          >
+            <X className="h-3 w-3" />
+          </Button>
+        </Alert>
+      )}
+
       {/* Place Clamp Button */}
-      {selectedClamp && (
+      {selectedClamp && !isPlacementMode && (
         <Button
           variant="default"
           size="sm"
           className="w-full font-tech"
-          onClick={() => {
-            // Dispatch event to 3DScene to place the clamp
-            window.dispatchEvent(new CustomEvent('clamp-place', { 
-              detail: { clampModelId: selectedClamp.id } 
-            }));
-          }}
+          onClick={handleStartPlacement}
         >
           <Plus className="w-4 h-4 mr-2" />
           Place {selectedClamp.name}
+        </Button>
+      )}
+
+      {/* Cancel Placement Button (shown during placement mode) */}
+      {isPlacementMode && (
+        <Button
+          variant="outline"
+          size="sm"
+          className="w-full font-tech"
+          onClick={handleCancelPlacement}
+        >
+          <X className="w-4 h-4 mr-2" />
+          Cancel Placement
         </Button>
       )}
 

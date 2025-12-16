@@ -32,6 +32,8 @@ export interface ModelMeshProps {
   dimensions?: { x?: number; y?: number; z?: number };
   /** Callback when bounds are computed/updated */
   onBoundsChange?: (bounds: BoundsSummary) => void;
+  /** Callback when mesh is clicked (fires before double-click detection) */
+  onClick?: (event: THREE.Event) => void;
   /** Callback when mesh is double-clicked */
   onDoubleClick?: () => void;
   /** Disable double-click interactions */
@@ -160,6 +162,7 @@ const ModelMesh: React.FC<ModelMeshProps> = ({
   meshRef,
   dimensions,
   onBoundsChange,
+  onClick,
   onDoubleClick,
   disableDoubleClick = false,
   // Note: colorsMap, setColorsMap, initialOffset are accepted but handled elsewhere
@@ -266,6 +269,9 @@ const ModelMesh: React.FC<ModelMeshProps> = ({
   
   // Double-click handler (manual detection for reliability)
   const handleClick = useCallback((event: THREE.Event) => {
+    // Call onClick prop first (for clamp placement etc.)
+    onClick?.(event);
+    
     (event as any).stopPropagation?.();
     
     if (disableDoubleClick) return;
@@ -280,7 +286,7 @@ const ModelMesh: React.FC<ModelMeshProps> = ({
     } else {
       lastClickTimeRef.current = now;
     }
-  }, [disableDoubleClick, onDoubleClick]);
+  }, [onClick, disableDoubleClick, onDoubleClick]);
   
   return (
     <mesh

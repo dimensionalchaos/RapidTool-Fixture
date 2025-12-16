@@ -13,10 +13,9 @@
 import React, { useMemo, useRef, useState, useEffect } from 'react';
 import * as THREE from 'three';
 import { Brush, Evaluator, SUBTRACTION } from 'three-bvh-csg';
-import { CustomSupport } from '../Supports/types';
-import { ClampSupportInfo, createClampSupport } from './clampSupportUtils';
+import { ClampSupportInfo } from './clampSupportUtils';
 import { PlacedClamp } from './types';
-import { mergeGeometries, mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
 // Reusable CSG evaluator for better performance
 const csgEvaluator = new Evaluator();
@@ -45,10 +44,10 @@ const FILLET_SEGMENTS = 12; // Reduced from 24 for faster CSG
 // Extrusion parameters - reduced for faster CSG
 const EXTRUDE_CURVE_SEGMENTS = 16; // Reduced from 64
 
-// Material for clamp supports (slightly different from regular supports to distinguish)
+// Material for clamp supports (same as regular supports for visual consistency)
 const createClampSupportMaterial = () =>
   new THREE.MeshStandardMaterial({
-    color: 0x6b7280, // Gray-500 - slightly darker than regular supports
+    color: 0x888888, // Same gray as regular supports
     transparent: false,
     opacity: 1,
     metalness: 0.1,
@@ -228,20 +227,6 @@ function createCutoutsGeometryAtOrigin(
   }
   
   return cutoutsClone;
-}
-
-// Old function kept for backwards compatibility but unused
-function createCustomSupportGeometry(
-  support: CustomSupport,
-  baseTopY: number
-): THREE.BufferGeometry | null {
-  const { polygon, height, cornerRadius = 0 } = support;
-  const effectiveBaseY = support.baseY ?? baseTopY;
-  const geo = createSupportGeometryAtOrigin(polygon, height, cornerRadius);
-  if (geo) {
-    geo.translate(support.center.x, effectiveBaseY, support.center.y);
-  }
-  return geo;
 }
 
 /**

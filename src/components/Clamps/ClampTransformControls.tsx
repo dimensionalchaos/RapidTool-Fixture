@@ -4,6 +4,10 @@
  * Transform controls for clamps using PivotControls from @react-three/drei.
  * The pivot point is positioned at the top center of the fixture_point.obj disk,
  * which represents where the clamp contacts the workpiece.
+ * 
+ * On transform end, the clamp position is adjusted to:
+ * 1. Avoid overlap between support and part
+ * 2. Drop to the part surface
  */
 
 import React, { useRef, useCallback, useEffect, useMemo } from 'react';

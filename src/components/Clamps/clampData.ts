@@ -50,9 +50,37 @@ const CLAMP_REGISTRY: ClampModel[] = [
     info: {
       name: 'Misumi-C-LD-101A',
       url: 'https://in.misumi-ec.com/vona2/detail/110310216449?HissuCode=C-LD-101A',
-      force: '441N'
+      force: '441N',
+      feature: '',
+      type: 'Toggle Clamp Vertical'
     },
     ...buildClampPaths('Toggle Clamps Vertical', 'Misumi-C-LD-101A'),
+  },
+  {
+    id: 'misumi-c-ld-101al-vertical',
+    name: 'Misumi-C-LD-101AL',
+    category: 'Toggle Clamps Vertical',
+    info: {
+      name: 'Misumi-C-LD-101AL',
+      url: 'https://in.misumi-ec.com/vona2/detail/110310218429?HissuCode=C-LD-101AL',
+      force: '441N',
+      feature: 'Long Arm',
+      type: 'Toggle Clamp Vertical'
+    },
+    ...buildClampPaths('Toggle Clamps Vertical', 'Misumi-C-LD-101AL'),
+  },
+  {
+    id: 'misumi-c-ld-12130-vertical',
+    name: 'Misumi-C-LD-12130',
+    category: 'Toggle Clamps Vertical',
+    info: {
+      name: 'Misumi-C-LD-12130',
+      url: 'https://in.misumi-ec.com/vona2/detail/110310217529?HissuCode=C-LD-12130',
+      force: '2205N',
+      feature: '',
+      type: 'Toggle Clamp Vertical'
+    },
+    ...buildClampPaths('Toggle Clamps Vertical', 'Misumi-C-LD-12130'),
   },
   // Toggle Clamps Side Push
   // Add side push clamps here when available

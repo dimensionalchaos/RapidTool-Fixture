@@ -618,8 +618,9 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   selectedSupportId,
   onSupportSelect,
 }) => {
-  const { camera, size } = useThree();
+  const { camera, size, gl } = useThree();
   const controlsRef = useRef<OrbitControlsImpl | null>(null);
+  const raycasterRef = useRef(new THREE.Raycaster());
   
   // Future: Component library for fixture elements (currently placeholder)
   const [placedComponents, setPlacedComponents] = useState<Array<{ component: unknown; position: THREE.Vector3; id: string }>>([]);
@@ -796,8 +797,21 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   const [showClampDebug, setShowClampDebug] = useState(true); // Show debug geometries for clamps
   // Track minimum placement offsets for each clamp (from clamp-data-loaded events)
   const [clampMinOffsets, setClampMinOffsets] = useState<Map<string, number>>(new Map());
-  // Track clamp support info for each clamp (for baseplate bounds calculation)
-  const [clampSupportInfos, setClampSupportInfos] = useState<Map<string, { polygon: Array<[number, number]>; localCenter: { x: number; y: number } }>>(new Map());
+  // Track clamp support info for each clamp (for baseplate bounds calculation and collision)
+  const [clampSupportInfos, setClampSupportInfos] = useState<Map<string, { 
+    polygon: Array<[number, number]>; 
+    localCenter: { x: number; y: number };
+    fixturePointY?: number;
+  }>>(new Map());
+  
+  // Clamp placement mode state
+  const [clampPlacementMode, setClampPlacementMode] = useState<{
+    active: boolean;
+    clampModelId: string | null;
+    clampCategory: string | null;
+  }>({ active: false, clampModelId: null, clampCategory: null });
+  // Cache for part silhouettes (computed once per placement session)
+  const partSilhouetteRef = useRef<Array<{ x: number; z: number }> | null>(null);
   
   // Debug: perimeter visualization from auto-placement (disabled by default)
   // Set DEBUG_SHOW_PERIMETER to true to enable red boundary line visualization
@@ -942,10 +956,48 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     return points;
   }, [labels]);
 
-  // Combined hull points for baseplate (supports + labels)
+  // Calculate clamp support footprint points for convex hull calculation
+  const prevClampSupportHullPointsRef = useRef<Array<{x: number; z: number}>>([]);
+  const clampSupportHullPoints = useMemo(() => {
+    const points: Array<{x: number; z: number}> = [];
+    
+    for (const placedClamp of placedClamps) {
+      const supportInfo = clampSupportInfos.get(placedClamp.id);
+      if (!supportInfo) continue;
+      
+      // Transform polygon from clamp local space to world space
+      const rotationY = THREE.MathUtils.degToRad(placedClamp.rotation.y);
+      const cosR = Math.cos(rotationY);
+      const sinR = Math.sin(rotationY);
+      
+      for (const [localX, localZ] of supportInfo.polygon) {
+        // Apply Y-axis rotation and add clamp position
+        const worldX = localX * cosR + localZ * sinR + placedClamp.position.x;
+        const worldZ = -localX * sinR + localZ * cosR + placedClamp.position.z;
+        points.push({ x: worldX, z: worldZ });
+      }
+    }
+    
+    // Check if points are the same as before to avoid unnecessary updates
+    const prev = prevClampSupportHullPointsRef.current;
+    if (prev.length === points.length) {
+      let same = true;
+      for (let i = 0; i < points.length && same; i++) {
+        if (Math.abs(prev[i].x - points[i].x) > 0.001 || Math.abs(prev[i].z - points[i].z) > 0.001) {
+          same = false;
+        }
+      }
+      if (same) return prev; // Return the cached array to avoid triggering downstream updates
+    }
+    
+    prevClampSupportHullPointsRef.current = points;
+    return points;
+  }, [placedClamps, clampSupportInfos]);
+
+  // Combined hull points for baseplate (supports + labels + clamp supports)
   const combinedHullPoints = useMemo(() => {
-    return [...supportHullPoints, ...labelHullPoints];
-  }, [supportHullPoints, labelHullPoints]);
+    return [...supportHullPoints, ...labelHullPoints, ...clampSupportHullPoints];
+  }, [supportHullPoints, labelHullPoints, clampSupportHullPoints]);
 
   const csgEngineRef = useRef<CSGEngine | null>(null);
   if (!csgEngineRef.current) {
@@ -2045,6 +2097,227 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     };
   }, [basePlate, selectedLabelId, supports, modelBounds, baseTopY]);
 
+  // DOM-level click handler for clamp placement mode
+  // This bypasses R3F's event system which can be blocked by PivotControls
+  useEffect(() => {
+    if (!clampPlacementMode.active) return;
+    
+    const handleCanvasClick = (event: MouseEvent) => {
+      console.log('[ClampPlacement] Canvas click detected');
+      
+      if (!clampPlacementMode.active || !clampPlacementMode.clampModelId) {
+        console.log('[ClampPlacement] Not in active placement mode');
+        return;
+      }
+      
+      // Calculate normalized device coordinates
+      const rect = gl.domElement.getBoundingClientRect();
+      const mouse = new THREE.Vector2(
+        ((event.clientX - rect.left) / rect.width) * 2 - 1,
+        -((event.clientY - rect.top) / rect.height) * 2 + 1
+      );
+      
+      // Set up raycaster
+      raycasterRef.current.setFromCamera(mouse, camera);
+      
+      // Get all part meshes to test against
+      const partMeshes: THREE.Mesh[] = [];
+      importedParts.forEach(part => {
+        const meshRef = modelMeshRefs.current.get(part.id);
+        if (meshRef?.current && partVisibility.get(part.id) !== false) {
+          partMeshes.push(meshRef.current);
+        }
+      });
+      
+      console.log('[ClampPlacement] Raycasting against', partMeshes.length, 'part meshes');
+      
+      if (partMeshes.length === 0) {
+        console.log('[ClampPlacement] No visible part meshes to raycast against');
+        return;
+      }
+      
+      // Perform raycast
+      const intersects = raycasterRef.current.intersectObjects(partMeshes, false);
+      
+      console.log('[ClampPlacement] Intersections found:', intersects.length);
+      
+      if (intersects.length === 0) {
+        console.log('[ClampPlacement] No intersection with parts');
+        return;
+      }
+      
+      const intersection = intersects[0];
+      const clickPoint = intersection.point.clone();
+      const surfaceNormal = intersection.face?.normal?.clone() || new THREE.Vector3(0, 1, 0);
+      const partMesh = intersection.object;
+      
+      console.log('[ClampPlacement] Hit point:', { x: clickPoint.x, y: clickPoint.y, z: clickPoint.z });
+      
+      // Transform normal to world space
+      if (partMesh instanceof THREE.Mesh) {
+        surfaceNormal.transformDirection(partMesh.matrixWorld);
+      }
+      
+      // Get minimum placement offset for this clamp type (default 15mm)
+      const minPlacementOffset = 15;
+      
+      console.log('[ClampPlacement] Loading clampPlacement module...');
+      
+      import('./Clamps/clampPlacement').then(({ calculateVerticalClampPlacement }) => {
+        console.log('[ClampPlacement] Module loaded, calculating placement...');
+        const silhouette = partSilhouetteRef.current || [];
+        
+        const result = calculateVerticalClampPlacement({
+          clickPoint,
+          surfaceNormal,
+          partMesh,
+          allPartMeshes: partMeshes,
+          partSilhouette: silhouette,
+          existingSupports: supports,
+          existingClamps: placedClamps,
+          baseTopY,
+          minPlacementOffset,
+          clampCategory: clampPlacementMode.clampCategory as 'Toggle Clamps Vertical' | 'Toggle Clamps Side Push',
+        });
+        
+        console.log('[ClampPlacement] Placement result:', result);
+        
+        if (result.success) {
+          const newClamp: PlacedClamp = {
+            id: `clamp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+            clampModelId: clampPlacementMode.clampModelId!,
+            position: { x: result.position.x, y: result.position.y, z: result.position.z },
+            rotation: result.rotation,
+            scale: { x: 1, y: 1, z: 1 },
+          };
+          
+          console.log('[ClampPlacement] Creating new clamp:', newClamp);
+          
+          setPlacedClamps(prev => [...prev, newClamp]);
+          setSelectedClampId(newClamp.id);
+          
+          // Exit placement mode and notify UI
+          setClampPlacementMode({ active: false, clampModelId: null, clampCategory: null });
+          partSilhouetteRef.current = null;
+          
+          window.dispatchEvent(new CustomEvent('clamp-placed', { detail: newClamp }));
+        } else {
+          console.log('[ClampPlacement] Placement failed:', result.reason);
+        }
+      }).catch(err => {
+        console.error('[ClampPlacement] Error loading module:', err);
+      });
+    };
+    
+    console.log('[ClampPlacement] Adding canvas click listener');
+    gl.domElement.addEventListener('click', handleCanvasClick);
+    
+    return () => {
+      console.log('[ClampPlacement] Removing canvas click listener');
+      gl.domElement.removeEventListener('click', handleCanvasClick);
+    };
+  }, [clampPlacementMode, gl, camera, importedParts, partVisibility, supports, placedClamps, baseTopY]);
+
+  // Handle clamp placement click on a part (legacy R3F handler - keeping for reference)
+  const handleClampPlacementClick = useCallback((e: ThreeEvent<MouseEvent>, partMesh: THREE.Object3D) => {
+    console.log('[ClampPlacement] handleClampPlacementClick called', {
+      placementModeActive: clampPlacementMode.active,
+      clampModelId: clampPlacementMode.clampModelId,
+      clampCategory: clampPlacementMode.clampCategory
+    });
+    
+    if (!clampPlacementMode.active || !clampPlacementMode.clampModelId) {
+      console.log('[ClampPlacement] Exiting early - placement mode not active or no clamp selected');
+      return;
+    }
+    
+    e.stopPropagation();
+    
+    // Get intersection details
+    const intersection = e.intersections[0];
+    if (!intersection) {
+      console.log('[ClampPlacement] No intersection found');
+      return;
+    }
+    
+    const clickPoint = intersection.point.clone();
+    const surfaceNormal = intersection.face?.normal?.clone() || new THREE.Vector3(0, 1, 0);
+    
+    console.log('[ClampPlacement] Click details:', {
+      clickPoint: { x: clickPoint.x, y: clickPoint.y, z: clickPoint.z },
+      surfaceNormal: { x: surfaceNormal.x, y: surfaceNormal.y, z: surfaceNormal.z }
+    });
+    
+    // Transform normal to world space
+    if (intersection.object instanceof THREE.Mesh) {
+      surfaceNormal.transformDirection(intersection.object.matrixWorld);
+    }
+    
+    // Get minimum placement offset for this clamp type (default 15mm)
+    const minPlacementOffset = 15;
+    
+    // For vertical clamps, we need to:
+    // 1. Position fixture point on/near the click point
+    // 2. Calculate rotation so support is outside part silhouette
+    // 3. Ensure Y position respects fixture cutout clearance
+    
+    console.log('[ClampPlacement] Loading clampPlacement module...');
+    
+    import('./Clamps/clampPlacement').then(({ calculateVerticalClampPlacement, isPointInsidePolygon }) => {
+      console.log('[ClampPlacement] Module loaded');
+      const silhouette = partSilhouetteRef.current || [];
+      console.log('[ClampPlacement] Silhouette points:', silhouette.length);
+      
+      // Get all part meshes
+      const allPartMeshes = importedParts
+        .map(p => modelMeshRefs.current.get(p.id)?.current)
+        .filter((m): m is THREE.Mesh => m !== null);
+      
+      console.log('[ClampPlacement] All part meshes count:', allPartMeshes.length);
+      
+      const result = calculateVerticalClampPlacement({
+        clickPoint,
+        surfaceNormal,
+        partMesh,
+        allPartMeshes,
+        partSilhouette: silhouette,
+        existingSupports: supports,
+        existingClamps: placedClamps,
+        baseTopY,
+        minPlacementOffset,
+        clampCategory: clampPlacementMode.clampCategory as 'Toggle Clamps Vertical' | 'Toggle Clamps Side Push',
+      });
+      
+      console.log('[ClampPlacement] Placement result:', result);
+      
+      if (result.success) {
+        // Create the clamp at calculated position
+        const newClamp: PlacedClamp = {
+          id: `clamp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          clampModelId: clampPlacementMode.clampModelId!,
+          position: { x: result.position.x, y: result.position.y, z: result.position.z },
+          rotation: result.rotation,
+          scale: { x: 1, y: 1, z: 1 },
+        };
+        
+        console.log('[ClampPlacement] Creating new clamp:', newClamp);
+        
+        setPlacedClamps(prev => [...prev, newClamp]);
+        setSelectedClampId(newClamp.id);
+        
+        // Exit placement mode and notify UI
+        setClampPlacementMode({ active: false, clampModelId: null, clampCategory: null });
+        partSilhouetteRef.current = null;
+        
+        window.dispatchEvent(new CustomEvent('clamp-placed', { detail: newClamp }));
+      } else {
+        console.log('[ClampPlacement] Placement failed:', result.reason);
+      }
+    }).catch(err => {
+      console.error('[ClampPlacement] Error loading module:', err);
+    });
+  }, [clampPlacementMode, importedParts, supports, placedClamps, baseTopY]);
+
   // Clamp event listeners
   useEffect(() => {
     const onClampPlace = (e: CustomEvent) => {
@@ -2141,6 +2414,52 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       setShowClampDebug(show);
     };
 
+    // Handle start clamp placement mode
+    const onClampStartPlacement = (e: CustomEvent) => {
+      const { clampModelId, clampCategory } = e.detail as { 
+        clampModelId: string; 
+        clampCategory: string;
+      };
+      
+      console.log('[ClampPlacement] Start placement event received:', { clampModelId, clampCategory });
+      
+      // Compute part silhouette for placement
+      const meshes = importedParts
+        .map(p => modelMeshRefs.current.get(p.id)?.current)
+        .filter((m): m is THREE.Mesh => m !== null);
+      
+      console.log('[ClampPlacement] Part meshes found for silhouette:', meshes.length);
+      
+      if (meshes.length > 0) {
+        // Import and compute silhouette
+        import('./Clamps/clampPlacement').then(({ computePartSilhouetteForClamps }) => {
+          console.log('[ClampPlacement] Computing silhouette...');
+          const silhouette = computePartSilhouetteForClamps(meshes, baseTopY);
+          partSilhouetteRef.current = silhouette;
+          console.log('[ClampPlacement] Silhouette computed, points:', silhouette.length);
+        });
+      }
+      
+      setClampPlacementMode({
+        active: true,
+        clampModelId,
+        clampCategory
+      });
+      
+      console.log('[ClampPlacement] Placement mode activated');
+      
+      // Deselect any currently selected item
+      onPartSelected(null);
+      onSupportSelect?.(null);
+      setSelectedClampId(null);
+    };
+
+    // Handle cancel clamp placement mode
+    const onClampCancelPlacement = () => {
+      setClampPlacementMode({ active: false, clampModelId: null, clampCategory: null });
+      partSilhouetteRef.current = null;
+    };
+
     window.addEventListener('clamp-place', onClampPlace as EventListener);
     window.addEventListener('clamp-update', onClampUpdate as EventListener);
     window.addEventListener('clamp-delete', onClampDelete as EventListener);
@@ -2148,6 +2467,8 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     window.addEventListener('clamps-clear-all', onClampsClearAll);
     window.addEventListener('clamp-toggle-debug', onClampToggleDebug as EventListener);
     window.addEventListener('clamp-data-loaded', onClampDataLoaded as EventListener);
+    window.addEventListener('clamp-start-placement', onClampStartPlacement as EventListener);
+    window.addEventListener('clamp-cancel-placement', onClampCancelPlacement);
 
     return () => {
       window.removeEventListener('clamp-place', onClampPlace as EventListener);
@@ -2157,8 +2478,10 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       window.removeEventListener('clamps-clear-all', onClampsClearAll);
       window.removeEventListener('clamp-toggle-debug', onClampToggleDebug as EventListener);
       window.removeEventListener('clamp-data-loaded', onClampDataLoaded as EventListener);
+      window.removeEventListener('clamp-start-placement', onClampStartPlacement as EventListener);
+      window.removeEventListener('clamp-cancel-placement', onClampCancelPlacement);
     };
-  }, [selectedClampId, baseTopY, clampMinOffsets]);
+  }, [selectedClampId, baseTopY, clampMinOffsets, importedParts]);
 
   // Build a THREE.Mesh for a support using the same dimensions/origining as SupportMesh
   const buildSupportMesh = useCallback((support: AnySupport, baseTop: number) => {
@@ -3691,7 +4014,21 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
             partId={part.id}
             onLiveTransformChange={isSelected && isVisible ? handleLiveTransformChange : undefined}
           >
-            <group visible={isVisible}>
+            <group 
+              visible={isVisible}
+              onPointerOver={() => {
+                // Change cursor to crosshair when in placement mode
+                if (clampPlacementMode.active && isVisible) {
+                  document.body.style.cursor = 'crosshair';
+                }
+              }}
+              onPointerOut={() => {
+                // Reset cursor when leaving part
+                if (clampPlacementMode.active) {
+                  document.body.style.cursor = 'auto';
+                }
+              }}
+            >
               <ModelMesh
                 file={part}
                 meshRef={partMeshRef}
@@ -3702,9 +4039,26 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
                 onBoundsChange={(bounds) => {
                   setPartBounds(prev => new Map(prev).set(part.id, bounds));
                 }}
-                disableDoubleClick={placing.active || !isVisible}
+                disableDoubleClick={placing.active || !isVisible || clampPlacementMode.active}
+                onClick={(e) => {
+                  console.log('[ClampPlacement] ModelMesh onClick triggered', {
+                    placementModeActive: clampPlacementMode.active,
+                    isVisible,
+                    hasPartMesh: !!partMeshRef.current
+                  });
+                  // Handle clamp placement click if in placement mode
+                  if (clampPlacementMode.active && isVisible) {
+                    const mesh = partMeshRef.current;
+                    if (mesh) {
+                      console.log('[ClampPlacement] Calling handleClampPlacementClick from ModelMesh');
+                      handleClampPlacementClick(e as any, mesh);
+                    } else {
+                      console.log('[ClampPlacement] No mesh ref available');
+                    }
+                  }
+                }}
                 onDoubleClick={() => {
-                  if (isVisible) {
+                  if (isVisible && !clampPlacementMode.active) {
                     onPartSelected(part.id);
                     window.dispatchEvent(new CustomEvent('mesh-double-click', { detail: { partId: part.id } }));
                   }
@@ -3932,7 +4286,8 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
                     const updated = new Map(prev);
                     updated.set(clampId, {
                       polygon: supportInfo.polygon,
-                      localCenter: { x: supportInfo.localCenter.x, y: supportInfo.localCenter.y }
+                      localCenter: { x: supportInfo.localCenter.x, y: supportInfo.localCenter.y },
+                      fixturePointY: supportInfo.fixturePointY
                     });
                     return updated;
                   });
@@ -3979,15 +4334,62 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
                 }));
               }}
               onTransformEnd={(position, rotation) => {
-                // Final update
-                const finalClamp = placedClamps.find(c => c.id === selectedClampId);
-                if (finalClamp) {
-                  window.dispatchEvent(new CustomEvent('clamp-update', { 
-                    detail: { clampId: selectedClampId, updates: { position, rotation } } 
-                  }));
-                }
+                // Just update state on drag end - NO collision adjustment here
+                window.dispatchEvent(new CustomEvent('clamp-update', { 
+                  detail: { clampId: selectedClampId, updates: { position, rotation } } 
+                }));
               }}
               onDeselect={() => {
+                // Perform collision adjustment when pivot controls are CLOSED
+                const clamp = placedClamps.find(c => c.id === selectedClampId);
+                const supportInfo = clampSupportInfos.get(selectedClampId);
+                
+                if (clamp && supportInfo && supportInfo.polygon.length > 0) {
+                  const partMeshes = importedParts
+                    .map(p => modelMeshRefs.current.get(p.id)?.current)
+                    .filter((m): m is THREE.Mesh => m !== null && partVisibility.get(importedParts.find(ip => modelMeshRefs.current.get(ip.id)?.current === m)?.id || '') !== false);
+                  
+                  import('./Clamps/clampPlacement').then(({ adjustClampPositionAfterTransform, computePartSilhouetteForClamps }) => {
+                    let silhouette = partSilhouetteRef.current;
+                    if (!silhouette || silhouette.length === 0) {
+                      silhouette = computePartSilhouetteForClamps(partMeshes, baseTopY);
+                      partSilhouetteRef.current = silhouette;
+                    }
+                    
+                    const fixturePointRadius = supportInfo.fixturePointRadius || 10;
+                    
+                    console.log('[ClampAdjust] Adjusting on deselect:', {
+                      position: clamp.position,
+                      rotation: clamp.rotation,
+                      supportPolygon: supportInfo.polygon.length,
+                      silhouette: silhouette.length
+                    });
+                    
+                    const result = adjustClampPositionAfterTransform(
+                      clamp.position,
+                      clamp.rotation,
+                      supportInfo.polygon,
+                      fixturePointRadius,
+                      partMeshes,
+                      silhouette,
+                      baseTopY
+                    );
+                    
+                    if (result.wasAdjusted) {
+                      console.log('[ClampAdjust] Adjusted:', result.adjustmentReason);
+                      setPlacedClamps(prev => prev.map(c => {
+                        if (c.id === selectedClampId) {
+                          return { ...c, position: result.position, rotation: result.rotation };
+                        }
+                        return c;
+                      }));
+                      window.dispatchEvent(new CustomEvent('clamp-update', { 
+                        detail: { clampId: selectedClampId, updates: { position: result.position, rotation: result.rotation } } 
+                      }));
+                    }
+                  });
+                }
+                
                 setSelectedClampId(null);
                 window.dispatchEvent(new CustomEvent('clamp-selected', { detail: null }));
               }}

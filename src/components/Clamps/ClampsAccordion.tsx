@@ -289,11 +289,18 @@ const ClampsAccordion: React.FC<ClampsAccordionProps> = ({
                         <p className="text-[10px] font-tech font-medium truncate">
                           {displayName}
                         </p>
-                        {clampModel?.info.force && (
-                          <p className="text-[8px] text-muted-foreground font-tech">
-                            Force: {clampModel.info.force}
-                          </p>
-                        )}
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          {clampModel?.info.force && (
+                            <p className="text-[8px] text-muted-foreground font-tech">
+                              Force: {clampModel.info.force}
+                            </p>
+                          )}
+                          {clampModel?.info.feature && (
+                            <Badge variant="outline" className="text-[7px] h-3 px-1 font-tech">
+                              {clampModel.info.feature}
+                            </Badge>
+                          )}
+                        </div>
                       </div>
                       {/* Delete button */}
                       <div

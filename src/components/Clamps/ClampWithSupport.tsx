@@ -82,8 +82,6 @@ const ClampWithSupport: React.FC<ClampWithSupportProps> = ({
         if (result.data.fixtureMountSurfaceGeometry) {
           const fixturePointTopCenter = result.data.fixturePointTopCenter;
           const minPlacementOffset = result.data.minPlacementOffset;
-          console.log('[ClampWithSupport] fixturePointTopCenter:', fixturePointTopCenter);
-          console.log('[ClampWithSupport] minPlacementOffset:', minPlacementOffset);
           const info = extractSupportFromMountSurface(
             result.data.fixtureMountSurfaceGeometry,
             fixturePointTopCenter,
