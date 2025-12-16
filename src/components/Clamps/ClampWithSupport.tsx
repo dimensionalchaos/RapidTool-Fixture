@@ -14,10 +14,6 @@ import { loadClampModel, LoadedClampData, createClampMaterials } from './clampLo
 import { extractSupportFromMountSurface, ClampSupportInfo } from './clampSupportUtils';
 import ClampSupportMesh from './ClampSupportMesh';
 
-// Edge line rendering constants
-const EDGE_LINE_COLOR = 0x333333;
-const EDGE_LINE_THRESHOLD_ANGLE = 30;
-
 interface ClampWithSupportProps {
   /** The clamp model definition */
   clampModel: ClampModel;
@@ -56,21 +52,11 @@ const ClampWithSupport: React.FC<ClampWithSupportProps> = ({
   const groupRef = useRef<THREE.Group>(null);
   const clampGroupRef = useRef<THREE.Group | null>(null);
   const lastClickTimeRef = useRef<number>(0);
-  const edgeLinesGroupRef = useRef<THREE.Group | null>(null);
   
   const [clampData, setClampData] = useState<LoadedClampData | null>(null);
   const [supportInfo, setSupportInfo] = useState<ClampSupportInfo | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-
-  // Edge line material (stable reference)
-  const edgeLineMaterial = useMemo(() => 
-    new THREE.LineBasicMaterial({
-      color: EDGE_LINE_COLOR,
-      linewidth: 1,
-      transparent: true,
-      opacity: 0.8,
-    }), []);
 
   // Load clamp data on mount or when clamp model changes
   useEffect(() => {
@@ -133,46 +119,6 @@ const ClampWithSupport: React.FC<ClampWithSupportProps> = ({
 
   // Create materials for debug geometries
   const materials = useMemo(() => createClampMaterials(), []);
-
-  // Create edge lines for clamp meshes
-  useEffect(() => {
-    if (!clampGroupRef.current) return;
-    
-    // Create a group to hold edge lines
-    const edgeLinesGroup = new THREE.Group();
-    edgeLinesGroup.name = 'clamp-edge-lines';
-    edgeLinesGroupRef.current = edgeLinesGroup;
-    
-    // Traverse clamp group and create edge lines for each mesh
-    clampGroupRef.current.traverse((child) => {
-      if (child instanceof THREE.Mesh && child.geometry) {
-        const edgeGeometry = new THREE.EdgesGeometry(child.geometry, EDGE_LINE_THRESHOLD_ANGLE);
-        const edgeLines = new THREE.LineSegments(edgeGeometry, edgeLineMaterial);
-        // Copy transform from mesh to edge lines
-        edgeLines.position.copy(child.position);
-        edgeLines.rotation.copy(child.rotation);
-        edgeLines.scale.copy(child.scale);
-        edgeLines.matrixAutoUpdate = true;
-        edgeLinesGroup.add(edgeLines);
-      }
-    });
-    
-    // Add edge lines to clamp group
-    clampGroupRef.current.add(edgeLinesGroup);
-    
-    return () => {
-      // Cleanup edge lines
-      if (edgeLinesGroupRef.current && clampGroupRef.current) {
-        clampGroupRef.current.remove(edgeLinesGroupRef.current);
-        edgeLinesGroupRef.current.traverse((child) => {
-          if (child instanceof THREE.LineSegments) {
-            child.geometry.dispose();
-          }
-        });
-        edgeLinesGroupRef.current = null;
-      }
-    };
-  }, [clampData, edgeLineMaterial]);
   
   // Apply selection highlight to clamp meshes
   useEffect(() => {
