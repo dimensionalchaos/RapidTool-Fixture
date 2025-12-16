@@ -60,8 +60,7 @@ export function extractSupportFromMountSurface(
   fixturePointTopCenter: THREE.Vector3,
   minPlacementOffset: number = 0
 ): ClampSupportInfo | null {
-  if (!geometry || !geometry.attributes.position) {
-    console.warn('[ClampSupport] No geometry or position attribute');
+  if (!geometry?.attributes?.position) {
     return null;
   }
 
@@ -69,7 +68,6 @@ export function extractSupportFromMountSurface(
   const vertexCount = positions.count;
 
   if (vertexCount < 3) {
-    console.warn('[ClampSupport] Not enough vertices');
     return null;
   }
 

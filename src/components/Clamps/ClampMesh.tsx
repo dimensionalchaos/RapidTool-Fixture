@@ -11,7 +11,7 @@
 import React, { useRef, useState, useEffect, useCallback, useMemo } from 'react';
 import * as THREE from 'three';
 import { ThreeEvent } from '@react-three/fiber';
-import { ClampModel, PlacedClamp } from './types';
+import { ClampModel, PlacedClamp, DOUBLE_CLICK_THRESHOLD_MS, SELECTION_COLOR } from './types';
 import { loadClampModel, LoadedClampData, createClampMaterials } from './clampLoader';
 
 interface ClampMeshProps {
@@ -28,12 +28,6 @@ interface ClampMeshProps {
   /** Callback when clamp is clicked */
   onClick?: (clampId: string) => void;
 }
-
-// Double-click detection threshold
-const DOUBLE_CLICK_THRESHOLD_MS = 300;
-
-// Selection highlight color
-const SELECTION_COLOR = 0x3b82f6;
 
 const ClampMesh: React.FC<ClampMeshProps> = ({
   clampModel,
@@ -141,7 +135,7 @@ const ClampMesh: React.FC<ClampMeshProps> = ({
   }
 
   if (error || !clampData) {
-    console.error('Clamp load error:', error);
+    // Load error - don't render anything
     return null;
   }
 

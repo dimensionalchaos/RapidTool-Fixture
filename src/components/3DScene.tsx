@@ -2034,6 +2034,27 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
         }
       }
       
+      // Include clamp support footprint points in bounds
+      for (const placedClamp of placedClamps) {
+        const supportInfo = clampSupportInfos.get(placedClamp.id);
+        if (!supportInfo) continue;
+        
+        // Transform polygon from clamp local space to world space
+        const rotationY = THREE.MathUtils.degToRad(placedClamp.rotation.y);
+        const cosR = Math.cos(rotationY);
+        const sinR = Math.sin(rotationY);
+        
+        for (const [localX, localZ] of supportInfo.polygon) {
+          // Apply Y-axis rotation and add clamp position
+          const worldX = localX * cosR + localZ * sinR + placedClamp.position.x;
+          const worldZ = -localX * sinR + localZ * cosR + placedClamp.position.z;
+          minX = Math.min(minX, worldX);
+          maxX = Math.max(maxX, worldX);
+          minZ = Math.min(minZ, worldZ);
+          maxZ = Math.max(maxZ, worldZ);
+        }
+      }
+      
       // Include part bounds if available
       if (modelBounds) {
         const center = modelBounds.center;
@@ -2110,7 +2131,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       window.removeEventListener('label-select', onLabelSelect as EventListener);
       window.removeEventListener('labels-clear-all', onLabelsClearAll);
     };
-  }, [basePlate, selectedLabelId, supports, modelBounds, baseTopY]);
+  }, [basePlate, selectedLabelId, supports, modelBounds, baseTopY, placedClamps, clampSupportInfos]);
 
   // DOM-level click handler for clamp placement mode
   // This bypasses R3F's event system which can be blocked by PivotControls
@@ -2178,8 +2199,19 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       
       console.log('[ClampPlacement] Loading clampPlacement module...');
       
+      // Notify UI that processing has started
+      window.dispatchEvent(new CustomEvent('clamp-processing-start'));
+      window.dispatchEvent(new CustomEvent('clamp-progress', { 
+        detail: { stage: 'loading', progress: 10, message: 'Loading placement module...' } 
+      }));
+      
       import('./Clamps/clampPlacement').then(({ calculateVerticalClampPlacement }) => {
         console.log('[ClampPlacement] Module loaded, calculating placement...');
+        
+        window.dispatchEvent(new CustomEvent('clamp-progress', { 
+          detail: { stage: 'computing', progress: 30, message: 'Computing optimal position...' } 
+        }));
+        
         const silhouette = partSilhouetteRef.current || [];
         
         const result = calculateVerticalClampPlacement({
@@ -2194,6 +2226,10 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
           minPlacementOffset,
           clampCategory: clampPlacementMode.clampCategory as 'Toggle Clamps Vertical' | 'Toggle Clamps Side Push',
         });
+        
+        window.dispatchEvent(new CustomEvent('clamp-progress', { 
+          detail: { stage: 'positioning', progress: 60, message: 'Positioning clamp support...' } 
+        }));
         
         console.log('[ClampPlacement] Placement result:', result);
         console.log('[ClampPlacement] Debug points:', result.debugPoints);
@@ -2214,6 +2250,10 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
         }
         
         if (result.success) {
+          window.dispatchEvent(new CustomEvent('clamp-progress', { 
+            detail: { stage: 'csg', progress: 80, message: 'Generating support geometry...' } 
+          }));
+          
           const newClamp: PlacedClamp = {
             id: `clamp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
             clampModelId: clampPlacementMode.clampModelId!,
@@ -2231,12 +2271,21 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
           setClampPlacementMode({ active: false, clampModelId: null, clampCategory: null });
           partSilhouetteRef.current = null;
           
+          window.dispatchEvent(new CustomEvent('clamp-progress', { 
+            detail: { stage: 'idle', progress: 100, message: 'Clamp placed successfully' } 
+          }));
           window.dispatchEvent(new CustomEvent('clamp-placed', { detail: newClamp }));
         } else {
           console.log('[ClampPlacement] Placement failed:', result.reason);
+          window.dispatchEvent(new CustomEvent('clamp-progress', { 
+            detail: { stage: 'idle', progress: 0, message: '' } 
+          }));
         }
       }).catch(err => {
         console.error('[ClampPlacement] Error loading module:', err);
+        window.dispatchEvent(new CustomEvent('clamp-progress', { 
+          detail: { stage: 'idle', progress: 0, message: '' } 
+        }));
       });
     };
     
@@ -4301,6 +4350,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
               showDebug={showClampDebug}
               baseTopY={baseTopY}
               showSupport={true}
+              showClampBody={placedClamp.visible !== false}
               onClick={(id) => {
                 setSelectedClampId(id);
                 window.dispatchEvent(new CustomEvent('clamp-selected', { detail: id }));

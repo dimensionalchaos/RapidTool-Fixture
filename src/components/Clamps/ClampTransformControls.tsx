@@ -10,7 +10,7 @@
  * 2. Drop to the part surface
  */
 
-import React, { useRef, useCallback, useEffect, useMemo } from 'react';
+import { useRef, useCallback, useEffect } from 'react';
 import { useThree } from '@react-three/fiber';
 import { PivotControls, Html } from '@react-three/drei';
 import * as THREE from 'three';

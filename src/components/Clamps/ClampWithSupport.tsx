@@ -9,9 +9,9 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { ThreeEvent } from '@react-three/fiber';
-import { ClampModel, PlacedClamp } from './types';
+import { ClampModel, PlacedClamp, DOUBLE_CLICK_THRESHOLD_MS, SELECTION_COLOR } from './types';
 import { loadClampModel, LoadedClampData, createClampMaterials } from './clampLoader';
-import { extractSupportFromMountSurface, ClampSupportInfo, createClampSupport } from './clampSupportUtils';
+import { extractSupportFromMountSurface, ClampSupportInfo } from './clampSupportUtils';
 import ClampSupportMesh from './ClampSupportMesh';
 
 interface ClampWithSupportProps {
@@ -27,6 +27,8 @@ interface ClampWithSupportProps {
   baseTopY?: number;
   /** Whether to show the clamp support */
   showSupport?: boolean;
+  /** Whether to show the clamp body (supports remain visible) */
+  showClampBody?: boolean;
   /** Callback when clamp is double-clicked */
   onDoubleClick?: (clampId: string) => void;
   /** Callback when clamp is clicked */
@@ -35,12 +37,6 @@ interface ClampWithSupportProps {
   onClampDataLoaded?: (clampId: string, supportInfo: ClampSupportInfo | null) => void;
 }
 
-// Double-click detection threshold
-const DOUBLE_CLICK_THRESHOLD_MS = 300;
-
-// Selection highlight color
-const SELECTION_COLOR = 0x3b82f6;
-
 const ClampWithSupport: React.FC<ClampWithSupportProps> = ({
   clampModel,
   placedClamp,
@@ -48,6 +44,7 @@ const ClampWithSupport: React.FC<ClampWithSupportProps> = ({
   showDebug = false,
   baseTopY = 0,
   showSupport = true,
+  showClampBody = true,
   onDoubleClick,
   onClick,
   onClampDataLoaded,
@@ -181,7 +178,7 @@ const ClampWithSupport: React.FC<ClampWithSupportProps> = ({
   }
 
   if (error || !clampData) {
-    console.error('Clamp load error:', error);
+    // Load error - don't render anything
     return null;
   }
 
@@ -202,56 +199,58 @@ const ClampWithSupport: React.FC<ClampWithSupportProps> = ({
         />
       )}
       
-      {/* Clamp Mesh Group */}
-      <group
-        ref={groupRef}
-        position={[position.x, position.y, position.z]}
-        rotation={[
-          THREE.MathUtils.degToRad(rotation.x),
-          THREE.MathUtils.degToRad(rotation.y),
-          THREE.MathUtils.degToRad(rotation.z),
-        ]}
-        scale={[scale.x, scale.y, scale.z]}
-      >
-        {/* Inner group offset so pivot is at fixture point top center */}
-        <group position={[pivotOffset.x, pivotOffset.y, pivotOffset.z]}>
-          {/* Main clamp group with materials from MTL file */}
-          <primitive 
-            object={clampData.clampGroup} 
-            onClick={handleClick}
-          />
-
-          {/* Debug geometries - only shown when showDebug is true */}
-          {showDebug && clampData.fixturePointGeometry && (
-            <mesh
-              geometry={clampData.fixturePointGeometry}
-              material={materials.fixturePoint}
+      {/* Clamp Mesh Group - only render if showClampBody is true */}
+      {showClampBody && (
+        <group
+          ref={groupRef}
+          position={[position.x, position.y, position.z]}
+          rotation={[
+            THREE.MathUtils.degToRad(rotation.x),
+            THREE.MathUtils.degToRad(rotation.y),
+            THREE.MathUtils.degToRad(rotation.z),
+          ]}
+          scale={[scale.x, scale.y, scale.z]}
+        >
+          {/* Inner group offset so pivot is at fixture point top center */}
+          <group position={[pivotOffset.x, pivotOffset.y, pivotOffset.z]}>
+            {/* Main clamp group with materials from MTL file */}
+            <primitive 
+              object={clampData.clampGroup} 
+              onClick={handleClick}
             />
-          )}
 
-          {showDebug && clampData.fixtureMountSurfaceGeometry && (
-            <mesh
-              geometry={clampData.fixtureMountSurfaceGeometry}
-              material={materials.fixtureMountSurface}
-            />
-          )}
+            {/* Debug geometries - only shown when showDebug is true */}
+            {showDebug && clampData.fixturePointGeometry && (
+              <mesh
+                geometry={clampData.fixturePointGeometry}
+                material={materials.fixturePoint}
+              />
+            )}
 
-          {showDebug && clampData.fixtureCutoutsGeometry && (
-            <mesh
-              geometry={clampData.fixtureCutoutsGeometry}
-              material={materials.fixtureCutouts}
-            />
+            {showDebug && clampData.fixtureMountSurfaceGeometry && (
+              <mesh
+                geometry={clampData.fixtureMountSurfaceGeometry}
+                material={materials.fixtureMountSurface}
+              />
+            )}
+
+            {showDebug && clampData.fixtureCutoutsGeometry && (
+              <mesh
+                geometry={clampData.fixtureCutoutsGeometry}
+                material={materials.fixtureCutouts}
+              />
+            )}
+          </group>
+
+          {/* Pivot point indicator (small sphere at 0,0,0 of this group = fixture point top center) */}
+          {showDebug && (
+            <mesh>
+              <sphereGeometry args={[1, 16, 16]} />
+              <meshBasicMaterial color={0xff0000} />
+            </mesh>
           )}
         </group>
-
-        {/* Pivot point indicator (small sphere at 0,0,0 of this group = fixture point top center) */}
-        {showDebug && (
-          <mesh>
-            <sphereGeometry args={[1, 16, 16]} />
-            <meshBasicMaterial color={0xff0000} />
-          </mesh>
-        )}
-      </group>
+      )}
     </>
   );
 };

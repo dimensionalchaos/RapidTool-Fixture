@@ -8,14 +8,17 @@
  * OPTIMIZATION: Geometry is created at origin without baking position.
  * Position/rotation are applied via React Three Fiber props to avoid
  * recreating geometry on every clamp transform change during drag.
+ * 
+ * CSG operations are performed in a web worker to keep the UI responsive.
  */
 
-import React, { useMemo, useRef, useState, useEffect } from 'react';
+import React, { useMemo, useRef, useState, useEffect, useCallback } from 'react';
 import * as THREE from 'three';
 import { Brush, Evaluator, SUBTRACTION } from 'three-bvh-csg';
 import { ClampSupportInfo } from './clampSupportUtils';
 import { PlacedClamp } from './types';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { performClampCSGInWorker } from '@/lib/workers/workerManager';
 
 // Reusable CSG evaluator for better performance
 const csgEvaluator = new Evaluator();
@@ -70,7 +73,6 @@ function createSupportGeometryAtOrigin(
   cornerRadius: number = 0
 ): THREE.BufferGeometry | null {
   if (!polygon || polygon.length < 3 || height <= 0) {
-    console.warn('[ClampSupportMesh] Invalid support config:', { polygonLen: polygon?.length, height });
     return null;
   }
 
@@ -179,7 +181,6 @@ function createSupportGeometryAtOrigin(
   // Merge all geometries
   const merged = mergeGeometries(geometriesToMerge, false);
   if (!merged) {
-    console.warn('[ClampSupportMesh] Failed to merge geometries');
     return null;
   }
 
@@ -703,8 +704,13 @@ const ClampSupportMesh: React.FC<ClampSupportMeshProps> = ({
   useEffect(() => {
     const handleClampSelected = (e: CustomEvent) => {
       const selectedClampId = e.detail;
-      // Gizmo is open if THIS clamp is selected
-      setIsGizmoOpen(selectedClampId === placedClamp.id);
+      const nowOpen = selectedClampId === placedClamp.id;
+      setIsGizmoOpen(nowOpen);
+      
+      // Clear worker geometry when gizmo opens so baseGeometry is used during transforms
+      if (nowOpen) {
+        setWorkerCSGGeometry(null);
+      }
     };
     
     window.addEventListener('clamp-selected', handleClampSelected as EventListener);
@@ -754,99 +760,130 @@ const ClampSupportMesh: React.FC<ClampSupportMeshProps> = ({
     return createCutoutsGeometryAtOrigin(fixtureCutoutsGeometry, fixturePointTopCenter);
   }, [fixtureCutoutsGeometry, fixturePointTopCenter]);
 
-  // Pre-compute and cache the cutouts Brush (BVH building is expensive)
-  // This brush is at origin with no Y offset - we'll clone and offset during CSG
-  const cutoutsBrushBase = useMemo(() => {
+  // State for worker-computed CSG geometry
+  const [workerCSGGeometry, setWorkerCSGGeometry] = useState<THREE.BufferGeometry | null>(null);
+  const [isComputingCSG, setIsComputingCSG] = useState(false);
+  const workerRequestIdRef = useRef(0);
+
+  // Prepare cutouts geometry with Y offset applied (for worker)
+  const cutoutsWithOffset = useMemo(() => {
     if (!cutoutsAtOrigin) return null;
-    return new Brush(cutoutsAtOrigin);
-  }, [cutoutsAtOrigin]);
+    const clone = cutoutsAtOrigin.clone();
+    const yOffset = supportHeight - supportInfo.mountSurfaceLocalY;
+    clone.translate(0, yOffset, 0);
+    return clone;
+  }, [cutoutsAtOrigin, supportHeight, supportInfo.mountSurfaceLocalY]);
 
-  // Apply CSG subtraction - DEFERRED while gizmo is open for performance
-  // While gizmo is open, we show base geometry; CSG runs after gizmo closes
-  const csgGeometry = useMemo(() => {
-    // Skip CSG while gizmo is open - will recalculate when gizmo closes
+  // Perform CSG in web worker - DEFERRED while gizmo is open
+  useEffect(() => {
+    // Skip CSG while gizmo is open
     if (isGizmoOpen) {
-      return null; // Signal to use cached or base geometry
+      return;
     }
     
-    if (!baseGeometry) return null;
+    if (!baseGeometry) {
+      setWorkerCSGGeometry(null);
+      return;
+    }
     
-    // If no cutouts, return base geometry
-    if (!cutoutsBrushBase) {
-      return baseGeometry;
+    // If no cutouts, use base geometry directly
+    if (!cutoutsWithOffset) {
+      setWorkerCSGGeometry(baseGeometry);
+      return;
     }
 
-    try {
-      // Clone geometries for CSG (don't mutate originals)
-      const supportClone = baseGeometry.clone();
-      
-      // Clone the cutouts geometry and apply Y offset for this support height
-      const cutoutsClone = cutoutsAtOrigin!.clone();
-      
-      // The support geometry:
-      // - XZ: polygon is relative to fixture point (origin)
-      // - Y: 0 to supportHeight (bottom to top, where top = mount surface)
-      //
-      // The cutouts geometry (after createCutoutsGeometryAtOrigin):
-      // - XZ: translated so fixture point is at origin
-      // - Y: original Y positions from clamp model
-      //
-      // To align cutouts Y with support Y:
-      // - In local clamp space, mount surface is at Y = mountSurfaceLocalY
-      // - In support space, mount surface (top) is at Y = supportHeight
-      // - Offset = supportHeight - mountSurfaceLocalY
-      
-      const yOffset = supportHeight - supportInfo.mountSurfaceLocalY;
-      cutoutsClone.translate(0, yOffset, 0);
-      
-      // Ensure UVs exist for CSG (three-bvh-csg requires UV attribute)
-      if (!supportClone.getAttribute('uv')) {
-        const posAttr = supportClone.getAttribute('position');
-        if (posAttr) {
-          const uvArray = new Float32Array(posAttr.count * 2);
-          supportClone.setAttribute('uv', new THREE.BufferAttribute(uvArray, 2));
+    // Increment request ID to handle race conditions
+    const requestId = ++workerRequestIdRef.current;
+    setIsComputingCSG(true);
+    
+    // Emit progress event
+    window.dispatchEvent(new CustomEvent('clamp-progress', { 
+      detail: { stage: 'csg', progress: 0, message: 'Computing support geometry...' } 
+    }));
+
+    // Try worker first, fall back to synchronous if worker fails
+    performClampCSGInWorker(
+      baseGeometry,
+      cutoutsWithOffset,
+      (progress) => {
+        window.dispatchEvent(new CustomEvent('clamp-progress', { 
+          detail: { stage: 'csg', progress, message: `Processing CSG (${progress}%)...` } 
+        }));
+      }
+    ).then(result => {
+      // Only update if this is still the latest request
+      if (requestId === workerRequestIdRef.current) {
+        setWorkerCSGGeometry(result || baseGeometry);
+        setIsComputingCSG(false);
+        window.dispatchEvent(new CustomEvent('clamp-progress', { 
+          detail: { stage: 'idle', progress: 100, message: '' } 
+        }));
+      }
+    }).catch(() => {
+      // Fallback to synchronous CSG on worker failure
+      if (requestId === workerRequestIdRef.current) {
+        try {
+          const supportClone = baseGeometry.clone();
+          const cutoutsClone = cutoutsWithOffset.clone();
+          
+          // Ensure UVs exist
+          if (!supportClone.getAttribute('uv')) {
+            const posAttr = supportClone.getAttribute('position');
+            if (posAttr) {
+              const uvArray = new Float32Array(posAttr.count * 2);
+              supportClone.setAttribute('uv', new THREE.BufferAttribute(uvArray, 2));
+            }
+          }
+          
+          const supportBrush = new Brush(supportClone);
+          const cutoutsBrush = new Brush(cutoutsClone);
+          const result = csgEvaluator.evaluate(supportBrush, cutoutsBrush, SUBTRACTION);
+          
+          if (result?.geometry) {
+            result.geometry.computeVertexNormals();
+            setWorkerCSGGeometry(result.geometry);
+          } else {
+            setWorkerCSGGeometry(baseGeometry);
+          }
+        } catch {
+          setWorkerCSGGeometry(baseGeometry);
         }
+        setIsComputingCSG(false);
+        window.dispatchEvent(new CustomEvent('clamp-progress', { 
+          detail: { stage: 'idle', progress: 100, message: '' } 
+        }));
       }
-      
-      // Create brushes for CSG (Brush caches BVH for faster operations)
-      const supportBrush = new Brush(supportClone);
-      const cutoutsBrush = new Brush(cutoutsClone);
-      
-      // Perform CSG subtraction using shared evaluator
-      const result = csgEvaluator.evaluate(supportBrush, cutoutsBrush, SUBTRACTION);
-      
-      if (result && result.geometry) {
-        result.geometry.computeVertexNormals();
-        return result.geometry;
-      }
-      
-      // Fallback to base geometry if CSG fails
-      return baseGeometry;
-    } catch (error) {
-      console.warn('[ClampSupportMesh] CSG subtraction failed:', error);
-      return baseGeometry;
-    }
-  }, [baseGeometry, cutoutsBrushBase, cutoutsAtOrigin, supportHeight, supportInfo.mountSurfaceLocalY, isGizmoOpen]);
+    });
+
+    return () => {
+      // Cancel by incrementing request ID
+      workerRequestIdRef.current++;
+    };
+  }, [baseGeometry, cutoutsWithOffset, isGizmoOpen]);
 
   // Cache the last successful CSG geometry and determine what to render
-  // While gizmo open: use base geometry (fast)
-  // After gizmo closes: use CSG geometry (accurate)
+  // While gizmo open: use base geometry (fast, updates in real-time)
+  // After gizmo closes: use worker CSG geometry (accurate)
   const geometry = useMemo(() => {
-    if (csgGeometry) {
-      // CSG completed - cache and use it
-      lastCSGGeometryRef.current = csgGeometry;
-      return csgGeometry;
+    // While gizmo is open, ALWAYS use baseGeometry for real-time height updates
+    if (isGizmoOpen) {
+      return baseGeometry;
     }
     
-    if (isGizmoOpen) {
-      // While gizmo is open, use base geometry for performance
-      // (CSG will recalculate when gizmo closes)
+    // While CSG is computing, show base geometry
+    if (isComputingCSG) {
       return baseGeometry;
+    }
+    
+    // Use worker CSG result if available
+    if (workerCSGGeometry) {
+      lastCSGGeometryRef.current = workerCSGGeometry;
+      return workerCSGGeometry;
     }
     
     // Fallback to cached CSG or base geometry
     return lastCSGGeometryRef.current || baseGeometry;
-  }, [csgGeometry, isGizmoOpen, baseGeometry]);
+  }, [workerCSGGeometry, isGizmoOpen, isComputingCSG, baseGeometry]);
 
   // Create material (stable reference)
   const material = useMemo(() => createClampSupportMaterial(), []);

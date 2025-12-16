@@ -1,5 +1,19 @@
 // Clamp type definitions
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Constants
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Double-click detection threshold in milliseconds */
+export const DOUBLE_CLICK_THRESHOLD_MS = 300;
+
+/** Selection highlight color (blue) */
+export const SELECTION_COLOR = 0x3b82f6;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Types
+// ─────────────────────────────────────────────────────────────────────────────
+
 export type ClampCategory = 'Toggle Clamps Vertical' | 'Toggle Clamps Side Push';
 
 export interface ClampInfo {
@@ -36,6 +50,8 @@ export interface PlacedClamp {
   position: { x: number; y: number; z: number };
   rotation: { x: number; y: number; z: number };
   scale: { x: number; y: number; z: number };
+  /** Whether the clamp body is visible (supports remain visible) */
+  visible?: boolean;
 }
 
 export interface ClampsState {

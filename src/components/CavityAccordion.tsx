@@ -5,7 +5,7 @@ import {
   AccordionTrigger,
 } from '@/components/ui/accordion';
 import { Badge } from '@/components/ui/badge';
-import { Box, Eye, Loader2 } from 'lucide-react';
+import { SquaresSubtract, Eye, Loader2 } from 'lucide-react';
 import { CavitySettings } from '@/lib/offset/types';
 
 interface CavityAccordionProps {
@@ -35,7 +35,7 @@ const CavityAccordion: React.FC<CavityAccordionProps> = ({
     <AccordionItem value="cavity" className="border-border/50">
       <AccordionTrigger className="py-2 text-xs font-tech hover:no-underline">
         <div className="flex items-center gap-2 flex-1">
-          <Box className="w-3.5 h-3.5 text-primary" />
+          <SquaresSubtract className="w-3.5 h-3.5 text-primary" />
           Cavity
           {isProcessing && (
             <Badge variant="secondary" className="ml-auto font-tech text-[8px] h-4 bg-amber-500/20 text-amber-600">

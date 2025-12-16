@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, memo } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -6,6 +6,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
+import { Progress } from '@/components/ui/progress';
 import {
   Accordion,
   AccordionContent,
@@ -26,9 +27,9 @@ import {
   ArrowDown,
   ArrowRight,
   ExternalLink,
-  Zap,
   MousePointer,
-  X
+  X,
+  Loader2
 } from 'lucide-react';
 import { 
   ClampModel, 
@@ -40,9 +41,121 @@ import {
   CATEGORY_INFO 
 } from './clampData';
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Types
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface ClampProgress {
+  stage: 'idle' | 'loading' | 'computing' | 'positioning' | 'csg';
+  progress: number;
+  message: string;
+}
+
 interface ClampsStepContentProps {
   hasWorkpiece?: boolean;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Custom Hook: Track clamp processing progress
+// ─────────────────────────────────────────────────────────────────────────────
+
+function useClampProgress(): ClampProgress {
+  const [progress, setProgress] = useState<ClampProgress>({
+    stage: 'idle',
+    progress: 0,
+    message: '',
+  });
+
+  useEffect(() => {
+    const handleClampProgress = (e: CustomEvent<{ stage: string; progress: number; message?: string }>) => {
+      const { stage, progress: prog, message } = e.detail;
+      setProgress({
+        stage: stage as ClampProgress['stage'],
+        progress: prog,
+        message: message || getStageMessage(stage, prog),
+      });
+    };
+
+    const handleClampPlaced = () => {
+      setProgress({ stage: 'idle', progress: 100, message: '' });
+    };
+
+    const handlePlacementCancelled = () => {
+      setProgress({ stage: 'idle', progress: 0, message: '' });
+    };
+
+    window.addEventListener('clamp-progress', handleClampProgress as EventListener);
+    window.addEventListener('clamp-placed', handleClampPlaced);
+    window.addEventListener('clamp-placement-cancelled', handlePlacementCancelled);
+
+    return () => {
+      window.removeEventListener('clamp-progress', handleClampProgress as EventListener);
+      window.removeEventListener('clamp-placed', handleClampPlaced);
+      window.removeEventListener('clamp-placement-cancelled', handlePlacementCancelled);
+    };
+  }, []);
+
+  return progress;
+}
+
+function getStageMessage(stage: string, progress: number): string {
+  switch (stage) {
+    case 'loading':
+      return 'Loading clamp model...';
+    case 'computing':
+      return 'Computing placement position...';
+    case 'positioning':
+      return 'Optimizing clamp position...';
+    case 'csg':
+      return `Processing support geometry (${progress}%)...`;
+    default:
+      return '';
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sub-Components
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Processing indicator card with progress */
+const ProcessingCard = memo<{ progress: ClampProgress }>(({ progress }) => {
+  const hasProgress = progress.progress > 0 && progress.progress < 100;
+
+  return (
+    <Card className="tech-glass p-4 bg-primary/5 border-primary/30">
+      <div className="space-y-3">
+        <div className="flex items-center gap-3">
+          <div className="relative w-8 h-8">
+            <div className="absolute inset-0 rounded-full border-2 border-primary/20" />
+            <div className="absolute inset-0 rounded-full border-2 border-primary border-t-transparent animate-spin" />
+          </div>
+          <div className="flex-1">
+            <p className="text-xs font-tech font-medium text-primary">
+              Placing Clamp
+            </p>
+            <p className="text-[10px] text-muted-foreground">
+              {progress.message || 'Processing...'}
+            </p>
+          </div>
+        </div>
+
+        {hasProgress ? (
+          <div className="space-y-1">
+            <Progress value={progress.progress} className="h-1.5" />
+            <p className="text-[8px] text-muted-foreground text-right font-mono">
+              {progress.progress.toFixed(0)}%
+            </p>
+          </div>
+        ) : (
+          <div className="h-1.5 bg-primary/10 rounded-full overflow-hidden">
+            <div className="h-full bg-primary/60 rounded-full animate-pulse" style={{ width: '60%' }} />
+          </div>
+        )}
+      </div>
+    </Card>
+  );
+});
+ProcessingCard.displayName = 'ProcessingCard';
 
 const ClampsStepContent: React.FC<ClampsStepContentProps> = ({
   hasWorkpiece = false,
@@ -53,6 +166,10 @@ const ClampsStepContent: React.FC<ClampsStepContentProps> = ({
   const [expandedClamp, setExpandedClamp] = useState<string | null>(null);
   const [showDebug, setShowDebug] = useState(true);
   const [isPlacementMode, setIsPlacementMode] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
+  
+  // Track clamp processing progress
+  const clampProgress = useClampProgress();
   
   // Track expanded accordion categories
   const [expandedCategories, setExpandedCategories] = useState<string[]>([]);
@@ -76,18 +193,26 @@ const ClampsStepContent: React.FC<ClampsStepContentProps> = ({
   useEffect(() => {
     const handleClampPlaced = () => {
       setIsPlacementMode(false);
+      setIsProcessing(false);
     };
     
     const handlePlacementCancelled = () => {
       setIsPlacementMode(false);
+      setIsProcessing(false);
+    };
+    
+    const handleClampProcessingStart = () => {
+      setIsProcessing(true);
     };
     
     window.addEventListener('clamp-placed', handleClampPlaced);
     window.addEventListener('clamp-placement-cancelled', handlePlacementCancelled);
+    window.addEventListener('clamp-processing-start', handleClampProcessingStart);
     
     return () => {
       window.removeEventListener('clamp-placed', handleClampPlaced);
       window.removeEventListener('clamp-placement-cancelled', handlePlacementCancelled);
+      window.removeEventListener('clamp-processing-start', handleClampProcessingStart);
     };
   }, []);
 
@@ -173,9 +298,9 @@ const ClampsStepContent: React.FC<ClampsStepContentProps> = ({
                 </AccordionTrigger>
                 
                 <AccordionContent className="pb-0">
-                  <div className="px-2 pb-2 space-y-1">
+                  <div className="px-1 pb-2 space-y-0.5">
                     {categoryGroup.clamps.length === 0 ? (
-                      <p className="text-xs text-muted-foreground font-tech italic py-2 px-1">
+                      <p className="text-[10px] text-muted-foreground font-tech italic py-2 px-1">
                         No clamps available in this category
                       </p>
                     ) : (
@@ -189,19 +314,19 @@ const ClampsStepContent: React.FC<ClampsStepContentProps> = ({
                             open={isExpanded}
                             onOpenChange={(open) => setExpandedClamp(open ? clamp.id : null)}
                           >
-                            <Card
+                            <div
                               className={`
-                                tech-glass transition-all overflow-hidden
-                                ${isSelected ? 'border-primary bg-primary/10 ring-1 ring-primary/30' : 'hover:border-primary/50 hover:bg-primary/5'}
+                                border rounded-md transition-all overflow-hidden
+                                ${isSelected ? 'border-primary bg-primary/5' : 'border-border/50 hover:border-border'}
                               `}
                             >
                               {/* Compact Row - Always Visible */}
                               <div
-                                className="flex items-center gap-2 p-2 cursor-pointer"
+                                className="flex items-center gap-1.5 py-1 px-1.5 cursor-pointer"
                                 onClick={() => setSelectedClamp(clamp)}
                               >
                                 {/* Thumbnail */}
-                                <div className="w-8 h-8 rounded bg-muted flex items-center justify-center overflow-hidden flex-shrink-0">
+                                <div className="w-6 h-6 rounded bg-muted/50 flex items-center justify-center overflow-hidden flex-shrink-0">
                                   {clamp.imagePath && !imageErrors.has(clamp.id) ? (
                                     <img 
                                       src={clamp.imagePath} 
@@ -210,47 +335,53 @@ const ClampsStepContent: React.FC<ClampsStepContentProps> = ({
                                       onError={() => handleImageError(clamp.id)}
                                     />
                                   ) : (
-                                    <Pin className="w-4 h-4 text-muted-foreground" />
+                                    <Pin className="w-3 h-3 text-muted-foreground" />
                                   )}
                                 </div>
                                 
-                                {/* Name */}
-                                <span className="text-xs font-tech font-medium truncate flex-1 min-w-0">
-                                  {clamp.name}
-                                </span>
-                                
-                                {/* Force Badge */}
-                                {clamp.info.force && (
-                                  <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-5 font-mono flex-shrink-0">
-                                    <Zap className="w-2.5 h-2.5 mr-0.5" />
-                                    {clamp.info.force}
-                                  </Badge>
-                                )}
+                                {/* Name and Info */}
+                                <div className="flex-1 min-w-0 text-left">
+                                  <p className="text-[10px] font-tech font-medium truncate">
+                                    {clamp.name}
+                                  </p>
+                                  <div className="flex items-center gap-1 flex-wrap">
+                                    {clamp.info.force && (
+                                      <p className="text-[8px] text-muted-foreground font-tech">
+                                        Force: {clamp.info.force}
+                                      </p>
+                                    )}
+                                    {clamp.info.feature && (
+                                      <Badge variant="outline" className="text-[7px] h-3 px-1 font-tech">
+                                        {clamp.info.feature}
+                                      </Badge>
+                                    )}
+                                  </div>
+                                </div>
                                 
                                 {/* Expand Toggle */}
                                 <CollapsibleTrigger asChild>
-                                  <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    className="h-6 w-6 p-0 flex-shrink-0"
+                                  <div
+                                    role="button"
+                                    tabIndex={0}
+                                    className="w-5 h-5 flex items-center justify-center rounded hover:bg-muted/80 flex-shrink-0 cursor-pointer"
                                     onClick={(e) => e.stopPropagation()}
                                   >
                                     {isExpanded ? (
-                                      <ChevronDown className="w-3.5 h-3.5" />
+                                      <ChevronDown className="w-3 h-3" />
                                     ) : (
-                                      <ChevronRight className="w-3.5 h-3.5" />
+                                      <ChevronRight className="w-3 h-3" />
                                     )}
-                                  </Button>
+                                  </div>
                                 </CollapsibleTrigger>
                               </div>
                               
                               {/* Expanded Content */}
                               <CollapsibleContent>
-                                <div className="px-2 pb-2 pt-0 border-t border-border/50">
-                                  <div className="pt-2 space-y-2">
+                                <div className="px-1.5 pb-1.5 pt-0 border-t border-border/50">
+                                  <div className="pt-1.5 space-y-1.5">
                                     {/* Full Image */}
                                     {clamp.imagePath && !imageErrors.has(clamp.id) && (
-                                      <div className="w-full h-24 rounded bg-muted overflow-hidden">
+                                      <div className="w-full h-20 rounded bg-muted overflow-hidden">
                                         <img 
                                           src={clamp.imagePath} 
                                           alt={clamp.name}
@@ -261,7 +392,7 @@ const ClampsStepContent: React.FC<ClampsStepContentProps> = ({
                                     )}
                                     
                                     {/* Details */}
-                                    <div className="text-xs text-muted-foreground font-tech space-y-1">
+                                    <div className="text-[10px] text-muted-foreground font-tech space-y-0.5">
                                       {clamp.info.force && (
                                         <p>
                                           <span className="text-foreground">Clamping Force:</span> {clamp.info.force}
@@ -283,17 +414,17 @@ const ClampsStepContent: React.FC<ClampsStepContentProps> = ({
                                         href={clamp.info.url}
                                         target="_blank"
                                         rel="noopener noreferrer"
-                                        className="text-xs text-primary hover:underline font-tech inline-flex items-center gap-1"
+                                        className="text-[10px] text-primary hover:underline font-tech inline-flex items-center gap-1"
                                         onClick={(e) => e.stopPropagation()}
                                       >
-                                        View Product Details
-                                        <ExternalLink className="w-3 h-3" />
+                                        View Details
+                                        <ExternalLink className="w-2.5 h-2.5" />
                                       </a>
                                     )}
                                   </div>
                                 </div>
                               </CollapsibleContent>
-                            </Card>
+                            </div>
                           </Collapsible>
                         );
                       })
@@ -307,7 +438,7 @@ const ClampsStepContent: React.FC<ClampsStepContentProps> = ({
       </div>
 
       {/* Placement Mode Prompt */}
-      {isPlacementMode && selectedClamp && (
+      {isPlacementMode && selectedClamp && !isProcessing && (
         <Alert className="bg-primary/10 border-primary/30">
           <MousePointer className="h-4 w-4 text-primary" />
           <AlertDescription className="text-xs font-tech">
@@ -329,8 +460,13 @@ const ClampsStepContent: React.FC<ClampsStepContentProps> = ({
         </Alert>
       )}
 
+      {/* Processing Progress Card */}
+      {isProcessing && clampProgress.stage !== 'idle' && (
+        <ProcessingCard progress={clampProgress} />
+      )}
+
       {/* Place Clamp Button */}
-      {selectedClamp && !isPlacementMode && (
+      {selectedClamp && !isPlacementMode && !isProcessing && (
         <Button
           variant="default"
           size="sm"
@@ -343,7 +479,7 @@ const ClampsStepContent: React.FC<ClampsStepContentProps> = ({
       )}
 
       {/* Cancel Placement Button (shown during placement mode) */}
-      {isPlacementMode && (
+      {isPlacementMode && !isProcessing && (
         <Button
           variant="outline"
           size="sm"

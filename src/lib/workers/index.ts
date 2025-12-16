@@ -6,6 +6,8 @@ export {
   performBatchCSGSubtractionInWorker,
   performCSGSubtractionInWorker,
   performBatchCSGUnionInWorker,
+  performClampCSGInWorker,
+  serializeGeometryForClampWorker,
   extractGeometryForWorker,
   reconstructGeometry,
   terminateWorkers

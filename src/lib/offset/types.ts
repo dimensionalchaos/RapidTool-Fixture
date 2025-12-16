@@ -151,7 +151,7 @@ export function getAdaptivePixelsPerUnit(diagonal: number): number {
 
 export const DEFAULT_CAVITY_SETTINGS: CavitySettings = {
   enabled: true,
-  offsetDistance: 0.5,
+  offsetDistance: 0.2,
   pixelsPerUnit: 6,
   rotationXZ: 0,
   rotationYZ: 0,

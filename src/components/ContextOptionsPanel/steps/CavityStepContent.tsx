@@ -286,14 +286,14 @@ const CavityStepContent: React.FC<CavityStepContentProps> = ({
           <Slider
             value={[settings.offsetDistance]}
             onValueChange={([v]) => handleSettingChange('offsetDistance', v)}
-            min={0.1}
+            min={0.05}
             max={3}
-            step={0.1}
+            step={0.05}
             className="flex-1"
             disabled={isProcessing}
           />
           <Badge variant="secondary" className="font-tech min-w-[50px] justify-center">
-            {settings.offsetDistance.toFixed(1)}mm
+            {settings.offsetDistance.toFixed(2)}mm
           </Badge>
         </div>
         <p className="text-[8px] text-muted-foreground font-tech">

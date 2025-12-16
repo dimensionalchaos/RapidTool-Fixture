@@ -237,10 +237,8 @@ async function loadOBJWithMTLAsGroup(objPath: string, mtlPath: string): Promise<
         );
       },
       undefined,
-      (error) => {
+      () => {
         // MTL load failed, fall back to OBJ only with default material
-        console.warn(`MTL load failed for ${mtlPath}, loading OBJ with default material`);
-        
         const defaultLoader = new OBJLoader();
         defaultLoader.load(
           objPath,

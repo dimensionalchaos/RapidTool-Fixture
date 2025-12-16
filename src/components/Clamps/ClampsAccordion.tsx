@@ -14,7 +14,6 @@ import {
 } from '@/components/ui/accordion';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Pin, Trash2, Crosshair, RotateCcw, Eye, EyeOff } from 'lucide-react';
 import { PlacedClamp } from './types';
@@ -301,6 +300,37 @@ const ClampsAccordion: React.FC<ClampsAccordionProps> = ({
                             </Badge>
                           )}
                         </div>
+                      </div>
+                      {/* Visibility toggle */}
+                      <div
+                        role="button"
+                        tabIndex={0}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          e.preventDefault();
+                          const currentlyVisible = clamp.visible !== false; // default to visible
+                          handleClampUpdate(clamp.id, { visible: !currentlyVisible });
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.stopPropagation();
+                            e.preventDefault();
+                            const currentlyVisible = clamp.visible !== false;
+                            handleClampUpdate(clamp.id, { visible: !currentlyVisible });
+                          }
+                        }}
+                        className={`w-6 h-6 p-0 flex items-center justify-center rounded cursor-pointer transition-colors ${
+                          clamp.visible === false
+                            ? 'text-muted-foreground hover:text-foreground hover:bg-muted'
+                            : 'text-foreground hover:bg-muted'
+                        }`}
+                        title={clamp.visible === false ? "Show clamp" : "Hide clamp"}
+                      >
+                        {clamp.visible === false ? (
+                          <EyeOff className="w-3 h-3" />
+                        ) : (
+                          <Eye className="w-3 h-3" />
+                        )}
                       </div>
                       {/* Delete button */}
                       <div

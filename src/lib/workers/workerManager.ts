@@ -351,6 +351,171 @@ export function terminateWorkers(): void {
     csgWorker = null;
     csgWorkerPromises.clear();
   }
+  if (clampCSGWorker) {
+    clampCSGWorker.terminate();
+    clampCSGWorker = null;
+    clampCSGWorkerPromises.clear();
+  }
+}
+
+// ============================================
+// Clamp CSG Worker
+// ============================================
+
+// Worker pool for clamp CSG operations
+let clampCSGWorker: Worker | null = null;
+let clampCSGWorkerPromises: Map<string, {
+  resolve: (value: THREE.BufferGeometry | null) => void;
+  reject: (error: Error) => void;
+  onProgress?: (progress: number) => void;
+}> = new Map();
+
+/**
+ * Get or create the clamp CSG worker
+ */
+function getClampCSGWorker(): Worker {
+  if (!clampCSGWorker) {
+    clampCSGWorker = new Worker(
+      new URL('./clampCSGWorker.ts', import.meta.url),
+      { type: 'module' }
+    );
+    
+    clampCSGWorker.onmessage = (e: MessageEvent) => {
+      const { type, id, payload, progress, error } = e.data;
+      const promise = clampCSGWorkerPromises.get(id);
+      
+      if (!promise) return;
+      
+      if (type === 'csg-error') {
+        promise.reject(new Error(error));
+        clampCSGWorkerPromises.delete(id);
+      } else if (type === 'csg-progress' && promise.onProgress) {
+        promise.onProgress(progress);
+      } else if (type === 'csg-result') {
+        if (payload) {
+          const geometry = new THREE.BufferGeometry();
+          geometry.setAttribute('position', new THREE.BufferAttribute(payload.positions, 3));
+          
+          if (payload.indices) {
+            geometry.setIndex(new THREE.BufferAttribute(payload.indices, 1));
+          }
+          
+          if (payload.normals) {
+            geometry.setAttribute('normal', new THREE.BufferAttribute(payload.normals, 3));
+          } else {
+            geometry.computeVertexNormals();
+          }
+          
+          geometry.computeBoundingBox();
+          geometry.computeBoundingSphere();
+          
+          promise.resolve(geometry);
+        } else {
+          promise.resolve(null);
+        }
+        clampCSGWorkerPromises.delete(id);
+      }
+    };
+    
+    clampCSGWorker.onerror = (error) => {
+      console.error('[ClampCSGWorker] Error:', error);
+      clampCSGWorkerPromises.forEach((promise) => {
+        promise.reject(new Error('Worker error'));
+      });
+      clampCSGWorkerPromises.clear();
+    };
+  }
+  
+  return clampCSGWorker;
+}
+
+/**
+ * Serialize a BufferGeometry for transfer to worker
+ */
+export function serializeGeometryForClampWorker(geometry: THREE.BufferGeometry): {
+  positions: Float32Array;
+  indices?: Uint32Array;
+  normals?: Float32Array;
+} {
+  const posAttr = geometry.getAttribute('position');
+  const positions = new Float32Array(posAttr.array);
+  
+  const result: { positions: Float32Array; indices?: Uint32Array; normals?: Float32Array } = {
+    positions,
+  };
+  
+  if (geometry.index) {
+    result.indices = new Uint32Array(geometry.index.array);
+  }
+  
+  const normAttr = geometry.getAttribute('normal');
+  if (normAttr) {
+    result.normals = new Float32Array(normAttr.array);
+  }
+  
+  return result;
+}
+
+/**
+ * Perform clamp CSG subtraction in a web worker
+ * Used to subtract fixture cutouts from support geometry
+ * Note: cutoutsGeometry should already have the Y offset applied
+ */
+export async function performClampCSGInWorker(
+  supportGeometry: THREE.BufferGeometry,
+  cutoutsGeometry: THREE.BufferGeometry | null,
+  onProgress?: (progress: number) => void
+): Promise<THREE.BufferGeometry | null> {
+  // If no cutouts, return support geometry as-is (no worker needed)
+  if (!cutoutsGeometry) {
+    return supportGeometry.clone();
+  }
+  
+  const worker = getClampCSGWorker();
+  const id = generateId();
+  
+  const supportData = serializeGeometryForClampWorker(supportGeometry);
+  const cutoutsData = serializeGeometryForClampWorker(cutoutsGeometry);
+  
+  return new Promise((resolve, reject) => {
+    clampCSGWorkerPromises.set(id, {
+      resolve,
+      reject,
+      onProgress,
+    });
+    
+    // Collect transferable buffers
+    const transferables: Transferable[] = [
+      supportData.positions.buffer,
+    ];
+    if (supportData.indices) {
+      transferables.push(supportData.indices.buffer);
+    }
+    if (supportData.normals) {
+      transferables.push(supportData.normals.buffer);
+    }
+    
+    transferables.push(cutoutsData.positions.buffer);
+    if (cutoutsData.indices) {
+      transferables.push(cutoutsData.indices.buffer);
+    }
+    if (cutoutsData.normals) {
+      transferables.push(cutoutsData.normals.buffer);
+    }
+    
+    // Send message to worker
+    worker.postMessage(
+      {
+        type: 'compute-csg',
+        id,
+        payload: {
+          supportGeometryData: supportData,
+          cutoutsGeometryData: cutoutsData,
+        },
+      },
+      transferables
+    );
+  });
 }
 
 // Need to import THREE for type definitions

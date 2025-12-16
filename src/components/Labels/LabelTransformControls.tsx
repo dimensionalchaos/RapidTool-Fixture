@@ -210,12 +210,10 @@ const LabelTransformControls: React.FC<LabelTransformControlsProps> = ({
   const gizmoScale = useMemo(() => calculateGizmoScale(label.fontSize), [label.fontSize]);
 
   // Display position (locked during drag to prevent feedback loop)
-  const displayPos = useMemo(() => {
-    if (isDraggingRef.current && dragStateRef.current.groupPosition) {
-      return dragStateRef.current.groupPosition;
-    }
-    return new THREE.Vector3(labelPosition.x, gizmoY, labelPosition.z);
-  }, [labelPosition.x, labelPosition.z, gizmoY]);
+  // IMPORTANT: Don't use useMemo - refs don't trigger memo recalculation
+  const displayPos = isDraggingRef.current && dragStateRef.current.groupPosition
+    ? dragStateRef.current.groupPosition
+    : new THREE.Vector3(labelPosition.x, gizmoY, labelPosition.z);
 
   const displayRotY = isDraggingRef.current
     ? dragStateRef.current.groupRotationY
