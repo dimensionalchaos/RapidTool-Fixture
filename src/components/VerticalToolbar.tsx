@@ -1,5 +1,12 @@
-import React from 'react';
-import { Button } from "@/components/ui/button";
+/**
+ * VerticalToolbar
+ *
+ * Main workflow toolbar with tool selection buttons.
+ * Pure presentational component with proper accessibility.
+ */
+
+import React, { useCallback, useMemo } from 'react';
+import { Button } from '@/components/ui/button';
 import {
   Upload,
   Grid3X3,
@@ -9,60 +16,130 @@ import {
   Type,
   CircleDashed,
   Scissors,
-  DownloadCloud
-} from "lucide-react";
+  DownloadCloud,
+  LucideIcon,
+} from 'lucide-react';
+import { cn } from '@/lib/utils';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Types
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type ToolId =
+  | 'import'
+  | 'baseplates'
+  | 'supports'
+  | 'clamps'
+  | 'labels'
+  | 'cavity'
+  | 'drill'
+  | 'optimize'
+  | 'export';
+
+interface ToolConfig {
+  id: ToolId;
+  icon: LucideIcon;
+  label: string;
+  tooltip: string;
+}
 
 interface VerticalToolbarProps {
-  onToolSelect?: (tool: string) => void;
+  /** Callback when a tool is selected */
+  onToolSelect?: (tool: ToolId) => void;
+  /** Additional CSS classes */
   className?: string;
-  activeTool?: string;
+  /** Currently active tool */
+  activeTool?: ToolId;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Constants
+// ─────────────────────────────────────────────────────────────────────────────
+
+const TOOLS: readonly ToolConfig[] = [
+  { id: 'import', icon: Upload, label: 'Import', tooltip: 'Import Workpieces / Models' },
+  { id: 'baseplates', icon: Grid3X3, label: 'Baseplates', tooltip: 'Choose From Different Baseplates' },
+  { id: 'supports', icon: Cuboid, label: 'Supports', tooltip: 'Create Supports by Extruding a Sketch' },
+  { id: 'clamps', icon: Pin, label: 'Clamps', tooltip: 'Clamp Workpieces with Standard Components' },
+  { id: 'labels', icon: Type, label: 'Labels', tooltip: 'Set Labels (e.g., Version Numbers)' },
+  { id: 'cavity', icon: SquaresSubtract, label: 'Cavity', tooltip: 'Subtract Workpieces From Fixture Geometry' },
+  { id: 'drill', icon: CircleDashed, label: 'Mounting Holes', tooltip: 'Add Mounting Holes to Fixture' },
+  { id: 'optimize', icon: Scissors, label: 'Optimize', tooltip: 'Save Material and Print Faster' },
+  { id: 'export', icon: DownloadCloud, label: 'Export', tooltip: 'Export Fixture for 3D Printing' },
+] as const;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sub-components
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface ToolButtonProps {
+  tool: ToolConfig;
+  isActive: boolean;
+  onClick: () => void;
+}
+
+const ToolButton: React.FC<ToolButtonProps> = React.memo(({ tool, isActive, onClick }) => {
+  const Icon = tool.icon;
+
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      onClick={onClick}
+      aria-label={tool.label}
+      aria-pressed={isActive}
+      className={cn(
+        'w-10 h-10 p-0 tech-transition justify-center rounded-md focus-visible:ring-2 focus-visible:ring-primary',
+        isActive
+          ? 'bg-primary/15 text-primary border border-primary/20'
+          : 'hover:bg-primary/10 hover:text-primary'
+      )}
+      title={tool.tooltip}
+    >
+      <Icon className="w-5 h-5" />
+    </Button>
+  );
+});
+
+ToolButton.displayName = 'ToolButton';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Main Component
+// ─────────────────────────────────────────────────────────────────────────────
 
 const VerticalToolbar: React.FC<VerticalToolbarProps> = ({
   onToolSelect,
   className = '',
-  activeTool
+  activeTool,
 }) => {
-  const tools = [
-    { id: 'import', icon: Upload, label: 'Import', tooltip: 'Import Workpieces / Models' },
-    { id: 'baseplates', icon: Grid3X3, label: 'Baseplates', tooltip: 'Choose From Different Baseplates' },
-    { id: 'supports', icon: Cuboid, label: 'Supports', tooltip: 'Create Supports by Extruding a Sketch' },
-    { id: 'clamps', icon: Pin, label: 'Clamps', tooltip: 'Clamp Workpieces with Standard Components' },
-    { id: 'labels', icon: Type, label: 'Labels', tooltip: 'Set Labels (e.g., Version Numbers)' },
-    { id: 'cavity', icon: SquaresSubtract, label: 'Cavity', tooltip: 'Subtract Workpieces From Fixture Geometry' },
-    { id: 'drill', icon: CircleDashed, label: 'Drill/Cutouts', tooltip: 'Drill Holes or Remove Material' },
-    { id: 'optimize', icon: Scissors, label: 'Optimize', tooltip: 'Save Material and Print Faster' },
-    { id: 'export', icon: DownloadCloud, label: 'Export', tooltip: 'Export Fixture for 3D Printing' }
-  ];
+  const handleToolClick = useCallback(
+    (toolId: ToolId) => {
+      onToolSelect?.(toolId);
+    },
+    [onToolSelect]
+  );
 
-  const handleToolClick = (toolId: string) => {
-    onToolSelect?.(toolId);
-  };
+  const toolButtons = useMemo(
+    () =>
+      TOOLS.map((tool) => (
+        <ToolButton
+          key={tool.id}
+          tool={tool}
+          isActive={activeTool === tool.id}
+          onClick={() => handleToolClick(tool.id)}
+        />
+      )),
+    [activeTool, handleToolClick]
+  );
 
   return (
-    <div className={`vertical-toolbar ${className}`}>
-      <div className="flex flex-col gap-2 p-2">
-        {tools.map((tool) => {
-          const IconComponent = tool.icon;
-          return (
-            <Button
-              key={tool.id}
-              variant="ghost"
-              size="sm"
-              onClick={() => handleToolClick(tool.id)}
-              aria-label={tool.label}
-              aria-pressed={activeTool === tool.id}
-              className={`w-10 h-10 p-0 tech-transition justify-center rounded-md focus-visible:ring-2 focus-visible:ring-primary ${
-                activeTool === tool.id ? 'bg-primary/15 text-primary border border-primary/20' : 'hover:bg-primary/10 hover:text-primary'
-              }`}
-              title={tool.tooltip}
-            >
-              <IconComponent className="w-5 h-5" />
-            </Button>
-          );
-        })}
-      </div>
-    </div>
+    <nav
+      className={cn('vertical-toolbar', className)}
+      role="toolbar"
+      aria-label="Fixture design tools"
+    >
+      <div className="flex flex-col gap-2 p-2">{toolButtons}</div>
+    </nav>
   );
 };
 

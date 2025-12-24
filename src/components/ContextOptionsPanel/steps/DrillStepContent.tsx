@@ -1,38 +1,132 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
-import { CircleDashed, AlertCircle, Circle, Square, Plus } from 'lucide-react';
+import { AlertCircle, Circle, Plus, RotateCcw } from 'lucide-react';
+import { ThroughHoleIcon, CounterSinkIcon, CounterBoreIcon } from './HoleTypeIcons';
+
+type HoleType = 'through' | 'countersink' | 'counterbore';
 
 interface DrillStepContentProps {
   hasWorkpiece?: boolean;
   onAddHole?: (config: HoleConfig) => void;
   holes?: HoleConfig[];
+  baseplateHeight?: number;
 }
 
-interface HoleConfig {
+export interface HoleConfig {
   id: string;
-  type: 'through' | 'blind';
-  shape: 'circle' | 'square';
+  type: HoleType;
   diameter: number;
-  depth?: number;
+  // Counter sink specific
+  countersinkAngle?: number;
+  countersinkDiameter?: number;
+  // Counter bore specific
+  counterboreDiameter?: number;
+  counterboreDepth?: number;
 }
 
 const STANDARD_SIZES = [3, 4, 5, 6, 8, 10, 12];
 
+const COUNTERSINK_ANGLES = [82, 90, 100, 120];
+
+// Standard countersink diameters for flat head screws (90° metric standard)
+const COUNTERSINK_STANDARDS: Record<number, { diameter: number; angle: number }> = {
+  3: { diameter: 6.5, angle: 90 },
+  4: { diameter: 8.4, angle: 90 },
+  5: { diameter: 10.4, angle: 90 },
+  6: { diameter: 12.6, angle: 90 },
+  8: { diameter: 16.6, angle: 90 },
+  10: { diameter: 20, angle: 90 },
+  12: { diameter: 24, angle: 90 },
+};
+
+// Standard counterbore dimensions for socket head cap screws (SHCS)
+const COUNTERBORE_STANDARDS: Record<number, { diameter: number; depth: number }> = {
+  3: { diameter: 5.5, depth: 3 },
+  4: { diameter: 7, depth: 4 },
+  5: { diameter: 8.5, depth: 5 },
+  6: { diameter: 10, depth: 6 },
+  8: { diameter: 13, depth: 8 },
+  10: { diameter: 16, depth: 10 },
+  12: { diameter: 18, depth: 12 },
+};
+
+// Get standard values or calculate based on diameter
+const getCountersinkDefaults = (dia: number) => {
+  if (COUNTERSINK_STANDARDS[dia]) {
+    return COUNTERSINK_STANDARDS[dia];
+  }
+  // Approximate: countersink diameter ~2x hole diameter
+  return { diameter: Math.round(dia * 2 * 10) / 10, angle: 90 };
+};
+
+const getCounterboreDefaults = (dia: number) => {
+  if (COUNTERBORE_STANDARDS[dia]) {
+    return COUNTERBORE_STANDARDS[dia];
+  }
+  // Approximate: counterbore diameter ~1.8x, depth ~1x hole diameter
+  return { 
+    diameter: Math.round(dia * 1.8 * 10) / 10, 
+    depth: dia 
+  };
+};
+
 const DrillStepContent: React.FC<DrillStepContentProps> = ({
   hasWorkpiece = false,
   onAddHole,
-  holes = []
+  holes = [],
+  baseplateHeight = 20
 }) => {
-  const [holeType, setHoleType] = useState<'through' | 'blind'>('through');
-  const [holeShape, setHoleShape] = useState<'circle' | 'square'>('circle');
+  const [holeType, setHoleType] = useState<HoleType>('through');
   const [diameter, setDiameter] = useState(5);
-  const [depth, setDepth] = useState(10);
+  // Counter sink options
+  const [countersinkAngle, setCountersinkAngle] = useState(90);
+  const [countersinkDiameter, setCountersinkDiameter] = useState(10.4);
+  // Counter bore options
+  const [counterboreDiameter, setCounterboreDiameter] = useState(8.5);
+  const [counterboreDepth, setCounterboreDepth] = useState(5);
+
+  // Max depth is 75% of baseplate height
+  const maxDepth = useMemo(() => Math.round(baseplateHeight * 0.75 * 10) / 10, [baseplateHeight]);
+
+  // Update countersink/counterbore defaults when diameter changes
+  useEffect(() => {
+    const csDefaults = getCountersinkDefaults(diameter);
+    setCountersinkAngle(csDefaults.angle);
+    setCountersinkDiameter(csDefaults.diameter);
+
+    const cbDefaults = getCounterboreDefaults(diameter);
+    setCounterboreDiameter(cbDefaults.diameter);
+    // Ensure depth doesn't exceed max allowed
+    setCounterboreDepth(Math.min(cbDefaults.depth, maxDepth));
+  }, [diameter, maxDepth]);
+
+  // Slider bounds relative to diameter
+  const countersinkDiameterMin = diameter + 1;
+  const countersinkDiameterMax = Math.max(diameter * 3, diameter + 15);
+  
+  const counterboreDiameterMin = diameter + 1;
+  const counterboreDiameterMax = Math.max(diameter * 2.5, diameter + 12);
+  
+  const counterboreDepthMin = 1;
+  const counterboreDepthMax = maxDepth;
+
+  // Reset to default values based on current diameter
+  const handleResetCountersink = () => {
+    const defaults = getCountersinkDefaults(diameter);
+    setCountersinkAngle(defaults.angle);
+    setCountersinkDiameter(defaults.diameter);
+  };
+
+  const handleResetCounterbore = () => {
+    const defaults = getCounterboreDefaults(diameter);
+    setCounterboreDiameter(defaults.diameter);
+    setCounterboreDepth(Math.min(defaults.depth, maxDepth));
+  };
 
   if (!hasWorkpiece) {
     return (
@@ -40,7 +134,7 @@ const DrillStepContent: React.FC<DrillStepContentProps> = ({
         <Alert className="font-tech">
           <AlertCircle className="h-4 w-4" />
           <AlertDescription className="text-xs">
-            Import a workpiece or create a fixture to add holes and cutouts.
+            Create a baseplate first to add mounting holes.
           </AlertDescription>
         </Alert>
       </div>
@@ -48,13 +142,21 @@ const DrillStepContent: React.FC<DrillStepContentProps> = ({
   }
 
   const handleAddHole = () => {
-    onAddHole?.({
+    const config: HoleConfig = {
       id: `hole-${Date.now()}`,
       type: holeType,
-      shape: holeShape,
       diameter,
-      depth: holeType === 'blind' ? depth : undefined
-    });
+    };
+
+    if (holeType === 'countersink') {
+      config.countersinkAngle = countersinkAngle;
+      config.countersinkDiameter = countersinkDiameter;
+    } else if (holeType === 'counterbore') {
+      config.counterboreDiameter = counterboreDiameter;
+      config.counterboreDepth = counterboreDepth;
+    }
+
+    onAddHole?.(config);
   };
 
   return (
@@ -64,48 +166,40 @@ const DrillStepContent: React.FC<DrillStepContentProps> = ({
         <Label className="text-xs font-tech text-muted-foreground uppercase tracking-wider">
           Hole Type
         </Label>
-        <RadioGroup value={holeType} onValueChange={(v) => setHoleType(v as 'through' | 'blind')}>
-          <div className="flex gap-4">
-            <div className="flex items-center space-x-2">
-              <RadioGroupItem value="through" id="through" />
-              <Label htmlFor="through" className="text-sm font-tech cursor-pointer">
-                Through Hole
-              </Label>
-            </div>
-            <div className="flex items-center space-x-2">
-              <RadioGroupItem value="blind" id="blind" />
-              <Label htmlFor="blind" className="text-sm font-tech cursor-pointer">
-                Blind Hole
-              </Label>
-            </div>
-          </div>
-        </RadioGroup>
-      </div>
-
-      {/* Hole Shape */}
-      <div className="space-y-2">
-        <Label className="text-xs font-tech text-muted-foreground uppercase tracking-wider">
-          Shape
-        </Label>
-        <div className="flex gap-2">
-          <Button
-            variant={holeShape === 'circle' ? 'default' : 'outline'}
-            size="sm"
-            className="flex-1 font-tech"
-            onClick={() => setHoleShape('circle')}
+        <div className="grid grid-cols-3 gap-2">
+          <button
+            onClick={() => setHoleType('through')}
+            className={`flex flex-col items-center p-3 rounded-lg border-2 transition-all ${
+              holeType === 'through'
+                ? 'border-primary bg-primary/10'
+                : 'border-border hover:border-primary/50 hover:bg-muted/50'
+            }`}
           >
-            <Circle className="w-4 h-4 mr-2" />
-            Circle
-          </Button>
-          <Button
-            variant={holeShape === 'square' ? 'default' : 'outline'}
-            size="sm"
-            className="flex-1 font-tech"
-            onClick={() => setHoleShape('square')}
+            <ThroughHoleIcon size={32} className="text-foreground" />
+            <span className="text-[10px] font-tech mt-1">Through</span>
+          </button>
+          <button
+            onClick={() => setHoleType('countersink')}
+            className={`flex flex-col items-center p-3 rounded-lg border-2 transition-all ${
+              holeType === 'countersink'
+                ? 'border-primary bg-primary/10'
+                : 'border-border hover:border-primary/50 hover:bg-muted/50'
+            }`}
           >
-            <Square className="w-4 h-4 mr-2" />
-            Square
-          </Button>
+            <CounterSinkIcon size={32} className="text-foreground" />
+            <span className="text-[10px] font-tech mt-1">C-Sink</span>
+          </button>
+          <button
+            onClick={() => setHoleType('counterbore')}
+            className={`flex flex-col items-center p-3 rounded-lg border-2 transition-all ${
+              holeType === 'counterbore'
+                ? 'border-primary bg-primary/10'
+                : 'border-border hover:border-primary/50 hover:bg-muted/50'
+            }`}
+          >
+            <CounterBoreIcon size={32} className="text-foreground" />
+            <span className="text-[10px] font-tech mt-1">C-Bore</span>
+          </button>
         </div>
       </div>
 
@@ -149,26 +243,121 @@ const DrillStepContent: React.FC<DrillStepContentProps> = ({
         </div>
       </div>
 
-      {/* Depth (for blind holes) */}
-      {holeType === 'blind' && (
-        <div className="space-y-3">
-          <Label className="text-xs font-tech text-muted-foreground uppercase tracking-wider">
-            Depth
-          </Label>
-          <div className="flex items-center gap-3">
-            <Slider
-              value={[depth]}
-              onValueChange={([v]) => setDepth(v)}
-              min={1}
-              max={100}
-              step={1}
-              className="flex-1"
-            />
-            <Badge variant="secondary" className="font-tech min-w-[50px] justify-center">
-              {depth}mm
-            </Badge>
+      {/* Counter Sink Options */}
+      {holeType === 'countersink' && (
+        <>
+          <div className="flex items-center justify-between">
+            <Label className="text-xs font-tech text-muted-foreground uppercase tracking-wider">
+              Countersink Options
+            </Label>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleResetCountersink}
+              className="h-5 px-1.5 text-[8px]"
+              title="Reset to defaults"
+              aria-label="Reset to defaults"
+            >
+              <RotateCcw className="w-2.5 h-2.5" />
+            </Button>
           </div>
-        </div>
+          <div className="space-y-2">
+            <Label className="text-xs font-tech text-muted-foreground uppercase tracking-wider">
+              Countersink Angle
+            </Label>
+            <div className="flex flex-wrap gap-1">
+              {COUNTERSINK_ANGLES.map((angle) => (
+                <Button
+                  key={angle}
+                  variant={countersinkAngle === angle ? 'default' : 'outline'}
+                  size="sm"
+                  className="font-tech text-xs px-2 py-1 h-7"
+                  onClick={() => setCountersinkAngle(angle)}
+                >
+                  {angle}°
+                </Button>
+              ))}
+            </div>
+          </div>
+          <div className="space-y-3">
+            <Label className="text-xs font-tech text-muted-foreground uppercase tracking-wider">
+              Countersink Diameter
+            </Label>
+            <div className="flex items-center gap-3">
+              <Slider
+                value={[countersinkDiameter]}
+                onValueChange={([v]) => setCountersinkDiameter(v)}
+                min={countersinkDiameterMin}
+                max={countersinkDiameterMax}
+                step={0.1}
+                className="flex-1"
+              />
+              <Badge variant="secondary" className="font-tech min-w-[50px] justify-center">
+                {countersinkDiameter}mm
+              </Badge>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Counter Bore Options */}
+      {holeType === 'counterbore' && (
+        <>
+          <div className="flex items-center justify-between">
+            <Label className="text-xs font-tech text-muted-foreground uppercase tracking-wider">
+              Counterbore Options
+            </Label>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleResetCounterbore}
+              className="h-5 px-1.5 text-[8px]"
+              title="Reset to defaults"
+              aria-label="Reset to defaults"
+            >
+              <RotateCcw className="w-2.5 h-2.5" />
+            </Button>
+          </div>
+          <div className="space-y-3">
+            <Label className="text-xs font-tech text-muted-foreground uppercase tracking-wider">
+              Counterbore Diameter
+            </Label>
+            <div className="flex items-center gap-3">
+              <Slider
+                value={[counterboreDiameter]}
+                onValueChange={([v]) => setCounterboreDiameter(v)}
+                min={counterboreDiameterMin}
+                max={counterboreDiameterMax}
+                step={0.1}
+                className="flex-1"
+              />
+              <Badge variant="secondary" className="font-tech min-w-[50px] justify-center">
+                {counterboreDiameter}mm
+              </Badge>
+            </div>
+          </div>
+          <div className="space-y-3">
+            <Label className="text-xs font-tech text-muted-foreground uppercase tracking-wider">
+              Counterbore Depth
+            </Label>
+            <div className="flex items-center gap-3">
+              <Slider
+                value={[counterboreDepth]}
+                onValueChange={([v]) => setCounterboreDepth(v)}
+                min={counterboreDepthMin}
+                max={counterboreDepthMax}
+                step={0.5}
+                className="flex-1"
+              />
+              <Badge variant="secondary" className="font-tech min-w-[50px] justify-center">
+                {counterboreDepth}mm
+              </Badge>
+            </div>
+            <p className="text-[10px] text-muted-foreground font-tech">
+              Max depth: {maxDepth}mm (75% of baseplate height)
+            </p>
+          </div>
+        </>
       )}
 
       {/* Add Hole Button */}
@@ -192,16 +381,12 @@ const DrillStepContent: React.FC<DrillStepContentProps> = ({
             {holes.map((hole, index) => (
               <Card key={hole.id} className="tech-glass p-2">
                 <div className="flex items-center gap-2">
-                  {hole.shape === 'circle' ? (
-                    <Circle className="w-3 h-3 text-muted-foreground" />
-                  ) : (
-                    <Square className="w-3 h-3 text-muted-foreground" />
-                  )}
+                  <Circle className="w-3 h-3 text-muted-foreground" />
                   <span className="text-xs font-tech flex-1">
                     Hole {index + 1} - Ø{hole.diameter}mm
                   </span>
                   <Badge variant="outline" className="text-[8px]">
-                    {hole.type}
+                    {hole.type === 'through' ? 'Through' : hole.type === 'countersink' ? 'C-Sink' : 'C-Bore'}
                   </Badge>
                 </div>
               </Card>
@@ -214,8 +399,7 @@ const DrillStepContent: React.FC<DrillStepContentProps> = ({
       <Card className="tech-glass">
         <div className="p-3 text-xs text-muted-foreground font-tech">
           <p>
-            Add mounting holes, access cutouts, or weight-reduction features
-            to your fixture design.
+            Add mounting holes to secure your fixture to the machine bed or mounting plate.
           </p>
         </div>
       </Card>

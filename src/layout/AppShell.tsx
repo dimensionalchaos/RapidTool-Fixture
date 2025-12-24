@@ -1375,6 +1375,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
                   {activeStep === 'drill' && (
                     <DrillStepContent
                       hasWorkpiece={!!actualFile || !!currentBaseplate}
+                      baseplateHeight={currentBaseplate?.height ?? 20}
                     />
                   )}
                   {activeStep === 'optimize' && (

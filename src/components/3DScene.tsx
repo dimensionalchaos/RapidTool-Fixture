@@ -804,6 +804,45 @@ function DebugPerimeterLine({ perimeter, y }: DebugPerimeterLineProps) {
 }
 
 /**
+ * Debug component to visualize the clamp placement silhouette as a cyan line on the baseplate
+ * This shows the part's XZ projection used for calculating clamp positions
+ */
+interface DebugSilhouetteLineProps {
+  silhouette: Array<{ x: number; z: number }>;
+  y: number;
+  color?: number;
+}
+
+function DebugSilhouetteLine({ silhouette, y, color = 0x00ffff }: DebugSilhouetteLineProps) {
+  const lineObj = useMemo(() => {
+    if (!silhouette || silhouette.length < 3) return null;
+    
+    const points: THREE.Vector3[] = [];
+    for (const p of silhouette) {
+      points.push(new THREE.Vector3(p.x, y, p.z));
+    }
+    // Close the loop
+    points.push(new THREE.Vector3(silhouette[0].x, y, silhouette[0].z));
+    
+    const geometry = new THREE.BufferGeometry().setFromPoints(points);
+    const material = new THREE.LineBasicMaterial({ 
+      color, 
+      linewidth: 3,
+      depthTest: false, // Always visible
+      depthWrite: false,
+      transparent: true,
+      opacity: 0.9
+    });
+    const line = new THREE.Line(geometry, material);
+    line.renderOrder = 999; // Render on top
+    return line;
+  }, [silhouette, y, color]);
+  
+  if (!lineObj) return null;
+  return <primitive object={lineObj} />;
+}
+
+/**
  * Component for placed fixture elements from the component library
  * Currently a placeholder for future fixture component functionality
  */
@@ -1071,6 +1110,11 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   // Set DEBUG_SHOW_PERIMETER to true to enable red boundary line visualization
   const DEBUG_SHOW_PERIMETER = false;
   const [debugPerimeter, setDebugPerimeter] = useState<Array<{ x: number; z: number }> | null>(null);
+  
+  // Debug: clamp silhouette visualization (for debugging clamp placement calculations)
+  // Set DEBUG_SHOW_CLAMP_SILHOUETTE to true to enable cyan silhouette outline on baseplate
+  const DEBUG_SHOW_CLAMP_SILHOUETTE = false;
+  const [debugClampSilhouette, setDebugClampSilhouette] = useState<Array<{ x: number; z: number }> | null>(null);
   
   // Cavity operations preview (for CSG operations)
   const [cavityPreview, setCavityPreview] = useState<THREE.Mesh | null>(null);
@@ -2772,6 +2816,11 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
           const silhouette = computePartSilhouetteForClamps(meshes, baseTopY);
           partSilhouetteRef.current = silhouette;
           console.log('[ClampPlacement] Silhouette computed, points:', silhouette.length);
+          
+          // DEBUG: Store silhouette for visualization on baseplate
+          if (DEBUG_SHOW_CLAMP_SILHOUETTE) {
+            setDebugClampSilhouette(silhouette);
+          }
         });
       }
       
@@ -2793,6 +2842,8 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     const onClampCancelPlacement = () => {
       setClampPlacementMode({ active: false, clampModelId: null, clampCategory: null });
       partSilhouetteRef.current = null;
+      // Clear debug silhouette visualization
+      setDebugClampSilhouette(null);
     };
 
     window.addEventListener('clamp-place', onClampPlace as EventListener);
@@ -5006,6 +5057,11 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       {/* Debug: Perimeter visualization (raycast silhouette) - controlled by DEBUG_SHOW_PERIMETER flag */}
       {DEBUG_SHOW_PERIMETER && debugPerimeter && debugPerimeter.length > 2 && (
         <DebugPerimeterLine perimeter={debugPerimeter} y={baseTopY + 0.5} />
+      )}
+
+      {/* Debug: Clamp silhouette visualization - shows the part outline used for clamp placement */}
+      {DEBUG_SHOW_CLAMP_SILHOUETTE && debugClampSilhouette && debugClampSilhouette.length > 2 && (
+        <DebugSilhouetteLine silhouette={debugClampSilhouette} y={baseTopY + 0.5} color={0x00ffff} />
       )}
 
       {/* Support placement controller */}

@@ -1,30 +1,44 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+/**
+ * PartPropertiesAccordion
+ *
+ * Main properties panel showing all imported parts, baseplate,
+ * supports, clamps, labels, and cavity settings.
+ */
+
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   Accordion,
   AccordionContent,
   AccordionItem,
   AccordionTrigger,
 } from '@/components/ui/accordion';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { RotateCcw, Move, RotateCw, Cog, Trash2, ArrowDownToLine, Eye, EyeOff } from 'lucide-react';
-import * as THREE from 'three';
+import { Cog } from 'lucide-react';
 import { ProcessedFile } from '@/modules/FileImport/types';
 import SupportsAccordion from './Supports/SupportsAccordion';
 import BaseplateAccordion from './BaseplateAccordion';
 import CavityAccordion from './CavityAccordion';
 import { LabelsAccordion, LabelConfig } from './Labels';
 import { ClampsAccordion, PlacedClamp } from './Clamps';
+import PartItemAccordion from './PartItemAccordion';
 import { AnySupport } from './Supports/types';
 import { CavitySettings, DEFAULT_CAVITY_SETTINGS } from '@/lib/offset/types';
-import PartThumbnail from './PartThumbnail';
+import {
+  Transform3D,
+  DEFAULT_TRANSFORM,
+  radToDeg,
+  degToRad,
+  cadToThreeAxis,
+  toCadPosition,
+  toCadRotation,
+  dispatchTransformChange,
+  requestPartTransform,
+  dispatchSetToBaseplate,
+} from '@/lib/transformUtils';
 
-interface PartTransform {
-  position: { x: number; y: number; z: number };
-  rotation: { x: number; y: number; z: number }; // in degrees for UI
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// Types
+// ─────────────────────────────────────────────────────────────────────────────
 
 interface PartPropertiesAccordionProps {
   hasModel: boolean;
@@ -48,17 +62,14 @@ interface PartPropertiesAccordionProps {
   onPartVisibilityChange?: (partId: string, visible: boolean) => void;
   baseplateVisible?: boolean;
   onBaseplateVisibilityChange?: (visible: boolean) => void;
-  // Cavity settings (simplified - main controls in CavityStepContent)
   cavitySettings?: CavitySettings;
   isCavityProcessing?: boolean;
   hasCavityPreview?: boolean;
-  // Labels
   labels?: LabelConfig[];
   selectedLabelId?: string | null;
   onLabelSelect?: (id: string | null) => void;
   onLabelUpdate?: (id: string, updates: Partial<LabelConfig>) => void;
   onLabelDelete?: (id: string) => void;
-  // Clamps
   clamps?: PlacedClamp[];
   selectedClampId?: string | null;
   onClampSelect?: (id: string | null) => void;
@@ -66,8 +77,114 @@ interface PartPropertiesAccordionProps {
   onClampDelete?: (id: string) => void;
 }
 
-const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({ 
-  hasModel, 
+// ─────────────────────────────────────────────────────────────────────────────
+// Custom Hooks
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Manages transform state for all parts */
+function usePartTransforms(parts: ProcessedFile[]) {
+  const [transforms, setTransforms] = useState<Map<string, Transform3D>>(new Map());
+  const initializedRef = useRef<Set<string>>(new Set());
+
+  // Handle transform updates from 3D scene
+  useEffect(() => {
+    const handleTransformUpdate = (e: CustomEvent) => {
+      const { position, rotation, partId } = e.detail;
+      if (!partId || !position) return;
+
+      const newTransform: Transform3D = {
+        position: {
+          x: parseFloat(position.x.toFixed(2)),
+          y: parseFloat(position.y.toFixed(2)),
+          z: parseFloat(position.z.toFixed(2)),
+        },
+        rotation: {
+          x: parseFloat(radToDeg(rotation?.x || 0).toFixed(1)),
+          y: parseFloat(radToDeg(rotation?.y || 0).toFixed(1)),
+          z: parseFloat(radToDeg(rotation?.z || 0).toFixed(1)),
+        },
+      };
+
+      setTransforms((prev) => new Map(prev).set(partId, newTransform));
+    };
+
+    window.addEventListener(
+      'model-transform-updated',
+      handleTransformUpdate as EventListener
+    );
+    return () => {
+      window.removeEventListener(
+        'model-transform-updated',
+        handleTransformUpdate as EventListener
+      );
+    };
+  }, []);
+
+  // Request transforms for new parts
+  useEffect(() => {
+    const currentIds = new Set(parts.map((p) => p.id));
+
+    // Initialize new parts
+    parts.forEach((part) => {
+      if (!initializedRef.current.has(part.id)) {
+        initializedRef.current.add(part.id);
+        setTimeout(() => requestPartTransform(part.id), 150);
+      }
+    });
+
+    // Cleanup removed parts
+    initializedRef.current.forEach((id) => {
+      if (!currentIds.has(id)) {
+        initializedRef.current.delete(id);
+        setTransforms((prev) => {
+          const newMap = new Map(prev);
+          newMap.delete(id);
+          return newMap;
+        });
+      }
+    });
+  }, [parts]);
+
+  const getTransform = useCallback(
+    (partId: string): Transform3D => transforms.get(partId) || DEFAULT_TRANSFORM,
+    [transforms]
+  );
+
+  const updateTransform = useCallback(
+    (partId: string, newTransform: Transform3D) => {
+      setTransforms((prev) => new Map(prev).set(partId, newTransform));
+      dispatchTransformChange(partId, newTransform);
+    },
+    []
+  );
+
+  return { getTransform, updateTransform };
+}
+
+/** Manages accordion section state */
+function useAccordionSection(
+  selectedSupportId: string | null,
+  selectedClampId: string | null
+) {
+  const [openSection, setOpenSection] = useState<string>('parts');
+
+  useEffect(() => {
+    if (selectedSupportId) setOpenSection('supports');
+  }, [selectedSupportId]);
+
+  useEffect(() => {
+    if (selectedClampId) setOpenSection('clamps');
+  }, [selectedClampId]);
+
+  return { openSection, setOpenSection };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Main Component
+// ─────────────────────────────────────────────────────────────────────────────
+
+const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({
+  hasModel,
   currentFile,
   importedParts = [],
   selectedPartId,
@@ -88,250 +205,102 @@ const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({
   onPartVisibilityChange,
   baseplateVisible = true,
   onBaseplateVisibilityChange,
-  // Cavity props (simplified)
   cavitySettings = DEFAULT_CAVITY_SETTINGS,
   isCavityProcessing = false,
   hasCavityPreview = false,
-  // Labels props
   labels = [],
   selectedLabelId = null,
   onLabelSelect,
   onLabelUpdate,
   onLabelDelete,
-  // Clamps props
   clamps = [],
   selectedClampId = null,
   onClampSelect,
   onClampUpdate,
   onClampDelete,
 }) => {
-  // Map of partId -> transform (stores transforms for ALL parts)
-  const [partTransforms, setPartTransforms] = useState<Map<string, PartTransform>>(new Map());
-  
-  // Track which parts we've initialized (to prevent re-requesting on every render)
-  const initializedPartsRef = useRef<Set<string>>(new Set());
-  
-  // Track which main accordion section is open (parts, baseplate, supports)
-  const [openSection, setOpenSection] = useState<string>("parts");
-  
-  // Auto-switch to supports section when a support is selected (e.g., via double-click in 3D)
-  useEffect(() => {
-    if (selectedSupportId) {
-      setOpenSection("supports");
-    }
-  }, [selectedSupportId]);
+  // Get all parts to display
+  const allParts = useMemo(
+    () => (importedParts.length > 0 ? importedParts : currentFile ? [currentFile] : []),
+    [importedParts, currentFile]
+  );
 
-  // Auto-switch to clamps section when a clamp is selected (e.g., via click in 3D)
-  useEffect(() => {
-    if (selectedClampId) {
-      setOpenSection("clamps");
-    }
-  }, [selectedClampId]);
+  const { getTransform, updateTransform } = usePartTransforms(allParts);
+  const { openSection, setOpenSection } = useAccordionSection(
+    selectedSupportId,
+    selectedClampId
+  );
 
-  // Convert radians to degrees for display
-  const radToDeg = (rad: number) => (rad * 180) / Math.PI;
-  // Convert degrees to radians for internal use
-  const degToRad = (deg: number) => (deg * Math.PI) / 180;
-
-  // CAD Convention mapping: 
-  // - CAD X = Three.js X (horizontal)
-  // - CAD Y = Three.js Z (depth) 
-  // - CAD Z = Three.js Y (vertical/up)
-  
-  // Get transform for a specific part (or return default)
-  const getPartTransform = useCallback((partId: string): PartTransform => {
-    return partTransforms.get(partId) || {
-      position: { x: 0, y: 0, z: 0 },
-      rotation: { x: 0, y: 0, z: 0 },
-    };
-  }, [partTransforms]);
-
-  // Get CAD-style position for display (swap Y and Z)
-  const getCadPosition = useCallback((partId: string) => {
-    const transform = getPartTransform(partId);
-    return {
-      x: transform.position.x,
-      y: transform.position.z,  // CAD Y = Three.js Z
-      z: transform.position.y,  // CAD Z = Three.js Y
-    };
-  }, [getPartTransform]);
-  
-  // Get CAD-style rotation for display (swap Y and Z)
-  const getCadRotation = useCallback((partId: string) => {
-    const transform = getPartTransform(partId);
-    return {
-      x: transform.rotation.x,
-      y: transform.rotation.z,  // CAD Y = Three.js Z
-      z: transform.rotation.y,  // CAD Z = Three.js Y
-    };
-  }, [getPartTransform]);
-
-  // Listen for transform updates from the 3D scene (handles ALL parts via partId)
-  useEffect(() => {
-    const handleTransformUpdate = (e: CustomEvent) => {
-      const { position, rotation, partId } = e.detail;
-      
-      // If no partId in event, ignore (should not happen with proper emit)
-      if (!partId || !position) return;
-      
-      const newTransform = {
-        position: {
-          x: parseFloat(position.x.toFixed(2)),
-          y: parseFloat(position.y.toFixed(2)),
-          z: parseFloat(position.z.toFixed(2)),
-        },
-        rotation: {
-          x: parseFloat(radToDeg(rotation?.x || 0).toFixed(1)),
-          y: parseFloat(radToDeg(rotation?.y || 0).toFixed(1)),
-          z: parseFloat(radToDeg(rotation?.z || 0).toFixed(1)),
-        },
-      };
-      
-      // Store transform for this specific part
-      setPartTransforms(prev => {
-        const newMap = new Map(prev);
-        newMap.set(partId, newTransform);
-        return newMap;
+  // Transform handlers
+  const handlePositionChange = useCallback(
+    (partId: string, cadAxis: 'x' | 'y' | 'z', value: string) => {
+      const numValue = parseFloat(value) || 0;
+      const threeAxis = cadToThreeAxis(cadAxis);
+      const current = getTransform(partId);
+      updateTransform(partId, {
+        ...current,
+        position: { ...current.position, [threeAxis]: numValue },
       });
-    };
+    },
+    [getTransform, updateTransform]
+  );
 
-    window.addEventListener('model-transform-updated', handleTransformUpdate as EventListener);
-    return () => {
-      window.removeEventListener('model-transform-updated', handleTransformUpdate as EventListener);
-    };
-  }, []);
+  const handleRotationChange = useCallback(
+    (partId: string, cadAxis: 'x' | 'y' | 'z', value: string) => {
+      const numValue = parseFloat(value) || 0;
+      const threeAxis = cadToThreeAxis(cadAxis);
+      const current = getTransform(partId);
+      updateTransform(partId, {
+        ...current,
+        rotation: { ...current.rotation, [threeAxis]: numValue },
+      });
+    },
+    [getTransform, updateTransform]
+  );
 
-  // Request transforms for parts that we haven't initialized yet
-  useEffect(() => {
-    // Build list of all parts (importedParts or fallback to currentFile)
-    const allParts = importedParts.length > 0 
-      ? importedParts 
-      : (currentFile ? [currentFile] : []);
-    
-    allParts.forEach(part => {
-      if (!initializedPartsRef.current.has(part.id)) {
-        initializedPartsRef.current.add(part.id);
-        
-        // Request transform after a delay to allow mesh to mount
-        setTimeout(() => {
-          window.dispatchEvent(new CustomEvent('request-model-transform', {
-            detail: { partId: part.id }
-          }));
-        }, 150);
+  const handleResetPosition = useCallback(
+    (partId: string) => {
+      const current = getTransform(partId);
+      updateTransform(partId, {
+        ...current,
+        position: { x: 0, y: 0, z: 0 },
+      });
+    },
+    [getTransform, updateTransform]
+  );
+
+  const handleResetRotation = useCallback(
+    (partId: string) => {
+      const current = getTransform(partId);
+      updateTransform(partId, {
+        ...current,
+        rotation: { x: 0, y: 0, z: 0 },
+      });
+    },
+    [getTransform, updateTransform]
+  );
+
+  const handleRemovePart = useCallback(
+    (partId: string) => {
+      if (onRemovePart) {
+        onRemovePart(partId);
+      } else if (onClearFile) {
+        onClearFile();
       }
-    });
-    
-    // Clean up parts that no longer exist
-    const currentPartIds = new Set(allParts.map(p => p.id));
-    initializedPartsRef.current.forEach(id => {
-      if (!currentPartIds.has(id)) {
-        initializedPartsRef.current.delete(id);
-        setPartTransforms(prev => {
-          const newMap = new Map(prev);
-          newMap.delete(id);
-          return newMap;
-        });
-      }
-    });
-  }, [importedParts, currentFile]);
-
-  // Dispatch transform change to 3D scene for a specific part
-  // Always includes respectBaseplate flag to ensure parts stay above baseplate
-  const dispatchTransformChange = useCallback((partId: string, newTransform: PartTransform) => {
-    window.dispatchEvent(
-      new CustomEvent('set-model-transform', {
-        detail: {
-          partId,
-          position: new THREE.Vector3(
-            newTransform.position.x,
-            newTransform.position.y,
-            newTransform.position.z
-          ),
-          rotation: new THREE.Euler(
-            degToRad(newTransform.rotation.x),
-            degToRad(newTransform.rotation.y),
-            degToRad(newTransform.rotation.z)
-          ),
-          respectBaseplate: true, // Always check and lift above baseplate if collision
-        },
-      })
-    );
-  }, []);
-
-  // Handle position change for a specific part - cadAxis is what UI shows, map to Three.js axis
-  const handlePositionChange = useCallback((partId: string, cadAxis: 'x' | 'y' | 'z', value: string) => {
-    const numValue = parseFloat(value) || 0;
-    // Map CAD axis to Three.js axis: X->X, Y->Z, Z->Y
-    const threeAxis = cadAxis === 'y' ? 'z' : cadAxis === 'z' ? 'y' : 'x';
-    const currentTransform = getPartTransform(partId);
-    const newTransform = {
-      ...currentTransform,
-      position: { ...currentTransform.position, [threeAxis]: numValue },
-    };
-    setPartTransforms(prev => new Map(prev).set(partId, newTransform));
-    dispatchTransformChange(partId, newTransform);
-  }, [getPartTransform, dispatchTransformChange]);
-
-  // Handle rotation change for a specific part - cadAxis is what UI shows, map to Three.js axis
-  const handleRotationChange = useCallback((partId: string, cadAxis: 'x' | 'y' | 'z', value: string) => {
-    const numValue = parseFloat(value) || 0;
-    // Map CAD axis to Three.js axis: X->X, Y->Z, Z->Y
-    const threeAxis = cadAxis === 'y' ? 'z' : cadAxis === 'z' ? 'y' : 'x';
-    const currentTransform = getPartTransform(partId);
-    const newTransform = {
-      ...currentTransform,
-      rotation: { ...currentTransform.rotation, [threeAxis]: numValue },
-    };
-    setPartTransforms(prev => new Map(prev).set(partId, newTransform));
-    dispatchTransformChange(partId, newTransform);
-  }, [getPartTransform, dispatchTransformChange]);
-
-  // Reset position to origin (0, 0, 0) for a specific part
-  // After reset, the part will be lifted if it collides with the baseplate
-  const handleResetPosition = useCallback((partId: string) => {
-    const currentTransform = getPartTransform(partId);
-    const newTransform = {
-      ...currentTransform,
-      position: { x: 0, y: 0, z: 0 },
-    };
-    setPartTransforms(prev => new Map(prev).set(partId, newTransform));
-    dispatchTransformChange(partId, newTransform);
-  }, [getPartTransform, dispatchTransformChange]);
-
-  // Reset rotation to zero (0, 0, 0) for a specific part
-  const handleResetRotation = useCallback((partId: string) => {
-    const currentTransform = getPartTransform(partId);
-    const newTransform = {
-      ...currentTransform,
-      rotation: { x: 0, y: 0, z: 0 },
-    };
-    setPartTransforms(prev => new Map(prev).set(partId, newTransform));
-    dispatchTransformChange(partId, newTransform);
-  }, [getPartTransform, dispatchTransformChange]);
-
-  // Set part to baseplate - positions the part so its bottom touches the baseplate top
-  const handleSetToBaseplate = useCallback((partId: string) => {
-    // Dispatch event to 3DScene which has access to the mesh and baseplate
-    window.dispatchEvent(
-      new CustomEvent('set-part-to-baseplate', {
-        detail: { partId }
-      })
-    );
-  }, []);
+    },
+    [onRemovePart, onClearFile]
+  );
 
   if (!hasModel) {
     return null;
   }
 
-  // Get all parts to display (use importedParts if available, otherwise currentFile)
-  const allParts = importedParts.length > 0 ? importedParts : (currentFile ? [currentFile] : []);
-
   return (
-    <Accordion 
-      type="single" 
-      collapsible 
-      value={openSection} 
-      onValueChange={(val) => setOpenSection(val ?? "")}
+    <Accordion
+      type="single"
+      collapsible
+      value={openSection}
+      onValueChange={(val) => setOpenSection(val ?? '')}
       className="w-full"
     >
       {/* Parts Accordion */}
@@ -347,11 +316,10 @@ const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({
             </div>
           </AccordionTrigger>
           <AccordionContent className="pt-2">
-            {/* Nested Accordion for each part */}
-            <Accordion 
-              type="single" 
-              collapsible 
-              value={selectedPartId ? `part-${selectedPartId}` : ""}
+            <Accordion
+              type="single"
+              collapsible
+              value={selectedPartId ? `part-${selectedPartId}` : ''}
               onValueChange={(val) => {
                 const partId = val?.replace('part-', '') || null;
                 onPartSelect?.(partId);
@@ -359,234 +327,28 @@ const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({
               className="space-y-1"
             >
               {allParts.map((part) => {
+                const transform = getTransform(part.id);
                 const partColor = modelColors.get(part.metadata.name) || modelColor;
-                const cadPosition = getCadPosition(part.id);
-                const cadRotation = getCadRotation(part.id);
-                const isSelected = selectedPartId === part.id;
-                
+                const isVisible = partVisibility.get(part.id) !== false;
+
                 return (
-                  <AccordionItem 
+                  <PartItemAccordion
                     key={part.id}
-                    value={`part-${part.id}`}
-                    className={`
-                      border rounded-md transition-all
-                      ${isSelected ? 'border-primary bg-primary/5' : 'border-border/30'}
-                    `}
-                  >
-                    <AccordionTrigger className="py-1.5 px-2 text-xs font-tech hover:no-underline">
-                      <div className="flex items-center gap-2 flex-1">
-                        <PartThumbnail 
-                          mesh={part.mesh} 
-                          size={28} 
-                          className="flex-shrink-0 border border-border/30"
-                          color={partColor}
-                        />
-                        <div className="flex-1 min-w-0 text-left">
-                          <p className="font-tech font-medium text-[10px] truncate" title={part.metadata.name}>
-                            {part.metadata.name}
-                          </p>
-                          <p className="text-[8px] text-muted-foreground">
-                            {part.metadata.triangles?.toLocaleString()} tri • {part.metadata.units}
-                          </p>
-                        </div>
-                        <div className="flex items-center gap-0.5">
-                          {/* Visibility toggle */}
-                          {onPartVisibilityChange && (
-                            <div
-                              role="button"
-                              tabIndex={0}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                e.preventDefault();
-                                const currentlyVisible = partVisibility.get(part.id) !== false; // default to visible
-                                onPartVisibilityChange(part.id, !currentlyVisible);
-                              }}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter' || e.key === ' ') {
-                                  e.stopPropagation();
-                                  e.preventDefault();
-                                  const currentlyVisible = partVisibility.get(part.id) !== false;
-                                  onPartVisibilityChange(part.id, !currentlyVisible);
-                                }
-                              }}
-                              className={`w-6 h-6 p-0 flex items-center justify-center rounded cursor-pointer transition-colors ${
-                                partVisibility.get(part.id) === false
-                                  ? 'text-muted-foreground hover:text-foreground hover:bg-muted'
-                                  : 'text-foreground hover:bg-muted'
-                              }`}
-                              title={partVisibility.get(part.id) === false ? "Show part" : "Hide part"}
-                            >
-                              {partVisibility.get(part.id) === false ? (
-                                <EyeOff className="w-3 h-3" />
-                              ) : (
-                                <Eye className="w-3 h-3" />
-                              )}
-                            </div>
-                          )}
-                          {/* Delete button */}
-                          {(onRemovePart || onClearFile) && (
-                            <div
-                              role="button"
-                              tabIndex={0}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                e.preventDefault();
-                                if (onRemovePart) {
-                                  onRemovePart(part.id);
-                                } else if (onClearFile) {
-                                  onClearFile();
-                                }
-                              }}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter' || e.key === ' ') {
-                                  e.stopPropagation();
-                                  e.preventDefault();
-                                  if (onRemovePart) {
-                                    onRemovePart(part.id);
-                                  } else if (onClearFile) {
-                                    onClearFile();
-                                  }
-                                }
-                              }}
-                              className="w-6 h-6 p-0 flex items-center justify-center rounded text-destructive hover:text-destructive hover:bg-destructive/10 cursor-pointer"
-                              title="Remove part"
-                            >
-                              <Trash2 className="w-3 h-3" />
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    </AccordionTrigger>
-                    <AccordionContent className="px-2 pb-2">
-                      {/* Part Info */}
-                      <div className="text-[8px] text-muted-foreground font-tech mb-3 p-2 rounded bg-muted/30">
-                        <span>Size: </span>
-                        <span className="font-mono">
-                          {part.metadata.dimensions.x.toFixed(1)} ×{' '}
-                          {part.metadata.dimensions.z.toFixed(1)} ×{' '}
-                          {part.metadata.dimensions.y.toFixed(1)} {part.metadata.units}
-                        </span>
-                      </div>
-
-                      {/* Position & Rotation Controls */}
-                      <div className="space-y-3">
-                        {/* Position Controls */}
-                        <div className="space-y-2">
-                          <div className="flex items-center justify-between">
-                            <Label className="text-[8px] font-tech text-muted-foreground flex items-center gap-1">
-                              <Move className="w-2.5 h-2.5" />
-                              Position (mm)
-                            </Label>
-                            <div className="flex items-center gap-1">
-                              {baseplate && (
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => handleSetToBaseplate(part.id)}
-                                  className="h-5 px-1.5 text-[8px]"
-                                  title="Set to baseplate (place on top of baseplate)"
-                                >
-                                  <ArrowDownToLine className="w-2.5 h-2.5" />
-                                </Button>
-                              )}
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => handleResetPosition(part.id)}
-                                className="h-5 px-1.5 text-[8px]"
-                                title="Reset position to zero"
-                              >
-                                <RotateCcw className="w-2.5 h-2.5" />
-                              </Button>
-                            </div>
-                          </div>
-                          <div className="grid grid-cols-3 gap-2 pl-1">
-                            <div className="space-y-1">
-                              <Label className="text-[8px] text-red-500 font-mono">X</Label>
-                              <Input
-                                type="number"
-                                value={cadPosition.x.toFixed(2)}
-                                onChange={(e) => handlePositionChange(part.id, 'x', e.target.value)}
-                                className="h-7 !text-[10px] font-mono"
-                                step="0.1"
-                              />
-                            </div>
-                            <div className="space-y-1">
-                              <Label className="text-[8px] text-green-500 font-mono">Y</Label>
-                              <Input
-                                type="number"
-                                value={cadPosition.y.toFixed(2)}
-                                onChange={(e) => handlePositionChange(part.id, 'y', e.target.value)}
-                                className="h-7 !text-[10px] font-mono"
-                                step="0.1"
-                              />
-                            </div>
-                            <div className="space-y-1">
-                              <Label className="text-[8px] text-blue-500 font-mono">Z</Label>
-                              <Input
-                                type="number"
-                                value={cadPosition.z.toFixed(2)}
-                                onChange={(e) => handlePositionChange(part.id, 'z', e.target.value)}
-                                className="h-7 !text-[10px] font-mono"
-                                step="0.1"
-                              />
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Rotation Controls */}
-                        <div className="space-y-2">
-                          <div className="flex items-center justify-between">
-                            <Label className="text-[8px] font-tech text-muted-foreground flex items-center gap-1">
-                              <RotateCw className="w-2.5 h-2.5" />
-                              Rotation (°)
-                            </Label>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => handleResetRotation(part.id)}
-                              className="h-5 px-1.5 text-[8px]"
-                              title="Reset rotation to zero"
-                            >
-                              <RotateCcw className="w-2.5 h-2.5" />
-                            </Button>
-                          </div>
-                          <div className="grid grid-cols-3 gap-2 pl-1">
-                            <div className="space-y-1">
-                              <Label className="text-[8px] text-red-500 font-mono">X</Label>
-                              <Input
-                                type="number"
-                                value={cadRotation.x.toFixed(1)}
-                                onChange={(e) => handleRotationChange(part.id, 'x', e.target.value)}
-                                className="h-7 !text-[10px] font-mono"
-                                step="1"
-                              />
-                            </div>
-                            <div className="space-y-1">
-                              <Label className="text-[8px] text-green-500 font-mono">Y</Label>
-                              <Input
-                                type="number"
-                                value={cadRotation.y.toFixed(1)}
-                                onChange={(e) => handleRotationChange(part.id, 'y', e.target.value)}
-                                className="h-7 !text-[10px] font-mono"
-                                step="1"
-                              />
-                            </div>
-                            <div className="space-y-1">
-                              <Label className="text-[8px] text-blue-500 font-mono">Z</Label>
-                              <Input
-                                type="number"
-                                value={cadRotation.z.toFixed(1)}
-                                onChange={(e) => handleRotationChange(part.id, 'z', e.target.value)}
-                                className="h-7 !text-[10px] font-mono"
-                                step="1"
-                              />
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </AccordionContent>
-                  </AccordionItem>
+                    part={part}
+                    isSelected={selectedPartId === part.id}
+                    cadPosition={toCadPosition(transform.position)}
+                    cadRotation={toCadRotation(transform.rotation)}
+                    color={partColor}
+                    isVisible={isVisible}
+                    hasBaseplate={!!baseplate}
+                    onPositionChange={handlePositionChange}
+                    onRotationChange={handleRotationChange}
+                    onResetPosition={handleResetPosition}
+                    onResetRotation={handleResetRotation}
+                    onSetToBaseplate={dispatchSetToBaseplate}
+                    onVisibilityChange={onPartVisibilityChange}
+                    onRemove={onRemovePart || onClearFile ? handleRemovePart : undefined}
+                  />
                 );
               })}
             </Accordion>
@@ -630,7 +392,7 @@ const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({
         onLabelDelete={onLabelDelete || (() => {})}
       />
 
-      {/* Cavity Accordion - Status view only, main controls in CavityStepContent */}
+      {/* Cavity Accordion */}
       <CavityAccordion
         settings={cavitySettings}
         isProcessing={isCavityProcessing}

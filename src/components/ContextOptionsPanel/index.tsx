@@ -109,13 +109,13 @@ const WORKFLOW_STEPS: StepConfig[] = [
   },
   {
     id: 'drill',
-    label: 'Drill/Cutouts',
-    description: 'Create holes and cutouts',
+    label: 'Mounting Holes',
+    description: 'Add holes to fixture',
     icon: CircleDashed,
     helpText: [
-      'Select drill locations on surfaces',
-      'Choose standard hole sizes',
-      'Create custom cutout shapes'
+      'Select standard hole sizes (M3-M12)',
+      'Choose through hole, countersink, or counterbore',
+      'Click on fixture to place mounting holes'
     ]
   },
   {
