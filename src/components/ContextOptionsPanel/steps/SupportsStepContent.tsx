@@ -4,7 +4,8 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Label } from '@/components/ui/label';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Cuboid, AlertCircle, MousePointer2, Square, Circle, Triangle, Spline, Wand2, Trash2, Check } from 'lucide-react';
+import { Switch } from '@/components/ui/switch';
+import { Cuboid, AlertCircle, MousePointer2, Square, Circle, Triangle, Spline, Wand2, Trash2, Check, Magnet } from 'lucide-react';
 
 export type SupportType = 'rectangular' | 'cylindrical' | 'conical' | 'custom';
 
@@ -51,6 +52,7 @@ const SupportsStepContent: React.FC<SupportsStepContentProps> = ({
   onSupportTypeChange
 }) => {
   const [localType, setLocalType] = useState<SupportType | null>(null);
+  const [snapEnabled, setSnapEnabled] = useState(true);
 
   // Handle escape key to cancel placement
   useEffect(() => {
@@ -67,9 +69,20 @@ const SupportsStepContent: React.FC<SupportsStepContentProps> = ({
     setLocalType(type);
     onSupportTypeChange?.(type);
     onStartPlacement?.(type);
+    // Dispatch snap enabled state first
+    window.dispatchEvent(new CustomEvent('support-snap-enabled-changed', {
+      detail: { enabled: snapEnabled }
+    }));
     // Dispatch the event for the 3D scene
     window.dispatchEvent(new CustomEvent('supports-start-placement', {
       detail: { type, params: {} }
+    }));
+  };
+
+  const handleSnapToggle = (enabled: boolean) => {
+    setSnapEnabled(enabled);
+    window.dispatchEvent(new CustomEvent('support-snap-enabled-changed', {
+      detail: { enabled }
     }));
   };
 
@@ -132,6 +145,21 @@ const SupportsStepContent: React.FC<SupportsStepContentProps> = ({
             );
           })}
         </div>
+      </div>
+
+      {/* Snap Alignment Toggle */}
+      <div className="flex items-center justify-between py-2">
+        <div className="flex items-center gap-2">
+          <Magnet className="w-4 h-4 text-muted-foreground" />
+          <Label htmlFor="support-snap-toggle" className="text-xs font-tech">
+            Snap to Alignment
+          </Label>
+        </div>
+        <Switch
+          id="support-snap-toggle"
+          checked={snapEnabled}
+          onCheckedChange={handleSnapToggle}
+        />
       </div>
 
       {/* Placement Mode Indicator */}

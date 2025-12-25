@@ -1127,6 +1127,10 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     config: HoleConfig | null;
     depth: number;
   }>({ active: false, config: null, depth: 20 });
+  const [holeSnapEnabled, setHoleSnapEnabled] = useState(true); // Snap to alignment enabled by default
+  
+  // Support snap alignment state
+  const [supportSnapEnabled, setSupportSnapEnabled] = useState(true); // Snap to alignment enabled by default
   
   // Cavity operations preview (for CSG operations)
   const [cavityPreview, setCavityPreview] = useState<THREE.Mesh | null>(null);
@@ -2138,11 +2142,16 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       // Clear any editing state
       editingSupportRef.current = null;
     };
+    const handleSupportSnapEnabledChanged = (e: CustomEvent) => {
+      setSupportSnapEnabled(e.detail.enabled);
+    };
     window.addEventListener('supports-start-placement', handleStartPlacement as EventListener);
     window.addEventListener('supports-cancel-placement', handleCancelPlacement as EventListener);
+    window.addEventListener('support-snap-enabled-changed', handleSupportSnapEnabledChanged as EventListener);
     return () => {
       window.removeEventListener('supports-start-placement', handleStartPlacement as EventListener);
       window.removeEventListener('supports-cancel-placement', handleCancelPlacement as EventListener);
+      window.removeEventListener('support-snap-enabled-changed', handleSupportSnapEnabledChanged as EventListener);
     };
   }, [currentOrientation, updateCamera, modelBounds]);
 
@@ -2172,12 +2181,18 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       updateCamera(prevOrientationRef.current, modelBounds);
     };
     
+    const handleSnapEnabledChanged = (e: CustomEvent) => {
+      setHoleSnapEnabled(e.detail.enabled);
+    };
+    
     window.addEventListener('hole-start-placement', handleStartHolePlacement as EventListener);
     window.addEventListener('hole-cancel-placement', handleCancelHolePlacement as EventListener);
+    window.addEventListener('hole-snap-enabled-changed', handleSnapEnabledChanged as EventListener);
     
     return () => {
       window.removeEventListener('hole-start-placement', handleStartHolePlacement as EventListener);
       window.removeEventListener('hole-cancel-placement', handleCancelHolePlacement as EventListener);
+      window.removeEventListener('hole-snap-enabled-changed', handleSnapEnabledChanged as EventListener);
     };
   }, [currentOrientation, updateCamera, modelBounds, basePlate?.depth]);
 
@@ -3730,12 +3745,27 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
           }));
           
           // Get baseplate geometry if available
+          // Use baseplateWithHoles if it exists (holes already cut), otherwise use original baseplate
           let baseplateGeometry: THREE.BufferGeometry | undefined;
-          if (basePlateMeshRef.current) {
+          const useBaseplateWithHoles = baseplateWithHoles !== null;
+          
+          if (useBaseplateWithHoles && baseplateWithHoles) {
+            // Use the baseplate geometry that already has holes cut
+            // This geometry is already in local space, need to transform to world space
+            baseplateGeometry = baseplateWithHoles.clone();
+            if (basePlateMeshRef.current) {
+              basePlateMeshRef.current.updateMatrixWorld(true);
+              baseplateGeometry.applyMatrix4(basePlateMeshRef.current.matrixWorld);
+            }
+            console.log('[3DScene] Using baseplateWithHoles (holes already cut)');
+          } else if (basePlateMeshRef.current) {
             basePlateMeshRef.current.updateMatrixWorld(true);
             baseplateGeometry = basePlateMeshRef.current.geometry.clone();
             baseplateGeometry.applyMatrix4(basePlateMeshRef.current.matrixWorld);
-            
+            console.log('[3DScene] Using original baseplate geometry');
+          }
+          
+          if (baseplateGeometry) {
             // Ensure baseplate geometry has proper attributes for CSG
             if (!baseplateGeometry.index) {
               const posAttr = baseplateGeometry.getAttribute('position');
@@ -3911,20 +3941,38 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
               }
               
               // === STEP 3.5: SUBTRACT MOUNTING HOLES ===
-              if (mountingHoles.length > 0) {
+              // Skip this step if we already used baseplateWithHoles (holes already cut into baseplate)
+              if (mountingHoles.length > 0 && !useBaseplateWithHoles) {
                 console.log(`[3DScene] Subtracting ${mountingHoles.length} mounting holes from fixture...`);
                 window.dispatchEvent(new CustomEvent('cavity-subtraction-progress', {
                   detail: { current: 85, total: 100, stage: 'Cutting mounting holes...' }
                 }));
                 
                 try {
-                  // Create merged holes geometry
-                  // Note: For final export, we need holes in local space since finalGeometry is already in local baseplate space
-                  const localBaseTopY = basePlate?.depth ?? baseTopY;
-                  const baseplateOffset = basePlate?.position 
-                    ? { x: basePlate.position.x, z: basePlate.position.z }
-                    : undefined;
-                  const holesGeometry = createMergedHolesGeometry(mountingHoles, localBaseTopY, baseplateOffset);
+                  // For final geometry which is in world space, we need world-space holes
+                  // baseTopY is already the world Y of the baseplate top surface
+                  // Hole positions are stored in world space (x, z) in the position Vector2
+                  // No offset needed since finalGeometry is in world space
+                  
+                  // Ensure all holes have correct depth (use baseplate depth for through holes)
+                  const baseplateDepth = basePlate?.depth ?? 20;
+                  const holesWithCorrectDepth = mountingHoles.map(hole => ({
+                    ...hole,
+                    depth: hole.depth || baseplateDepth
+                  }));
+                  
+                  console.log(`[3DScene] Creating hole geometry with baseTopY=${baseTopY}, baseplateDepth=${baseplateDepth}`, 
+                    holesWithCorrectDepth.map(h => ({
+                      id: h.id,
+                      type: h.type,
+                      diameter: h.diameter,
+                      depth: h.depth,
+                      position: { x: h.position.x, z: h.position.y }
+                    }))
+                  );
+                  
+                  // Create holes in world space - no offset needed since finalGeometry is in world space
+                  const holesGeometry = createMergedHolesGeometry(holesWithCorrectDepth, baseTopY, undefined);
                   
                   if (holesGeometry) {
                     // Ensure proper geometry attributes for CSG
@@ -4145,7 +4193,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     return () => {
       window.removeEventListener('execute-cavity-subtraction', handleExecuteCavitySubtraction as EventListener);
     };
-  }, [offsetMeshPreviews, supports, basePlate, baseTopY, placedClamps, clampSupportInfos, labels, mountingHoles]);
+  }, [offsetMeshPreviews, supports, basePlate, baseTopY, placedClamps, clampSupportInfos, labels, mountingHoles, baseplateWithHoles]);
 
   // Handle reset cavity event
   React.useEffect(() => {
@@ -5561,6 +5609,8 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
           contactOffset={Number(placing.initParams?.contactOffset ?? 0)}
           maxRayHeight={2000}
           modelBounds={modelBounds ? { min: modelBounds.min, max: modelBounds.max } : null}
+          existingSupports={supports}
+          snapThreshold={supportSnapEnabled ? 3 : 0}
         />
       )}
 
@@ -5572,6 +5622,8 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
           baseTarget={basePlateMeshRef.current}
           baseTopY={baseTopY}
           depth={holePlacementMode.depth}
+          existingHoles={mountingHoles}
+          snapThreshold={holeSnapEnabled ? 3 : 0}
           onPlace={handleHoleCreate}
           onCancel={() => {
             setHolePlacementMode({ active: false, config: null, depth: 20 });
@@ -5585,8 +5637,8 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
         />
       )}
 
-      {/* Render placed mounting holes */}
-      {mountingHoles.map(hole => (
+      {/* Render placed mounting holes - hide when merged fixture is shown */}
+      {!mergedFixtureMesh && mountingHoles.map(hole => (
         <HoleMesh
           key={hole.id}
           hole={hole}
@@ -5606,8 +5658,8 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
         />
       ))}
 
-      {/* Hole transform controls - XZ plane only */}
-      {editingHoleId && !holePlacementMode.active && (
+      {/* Hole transform controls - XZ plane only - disabled when merged fixture exists */}
+      {editingHoleId && !holePlacementMode.active && !mergedFixtureMesh && (
         (() => {
           const editingHole = mountingHoles.find(h => h.id === editingHoleId);
           if (!editingHole) return null;

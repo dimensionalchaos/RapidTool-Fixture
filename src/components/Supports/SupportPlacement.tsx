@@ -16,17 +16,154 @@ interface SupportPlacementProps {
   maxRayHeight?: number; // max height to search above base for intersections
   baseTarget?: THREE.Object3D | null; // actual baseplate mesh for local baseY
   modelBounds?: { min: THREE.Vector3; max: THREE.Vector3 } | null; // model bounding box for fallback height
+  existingSupports?: AnySupport[]; // existing supports for snap alignment
+  snapThreshold?: number; // snap threshold distance in mm (0 to disable)
+}
+
+/** Alignment information for snapping */
+interface SnapAlignment {
+  /** Horizontal alignment (same Z) - the support we're aligning to */
+  horizontal: AnySupport | null;
+  /** Vertical alignment (same X) - the support we're aligning to */
+  vertical: AnySupport | null;
+  /** The snapped position */
+  snappedPosition: THREE.Vector2;
+}
+
+/** Default snap threshold in mm */
+const DEFAULT_SNAP_THRESHOLD = 3;
+
+/** Alignment guide line extension beyond the supports */
+const GUIDE_LINE_EXTENSION = 50;
+
+/**
+ * Finds the closest support for horizontal alignment (same Z coordinate).
+ */
+function findHorizontalAlignment(
+  position: THREE.Vector2,
+  existingSupports: AnySupport[],
+  threshold: number
+): AnySupport | null {
+  let closestSupport: AnySupport | null = null;
+  let minDistance = threshold;
+
+  for (const support of existingSupports) {
+    const zDiff = Math.abs(position.y - support.center.y);
+    if (zDiff < minDistance) {
+      minDistance = zDiff;
+      closestSupport = support;
+    }
+  }
+
+  return closestSupport;
+}
+
+/**
+ * Finds the closest support for vertical alignment (same X coordinate).
+ */
+function findVerticalAlignment(
+  position: THREE.Vector2,
+  existingSupports: AnySupport[],
+  threshold: number
+): AnySupport | null {
+  let closestSupport: AnySupport | null = null;
+  let minDistance = threshold;
+
+  for (const support of existingSupports) {
+    const xDiff = Math.abs(position.x - support.center.x);
+    if (xDiff < minDistance) {
+      minDistance = xDiff;
+      closestSupport = support;
+    }
+  }
+
+  return closestSupport;
+}
+
+/**
+ * Computes snap alignment for a given position.
+ * Prevents snapping to the exact center of existing supports.
+ */
+function computeSnapAlignment(
+  rawPosition: THREE.Vector2,
+  existingSupports: AnySupport[],
+  threshold: number
+): SnapAlignment {
+  const horizontalSupport = findHorizontalAlignment(rawPosition, existingSupports, threshold);
+  const verticalSupport = findVerticalAlignment(rawPosition, existingSupports, threshold);
+
+  const snappedPosition = rawPosition.clone();
+
+  // Check if both alignments would snap to the same support's center
+  if (horizontalSupport && verticalSupport && horizontalSupport.id === verticalSupport.id) {
+    const xDiff = Math.abs(rawPosition.x - horizontalSupport.center.x);
+    const zDiff = Math.abs(rawPosition.y - horizontalSupport.center.y);
+    
+    if (xDiff < zDiff) {
+      snappedPosition.x = verticalSupport.center.x;
+      return {
+        horizontal: null,
+        vertical: verticalSupport,
+        snappedPosition,
+      };
+    } else {
+      snappedPosition.y = horizontalSupport.center.y;
+      return {
+        horizontal: horizontalSupport,
+        vertical: null,
+        snappedPosition,
+      };
+    }
+  }
+
+  let finalHorizontal = horizontalSupport;
+  let finalVertical = verticalSupport;
+
+  if (horizontalSupport) {
+    snappedPosition.y = horizontalSupport.center.y;
+  }
+  if (verticalSupport) {
+    snappedPosition.x = verticalSupport.center.x;
+  }
+
+  // Check if resulting position is at center of any existing support
+  for (const support of existingSupports) {
+    const atCenter = 
+      Math.abs(snappedPosition.x - support.center.x) < 0.01 &&
+      Math.abs(snappedPosition.y - support.center.y) < 0.01;
+    
+    if (atCenter) {
+      const xDiff = Math.abs(rawPosition.x - support.center.x);
+      const zDiff = Math.abs(rawPosition.y - support.center.y);
+      
+      if (xDiff < zDiff) {
+        finalHorizontal = null;
+        snappedPosition.y = rawPosition.y;
+      } else {
+        finalVertical = null;
+        snappedPosition.x = rawPosition.x;
+      }
+      break;
+    }
+  }
+
+  return {
+    horizontal: finalHorizontal,
+    vertical: finalVertical,
+    snappedPosition,
+  };
 }
 
 
 
 
-const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initParams, onCreate, onCancel, defaultCenter, raycastTargets = [], baseTopY = 0, contactOffset = 0, maxRayHeight = 2000, baseTarget = null, modelBounds = null }) => {
+const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initParams, onCreate, onCancel, defaultCenter, raycastTargets = [], baseTopY = 0, contactOffset = 0, maxRayHeight = 2000, baseTarget = null, modelBounds = null, existingSupports = [], snapThreshold = DEFAULT_SNAP_THRESHOLD }) => {
   const [center, setCenter] = React.useState<THREE.Vector2 | null>(null);
   const [previewSupport, setPreviewSupport] = React.useState<AnySupport | null>(null);
   const [hover, setHover] = React.useState<THREE.Vector2 | null>(null);
   const [customPoints, setCustomPoints] = React.useState<THREE.Vector2[]>([]);
   const [drawingCustom, setDrawingCustom] = React.useState(false);
+  const [snapAlignment, setSnapAlignment] = React.useState<SnapAlignment | null>(null);
   const raycasterRef = React.useRef(new THREE.Raycaster());
   // Reusable plane object to avoid GC during mouse moves
   const planeRef = React.useRef(new THREE.Plane(new THREE.Vector3(0, 1, 0), 0));
@@ -347,6 +484,7 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
     if ((!point || !planePoint) || (!hitOnTarget && !isNonCustomPlacing && !isCustomDrawing && type !== 'custom')) {
       if (!hasCenter && !hasCustomPath) {
         setHover(null);
+        setSnapAlignment(null);
       }
       return;
     }
@@ -358,6 +496,16 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
       if (planePoint.distanceTo(first) <= closeThreshold) {
         snappedPoint = first.clone();
       }
+    }
+
+    // For center-based supports (rect, cyl, conical), compute snap alignment before center is set
+    if (!center && type !== 'custom' && snapThreshold > 0 && existingSupports.length > 0) {
+      const alignment = computeSnapAlignment(planePoint, existingSupports, snapThreshold);
+      setSnapAlignment(alignment);
+      snappedPoint = alignment.snappedPosition;
+    } else if (center || type === 'custom') {
+      // Clear snap alignment once center is set or in custom mode
+      setSnapAlignment(null);
     }
 
     setHover(snappedPoint);
@@ -431,7 +579,12 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
       return;
     }
     if (!center) {
-      setCenter(planePoint.clone());
+      // Use snapped position if available, otherwise use raw plane point
+      const centerPoint = (snapAlignment && type !== 'custom') 
+        ? snapAlignment.snappedPosition.clone() 
+        : planePoint.clone();
+      setCenter(centerPoint);
+      setSnapAlignment(null); // Clear alignment guides once center is set
     } else {
       // Second click finalizes the support
       const support = toSupport(center, point);
@@ -475,29 +628,39 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
   };
 
   // XY Guides (crosshair + axes through point)
-  const XYGuides: React.FC<{ point: THREE.Vector2 }> = ({ point }) => {
+  // hideHorizontal/hideVertical: hide grey lines when blue snap alignment guides replace them
+  const XYGuides: React.FC<{ point: THREE.Vector2; hideHorizontal?: boolean; hideVertical?: boolean }> = ({ point, hideHorizontal = false, hideVertical = false }) => {
     const y = baseTopY + 0.03;
     const len = 2000; // extend across scene
     const px = point.x;
     const pz = point.y;
-    const positions = new Float32Array([
+    
+    // Build positions array based on which lines to show
+    const linePositions: number[] = [];
+    if (!hideHorizontal) {
       // Horizontal X line through Z = pz
-      -len, y, pz,   len, y, pz,
+      linePositions.push(-len, y, pz, len, y, pz);
+    }
+    if (!hideVertical) {
       // Vertical Z line through X = px
-      px, y, -len,   px, y, len,
-    ]);
+      linePositions.push(px, y, -len, px, y, len);
+    }
+    
+    const positions = new Float32Array(linePositions);
     const cross = new Float32Array([
       px - 1.5, y, pz - 1.5,  px + 1.5, y, pz + 1.5,
       px - 1.5, y, pz + 1.5,  px + 1.5, y, pz - 1.5,
     ]);
     return (
       <group renderOrder={1000}>
-        <lineSegments frustumCulled={false}>
-          <bufferGeometry>
-            <bufferAttribute attach="attributes-position" count={positions.length / 3} array={positions} itemSize={3} />
-          </bufferGeometry>
-          <lineBasicMaterial color={0x9CA3AF} depthWrite={false} depthTest={false} linewidth={1} />
-        </lineSegments>
+        {positions.length > 0 && (
+          <lineSegments frustumCulled={false}>
+            <bufferGeometry>
+              <bufferAttribute attach="attributes-position" count={positions.length / 3} array={positions} itemSize={3} />
+            </bufferGeometry>
+            <lineBasicMaterial color={0x9CA3AF} depthWrite={false} depthTest={false} linewidth={1} />
+          </lineSegments>
+        )}
         <lineSegments frustumCulled={false}>
           <bufferGeometry>
             <bufferAttribute attach="attributes-position" count={cross.length / 3} array={cross} itemSize={3} />
@@ -709,6 +872,79 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
     );
   };
 
+  // Alignment guide component for snap visualization
+  const AlignmentGuide: React.FC<{ 
+    from: THREE.Vector2; 
+    to: THREE.Vector2; 
+    direction: 'horizontal' | 'vertical';
+  }> = ({ from, to, direction }) => {
+    const y = baseTopY + 0.15; // Slightly above the surface (same as holes)
+    const color = 0x00aaff; // Blue for both directions
+    const dashSize = 2;
+    const gapSize = 1.5;
+
+    // Compute line endpoints with extension
+    let x1: number, z1: number, x2: number, z2: number;
+    
+    if (direction === 'horizontal') {
+      // Same Z line (horizontal alignment)
+      const z = to.y;
+      x1 = Math.min(from.x, to.x) - GUIDE_LINE_EXTENSION;
+      x2 = Math.max(from.x, to.x) + GUIDE_LINE_EXTENSION;
+      z1 = z;
+      z2 = z;
+    } else {
+      // Same X line (vertical alignment)
+      const x = to.x;
+      z1 = Math.min(from.y, to.y) - GUIDE_LINE_EXTENSION;
+      z2 = Math.max(from.y, to.y) + GUIDE_LINE_EXTENSION;
+      x1 = x;
+      x2 = x;
+    }
+
+    // Create dashed line segments
+    const dashSegments: number[] = [];
+    const dx = x2 - x1;
+    const dz = z2 - z1;
+    const length = Math.sqrt(dx * dx + dz * dz);
+    const dirX = dx / length;
+    const dirZ = dz / length;
+
+    let dist = 0;
+    let drawing = true;
+    while (dist < length) {
+      const segLen = drawing ? dashSize : gapSize;
+      const endDist = Math.min(dist + segLen, length);
+      
+      if (drawing) {
+        const startX = x1 + dirX * dist;
+        const startZ = z1 + dirZ * dist;
+        const endX = x1 + dirX * endDist;
+        const endZ = z1 + dirZ * endDist;
+        dashSegments.push(startX, y, startZ, endX, y, endZ);
+      }
+      
+      dist = endDist;
+      drawing = !drawing;
+    }
+
+    const positions = new Float32Array(dashSegments);
+
+    return (
+      <lineSegments renderOrder={1000}>
+        <bufferGeometry>
+          <bufferAttribute 
+            attach="attributes-position" 
+            count={positions.length / 3} 
+            array={positions} 
+            itemSize={3} 
+          />
+        </bufferGeometry>
+        <lineBasicMaterial color={color} depthTest={false} depthWrite={false} />
+      </lineSegments>
+    );
+  };
+
   return (
     <>
       {/* Large transparent plane aligned to XZ at baseTopY to capture pointer events */}
@@ -724,8 +960,33 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
       </mesh>
 
       {/* XY Guides: prefer center, then hover, then defaultCenter for hint */}
+      {/* Hide individual grey lines when blue snap alignment guides replace them */}
       {(center || hover || defaultCenter) && (
-        <XYGuides point={(center || hover || defaultCenter) as THREE.Vector2} />
+        <XYGuides 
+          point={(center || hover || defaultCenter) as THREE.Vector2} 
+          hideHorizontal={!!(snapAlignment && hover && !center && type !== 'custom' && snapAlignment.horizontal)}
+          hideVertical={!!(snapAlignment && hover && !center && type !== 'custom' && snapAlignment.vertical)}
+        />
+      )}
+
+      {/* Snap alignment guides - show dotted lines when aligning to existing supports */}
+      {snapAlignment && hover && !center && type !== 'custom' && (
+        <>
+          {snapAlignment.horizontal && (
+            <AlignmentGuide 
+              from={hover} 
+              to={snapAlignment.horizontal.center} 
+              direction="horizontal" 
+            />
+          )}
+          {snapAlignment.vertical && (
+            <AlignmentGuide 
+              from={hover} 
+              to={snapAlignment.vertical.center} 
+              direction="vertical" 
+            />
+          )}
+        </>
       )}
 
       {/* Center marker (show only after first click) */}

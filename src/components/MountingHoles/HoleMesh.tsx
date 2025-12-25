@@ -118,7 +118,7 @@ function getDisplayDiameter(hole: PlacedHole, safeDiameters: {
 function getRingColor(isPreview: boolean, isSelected: boolean): number {
   if (isPreview) return 0x00aaff;
   if (isSelected) return 0x00ff88;
-  return 0xff6600;
+  return 0x00aaff; // Theme blue for normal (was orange 0xff6600)
 }
 
 // =============================================================================

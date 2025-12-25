@@ -5,7 +5,8 @@ import { Slider } from '@/components/ui/slider';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { AlertCircle, Plus, RotateCcw, MousePointer, X, Check } from 'lucide-react';
+import { Switch } from '@/components/ui/switch';
+import { AlertCircle, Plus, RotateCcw, MousePointer, X, Check, Magnet } from 'lucide-react';
 import { ThroughHoleIcon, CounterSinkIcon, CounterBoreIcon } from './HoleTypeIcons';
 import { PlacedHole } from '@/components/MountingHoles/types';
 
@@ -96,6 +97,8 @@ const DrillStepContent: React.FC<DrillStepContentProps> = ({
   // Counter bore options
   const [counterboreDiameter, setCounterboreDiameter] = useState(8.5);
   const [counterboreDepth, setCounterboreDepth] = useState(5);
+  // Snap to alignment toggle (ON by default)
+  const [snapEnabled, setSnapEnabled] = useState(true);
 
   // Max depth is 75% of baseplate height
   const maxDepth = useMemo(() => Math.round(baseplateHeight * 0.75 * 10) / 10, [baseplateHeight]);
@@ -166,6 +169,8 @@ const DrillStepContent: React.FC<DrillStepContentProps> = ({
     // Start placement mode instead of directly adding
     if (onStartPlacement) {
       onStartPlacement(config);
+      // Dispatch snap enabled state
+      window.dispatchEvent(new CustomEvent('hole-snap-enabled-changed', { detail: { enabled: snapEnabled } }));
     } else {
       onAddHole?.(config);
     }
@@ -396,6 +401,27 @@ const DrillStepContent: React.FC<DrillStepContentProps> = ({
           </div>
         </>
       )}
+
+      {/* Snap to Alignment Toggle */}
+      <div className="flex items-center justify-between py-2 px-1">
+        <div className="flex items-center gap-2">
+          <Magnet className="w-4 h-4 text-muted-foreground" />
+          <Label className="text-xs font-tech cursor-pointer" htmlFor="snap-toggle">
+            Snap to alignment
+          </Label>
+        </div>
+        <Switch
+          id="snap-toggle"
+          checked={snapEnabled}
+          onCheckedChange={(checked) => {
+            setSnapEnabled(checked);
+            // Update snap state in 3D scene if already in placement mode
+            if (isPlacementMode) {
+              window.dispatchEvent(new CustomEvent('hole-snap-enabled-changed', { detail: { enabled: checked } }));
+            }
+          }}
+        />
+      </div>
 
       {/* Add Hole Button / Placement Mode Indicator */}
       {isPlacementMode ? (
