@@ -208,6 +208,9 @@ const MultiSectionDrawing: React.FC<MultiSectionDrawingProps> = ({
         maxX: rect.maxX,
         minZ: rect.minZ,
         maxZ: rect.maxZ,
+        // Store original size (not position) for maintaining minimum dimensions
+        originalWidth: rect.width,
+        originalDepth: rect.depth,
       };
       
       onSectionDrawn(section);

@@ -14,6 +14,7 @@ import SupportMesh, { buildFullSupportGeometry } from './Supports/SupportMeshes'
 // SupportEditOverlay removed - supports are now moved via double-click gizmo
 import { SupportType, AnySupport } from './Supports/types';
 import { getSupportFootprintBounds, getSupportFootprintPoints } from './Supports/metrics';
+import type { FootprintBounds } from './Supports/metrics';
 import { autoPlaceSupports } from './Supports/autoPlacement';
 import { CSGEngine } from '@/lib/csgEngine';
 import { createOffsetMesh, extractVertices, csgSubtract, initManifold } from '@/lib/offset';
@@ -2474,14 +2475,199 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     });
   }, [basePlate?.depth]);
 
+  /**
+   * Finds the closest baseplate section to a given point.
+   */
+  const findClosestSection = useCallback((x: number, z: number, sections: BasePlateSection[]): { section: BasePlateSection; index: number } | null => {
+    if (!sections || sections.length === 0) return null;
+
+    let closestSection: BasePlateSection | null = null;
+    let closestIndex = -1;
+    let minDistance = Infinity;
+
+    sections.forEach((section, index) => {
+      // Calculate distance from point to section's center
+      const centerX = (section.minX + section.maxX) / 2;
+      const centerZ = (section.minZ + section.maxZ) / 2;
+      const distance = Math.sqrt((x - centerX) ** 2 + (z - centerZ) ** 2);
+
+      if (distance < minDistance) {
+        minDistance = distance;
+        closestSection = section;
+        closestIndex = index;
+      }
+    });
+
+    return closestSection && closestIndex >= 0 ? { section: closestSection, index: closestIndex } : null;
+  }, []);
+
+  /**
+   * Gets the footprint bounds of a clamp in world space.
+   * Applies rotation and translation to transform local polygon to world space.
+   */
+  const getClampFootprintBounds = useCallback((clamp: PlacedClamp): FootprintBounds | null => {
+    const supportInfo = clampSupportInfos.get(clamp.id);
+    if (!supportInfo || !supportInfo.polygon || supportInfo.polygon.length === 0) {
+      return null;
+    }
+
+    // Apply clamp rotation to polygon points before translating
+    const rotationY = THREE.MathUtils.degToRad(clamp.rotation.y);
+    const cosR = Math.cos(rotationY);
+    const sinR = Math.sin(rotationY);
+
+    // Transform polygon points to world space
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    
+    supportInfo.polygon.forEach(([localX, localZ]) => {
+      // Apply Y-axis rotation (rotation in the XZ horizontal plane)
+      const rotatedX = localX * cosR + localZ * sinR;
+      const rotatedZ = -localX * sinR + localZ * cosR;
+      
+      // Add clamp world position
+      const worldX = rotatedX + clamp.position.x;
+      const worldZ = rotatedZ + clamp.position.z;
+      
+      minX = Math.min(minX, worldX);
+      maxX = Math.max(maxX, worldX);
+      minZ = Math.min(minZ, worldZ);
+      maxZ = Math.max(maxZ, worldZ);
+    });
+
+    return { minX, maxX, minZ, maxZ };
+  }, [clampSupportInfos]);
+
+  /**
+   * Calculates the optimal bounds for a section based on its original size and nearby supports/clamps.
+   * Maintains minimum original size but allows the section to be positioned anywhere.
+   */
+  const calculateOptimalSectionBounds = useCallback((
+    section: BasePlateSection,
+    nearbySupports: AnySupport[],
+    nearbyClamps: PlacedClamp[],
+    padding: number
+  ): BasePlateSection => {
+    const originalWidth = section.originalWidth ?? (section.maxX - section.minX);
+    const originalDepth = section.originalDepth ?? (section.maxZ - section.minZ);
+    
+    // Calculate current center
+    const centerX = (section.minX + section.maxX) / 2;
+    const centerZ = (section.minZ + section.maxZ) / 2;
+    
+    // Start with original size centered at current position
+    let minX = centerX - originalWidth / 2;
+    let maxX = centerX + originalWidth / 2;
+    let minZ = centerZ - originalDepth / 2;
+    let maxZ = centerZ + originalDepth / 2;
+
+    // Expand to include each nearby support (but don't shrink below original)
+    nearbySupports.forEach(support => {
+      const footprint = getSupportFootprintBounds(support);
+      minX = Math.min(minX, footprint.minX - padding);
+      maxX = Math.max(maxX, footprint.maxX + padding);
+      minZ = Math.min(minZ, footprint.minZ - padding);
+      maxZ = Math.max(maxZ, footprint.maxZ + padding);
+    });
+
+    // Expand to include each nearby clamp
+    nearbyClamps.forEach(clamp => {
+      const footprint = getClampFootprintBounds(clamp);
+      if (footprint) {
+        minX = Math.min(minX, footprint.minX - padding);
+        maxX = Math.max(maxX, footprint.maxX + padding);
+        minZ = Math.min(minZ, footprint.minZ - padding);
+        maxZ = Math.max(maxZ, footprint.maxZ + padding);
+      }
+    });
+
+    return {
+      ...section,
+      minX,
+      maxX,
+      minZ,
+      maxZ,
+    };
+  }, [getClampFootprintBounds]);
+
+  /**
+   * Expands a baseplate section to include a support's footprint with padding.
+   */
+  const expandSectionForSupport = useCallback((section: BasePlateSection, footprint: FootprintBounds, padding: number): BasePlateSection => {
+    return {
+      ...section,
+      minX: Math.min(section.minX, footprint.minX - padding),
+      maxX: Math.max(section.maxX, footprint.maxX + padding),
+      minZ: Math.min(section.minZ, footprint.minZ - padding),
+      maxZ: Math.max(section.maxZ, footprint.maxZ + padding),
+    };
+  }, []);
+
   const handleSupportCreate = useCallback((support: AnySupport) => {
     // For new supports created via placement, just emit event as-is
     window.dispatchEvent(new CustomEvent('support-created', { detail: support }));
 
     // Auto-expand baseplate if this support overhangs current footprint
-    // For convex-hull plates, the hull will automatically recalculate to include support points
     setBasePlate(prev => {
       if (!prev) return prev;
+      
+      const padding = prev.padding ?? 10;
+
+      // For multi-section baseplates, recalculate the closest section bounds
+      if (prev.type === 'multi-section' && prev.sections && prev.sections.length > 0) {
+        const supportCenterX = support.center.x;
+        const supportCenterZ = support.center.y;
+        
+        const closest = findClosestSection(supportCenterX, supportCenterZ, prev.sections);
+        if (!closest) return prev;
+
+        // Get all supports currently in this section (including the new one)
+        const nearbySupports = [...supports, support].filter(s => {
+          const sCenterX = s.center.x;
+          const sCenterZ = s.center.y;
+          return (
+            sCenterX >= closest.section.minX - padding &&
+            sCenterX <= closest.section.maxX + padding &&
+            sCenterZ >= closest.section.minZ - padding &&
+            sCenterZ <= closest.section.maxZ + padding
+          );
+        });
+
+        // Get all clamps in this section
+        const nearbyClamps = placedClamps.filter(c => {
+          return (
+            c.position.x >= closest.section.minX - padding &&
+            c.position.x <= closest.section.maxX + padding &&
+            c.position.z >= closest.section.minZ - padding &&
+            c.position.z <= closest.section.maxZ + padding
+          );
+        });
+
+        // Calculate optimal bounds: shrink to original or expand for all supports and clamps
+        const optimizedSection = calculateOptimalSectionBounds(closest.section, nearbySupports, nearbyClamps, padding);
+        
+        const updatedSections = prev.sections.map((s, i) => 
+          i === closest.index ? optimizedSection : s
+        );
+
+        // Dispatch event to notify AppShell of section update
+        window.dispatchEvent(new CustomEvent('baseplate-section-updated', {
+          detail: {
+            basePlateId: prev.id,
+            sectionId: optimizedSection.id,
+            newBounds: {
+              minX: optimizedSection.minX,
+              maxX: optimizedSection.maxX,
+              minZ: optimizedSection.minZ,
+              maxZ: optimizedSection.maxZ,
+            }
+          }
+        }));
+
+        return {
+          ...prev,
+          sections: updatedSections,
+        };
+      }
       
       // For convex-hull, no need to manually expand - the hull recalculates from supports
       if (prev.type === 'convex-hull') {
@@ -2489,12 +2675,13 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
         return { ...prev };
       }
       
+      // For fixed-size baseplates, calculate footprint and expand if needed
+      const footprint = getSupportFootprintBounds(support);
       const { width, height } = prev;
       if (!width || !height) return prev;
 
       const halfW = width / 2;
       const halfH = height / 2;
-      const footprint = getSupportFootprintBounds(support);
       const margin = 10; // extra extension beyond furthest support (mm)
 
       const needsExpandX = footprint.minX < -halfW || footprint.maxX > halfW;
@@ -2533,7 +2720,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     setCurrentOrientation(prevOrientationRef.current);
     updateCamera(prevOrientationRef.current, modelBounds);
     editingSupportRef.current = null;
-  }, [modelBounds, updateCamera]);
+  }, [modelBounds, updateCamera, findClosestSection, expandSectionForSupport, calculateOptimalSectionBounds]);
 
   // Persist created supports in scene
   React.useEffect(() => {
@@ -2558,20 +2745,219 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     const onSupportUpdated = (e: CustomEvent) => {
       const updatedSupport = e.detail as AnySupport;
       setSupports(prev => prev.map(s => s.id === updatedSupport.id ? updatedSupport : s));
+
+      // Also recalculate baseplate section if it's a multi-section baseplate
+      setBasePlate(prev => {
+        if (!prev || prev.type !== 'multi-section' || !prev.sections || prev.sections.length === 0) {
+          return prev;
+        }
+
+        const padding = prev.padding ?? 10;
+        const supportCenterX = updatedSupport.center.x;
+        const supportCenterZ = updatedSupport.center.y;
+
+        const closest = findClosestSection(supportCenterX, supportCenterZ, prev.sections);
+        if (!closest) return prev;
+
+        // Get all supports currently in this section (with updated positions)
+        const allSupportsWithUpdate = supports.map(s => 
+          s.id === updatedSupport.id ? updatedSupport : s
+        );
+        
+        const nearbySupports = allSupportsWithUpdate.filter(s => {
+          const sCenterX = s.center.x;
+          const sCenterZ = s.center.y;
+          return (
+            sCenterX >= closest.section.minX - padding &&
+            sCenterX <= closest.section.maxX + padding &&
+            sCenterZ >= closest.section.minZ - padding &&
+            sCenterZ <= closest.section.maxZ + padding
+          );
+        });
+
+        // Get all clamps in this section
+        const nearbyClamps = placedClamps.filter(c => {
+          return (
+            c.position.x >= closest.section.minX - padding &&
+            c.position.x <= closest.section.maxX + padding &&
+            c.position.z >= closest.section.minZ - padding &&
+            c.position.z <= closest.section.maxZ + padding
+          );
+        });
+
+        // Calculate optimal bounds: shrink to original or expand for all nearby supports and clamps
+        const optimizedSection = calculateOptimalSectionBounds(closest.section, nearbySupports, nearbyClamps, padding);
+        
+        // Only update if section actually changed
+        if (
+          optimizedSection.minX === closest.section.minX &&
+          optimizedSection.maxX === closest.section.maxX &&
+          optimizedSection.minZ === closest.section.minZ &&
+          optimizedSection.maxZ === closest.section.maxZ
+        ) {
+          return prev;
+        }
+
+        const updatedSections = prev.sections.map((s, i) =>
+          i === closest.index ? optimizedSection : s
+        );
+
+        // Dispatch event to notify AppShell of section update
+        window.dispatchEvent(new CustomEvent('baseplate-section-updated', {
+          detail: {
+            basePlateId: prev.id,
+            sectionId: optimizedSection.id,
+            newBounds: {
+              minX: optimizedSection.minX,
+              maxX: optimizedSection.maxX,
+              minZ: optimizedSection.minZ,
+              maxZ: optimizedSection.maxZ,
+            }
+          }
+        }));
+
+        return {
+          ...prev,
+          sections: updatedSections,
+        };
+      });
     };
 
     const onSupportDelete = (e: CustomEvent) => {
       const supportId = e.detail as string;
+      const deletedSupport = supports.find(s => s.id === supportId);
+      
       setSupports(prev => prev.filter(s => s.id !== supportId));
+      
       // If we were editing this support, cancel the edit
       if (editingSupportRef.current?.id === supportId) {
         editingSupportRef.current = null;
+      }
+
+      // Recalculate baseplate section after deletion (may shrink back)
+      if (deletedSupport) {
+        setBasePlate(prev => {
+          if (!prev || prev.type !== 'multi-section' || !prev.sections || prev.sections.length === 0) {
+            return prev;
+          }
+
+          const padding = prev.padding ?? 10;
+          const supportCenterX = deletedSupport.center.x;
+          const supportCenterZ = deletedSupport.center.y;
+
+          const closest = findClosestSection(supportCenterX, supportCenterZ, prev.sections);
+          if (!closest) return prev;
+
+          // Get all remaining supports in this section (excluding deleted one)
+          const nearbySupports = supports.filter(s => {
+            if (s.id === supportId) return false; // Exclude deleted support
+            const sCenterX = s.center.x;
+            const sCenterZ = s.center.y;
+            return (
+              sCenterX >= closest.section.minX - padding &&
+              sCenterX <= closest.section.maxX + padding &&
+              sCenterZ >= closest.section.minZ - padding &&
+              sCenterZ <= closest.section.maxZ + padding
+            );
+          });
+
+          // Get all clamps in this section
+          const nearbyClamps = placedClamps.filter(c => {
+            return (
+              c.position.x >= closest.section.minX - padding &&
+              c.position.x <= closest.section.maxX + padding &&
+              c.position.z >= closest.section.minZ - padding &&
+              c.position.z <= closest.section.maxZ + padding
+            );
+          });
+
+          // Calculate optimal bounds: may shrink to original if no supports/clamps nearby
+          const optimizedSection = calculateOptimalSectionBounds(closest.section, nearbySupports, nearbyClamps, padding);
+          
+          // Only update if section actually changed
+          if (
+            optimizedSection.minX === closest.section.minX &&
+            optimizedSection.maxX === closest.section.maxX &&
+            optimizedSection.minZ === closest.section.minZ &&
+            optimizedSection.maxZ === closest.section.maxZ
+          ) {
+            return prev;
+          }
+
+          const updatedSections = prev.sections.map((s, i) =>
+            i === closest.index ? optimizedSection : s
+          );
+
+          // Dispatch event to notify AppShell of section update
+          window.dispatchEvent(new CustomEvent('baseplate-section-updated', {
+            detail: {
+              basePlateId: prev.id,
+              sectionId: optimizedSection.id,
+              newBounds: {
+                minX: optimizedSection.minX,
+                maxX: optimizedSection.maxX,
+                minZ: optimizedSection.minZ,
+                maxZ: optimizedSection.maxZ,
+              }
+            }
+          }));
+
+          return {
+            ...prev,
+            sections: updatedSections,
+          };
+        });
       }
     };
 
     const onSupportsClearAll = () => {
       setSupports([]);
       editingSupportRef.current = null;
+
+      // Recalculate all sections considering remaining clamps
+      setBasePlate(prev => {
+        if (!prev || prev.type !== 'multi-section' || !prev.sections || prev.sections.length === 0) {
+          return prev;
+        }
+
+        const padding = prev.padding ?? 10;
+        
+        // Reset each section but keep clamps in consideration
+        const resetSections = prev.sections.map(section => {
+          // Get clamps in this section
+          const nearbyClamps = placedClamps.filter(c => {
+            return (
+              c.position.x >= section.minX - padding &&
+              c.position.x <= section.maxX + padding &&
+              c.position.z >= section.minZ - padding &&
+              c.position.z <= section.maxZ + padding
+            );
+          });
+          
+          return calculateOptimalSectionBounds(section, [], nearbyClamps, padding);
+        });
+
+        // Dispatch events for all section updates
+        resetSections.forEach(section => {
+          window.dispatchEvent(new CustomEvent('baseplate-section-updated', {
+            detail: {
+              basePlateId: prev.id,
+              sectionId: section.id,
+              newBounds: {
+                minX: section.minX,
+                maxX: section.maxX,
+                minZ: section.minZ,
+                maxZ: section.maxZ,
+              }
+            }
+          }));
+        });
+
+        return {
+          ...prev,
+          sections: resetSections,
+        };
+      });
     };
 
     window.addEventListener('support-updated', onSupportUpdated as EventListener);
@@ -2583,7 +2969,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       window.removeEventListener('support-delete', onSupportDelete as EventListener);
       window.removeEventListener('supports-clear-all', onSupportsClearAll);
     };
-  }, []);
+  }, [findClosestSection, calculateOptimalSectionBounds, supports, placedClamps]);
 
   // Handle auto-place supports event
   React.useEffect(() => {
@@ -3059,6 +3445,68 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
         setPlacedClamps(prev => [...prev, newClamp]);
         setSelectedClampId(newClamp.id);
         
+        // Auto-expand baseplate section if this is a multi-section baseplate
+        setBasePlate(prev => {
+          if (!prev || prev.type !== 'multi-section' || !prev.sections || prev.sections.length === 0) {
+            return prev;
+          }
+
+          const padding = prev.padding ?? 10;
+          const clampCenterX = newClamp.position.x;
+          const clampCenterZ = newClamp.position.z;
+
+          const closest = findClosestSection(clampCenterX, clampCenterZ, prev.sections);
+          if (!closest) return prev;
+
+          // Get all supports in this section
+          const nearbySupports = supports.filter(s => {
+            const sCenterX = s.center.x;
+            const sCenterZ = s.center.y;
+            return (
+              sCenterX >= closest.section.minX - padding &&
+              sCenterX <= closest.section.maxX + padding &&
+              sCenterZ >= closest.section.minZ - padding &&
+              sCenterZ <= closest.section.maxZ + padding
+            );
+          });
+
+          // Get all clamps in this section (including the new one)
+          const nearbyClamps = [...placedClamps, newClamp].filter(c => {
+            return (
+              c.position.x >= closest.section.minX - padding &&
+              c.position.x <= closest.section.maxX + padding &&
+              c.position.z >= closest.section.minZ - padding &&
+              c.position.z <= closest.section.maxZ + padding
+            );
+          });
+
+          // Calculate optimal bounds
+          const optimizedSection = calculateOptimalSectionBounds(closest.section, nearbySupports, nearbyClamps, padding);
+
+          const updatedSections = prev.sections.map((s, i) =>
+            i === closest.index ? optimizedSection : s
+          );
+
+          // Dispatch event to notify AppShell
+          window.dispatchEvent(new CustomEvent('baseplate-section-updated', {
+            detail: {
+              basePlateId: prev.id,
+              sectionId: optimizedSection.id,
+              newBounds: {
+                minX: optimizedSection.minX,
+                maxX: optimizedSection.maxX,
+                minZ: optimizedSection.minZ,
+                maxZ: optimizedSection.maxZ,
+              }
+            }
+          }));
+
+          return {
+            ...prev,
+            sections: updatedSections,
+          };
+        });
+        
         // Exit placement mode and notify UI
         setClampPlacementMode({ active: false, clampModelId: null, clampCategory: null });
         partSilhouetteRef.current = null;
@@ -3113,10 +3561,90 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       }
       
       setPlacedClamps(prev => prev.map(c => c.id === clampId ? { ...c, ...updates } : c));
+
+      // Recalculate baseplate section if it's a multi-section baseplate and clamp was moved
+      if (updates.position) {
+        setBasePlate(prev => {
+          if (!prev || prev.type !== 'multi-section' || !prev.sections || prev.sections.length === 0) {
+            return prev;
+          }
+
+          const padding = prev.padding ?? 10;
+          const clampCenterX = updates.position!.x;
+          const clampCenterZ = updates.position!.z;
+
+          const closest = findClosestSection(clampCenterX, clampCenterZ, prev.sections);
+          if (!closest) return prev;
+
+          // Get all supports in this section
+          const nearbySupports = supports.filter(s => {
+            const sCenterX = s.center.x;
+            const sCenterZ = s.center.y;
+            return (
+              sCenterX >= closest.section.minX - padding &&
+              sCenterX <= closest.section.maxX + padding &&
+              sCenterZ >= closest.section.minZ - padding &&
+              sCenterZ <= closest.section.maxZ + padding
+            );
+          });
+
+          // Get all clamps in this section (with updated position)
+          const allClampsWithUpdate = placedClamps.map(c =>
+            c.id === clampId ? { ...c, ...updates } : c
+          );
+          
+          const nearbyClamps = allClampsWithUpdate.filter(c => {
+            return (
+              c.position.x >= closest.section.minX - padding &&
+              c.position.x <= closest.section.maxX + padding &&
+              c.position.z >= closest.section.minZ - padding &&
+              c.position.z <= closest.section.maxZ + padding
+            );
+          });
+
+          // Calculate optimal bounds
+          const optimizedSection = calculateOptimalSectionBounds(closest.section, nearbySupports, nearbyClamps, padding);
+
+          // Only update if section actually changed
+          if (
+            optimizedSection.minX === closest.section.minX &&
+            optimizedSection.maxX === closest.section.maxX &&
+            optimizedSection.minZ === closest.section.minZ &&
+            optimizedSection.maxZ === closest.section.maxZ
+          ) {
+            return prev;
+          }
+
+          const updatedSections = prev.sections.map((s, i) =>
+            i === closest.index ? optimizedSection : s
+          );
+
+          // Dispatch event to notify AppShell
+          window.dispatchEvent(new CustomEvent('baseplate-section-updated', {
+            detail: {
+              basePlateId: prev.id,
+              sectionId: optimizedSection.id,
+              newBounds: {
+                minX: optimizedSection.minX,
+                maxX: optimizedSection.maxX,
+                minZ: optimizedSection.minZ,
+                maxZ: optimizedSection.maxZ,
+              }
+            }
+          }));
+
+          return {
+            ...prev,
+            sections: updatedSections,
+          };
+        });
+      }
     };
 
     const onClampDelete = (e: CustomEvent) => {
       const clampId = e.detail as string;
+      const deletedClamp = placedClamps.find(c => c.id === clampId);
+      
       setPlacedClamps(prev => prev.filter(c => c.id !== clampId));
       setClampMinOffsets(prev => {
         const next = new Map(prev);
@@ -3125,6 +3653,81 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       });
       if (selectedClampId === clampId) {
         setSelectedClampId(null);
+      }
+
+      // Recalculate baseplate section after deletion (may shrink back)
+      if (deletedClamp) {
+        setBasePlate(prev => {
+          if (!prev || prev.type !== 'multi-section' || !prev.sections || prev.sections.length === 0) {
+            return prev;
+          }
+
+          const padding = prev.padding ?? 10;
+          const clampCenterX = deletedClamp.position.x;
+          const clampCenterZ = deletedClamp.position.z;
+
+          const closest = findClosestSection(clampCenterX, clampCenterZ, prev.sections);
+          if (!closest) return prev;
+
+          // Get all supports in this section
+          const nearbySupports = supports.filter(s => {
+            const sCenterX = s.center.x;
+            const sCenterZ = s.center.y;
+            return (
+              sCenterX >= closest.section.minX - padding &&
+              sCenterX <= closest.section.maxX + padding &&
+              sCenterZ >= closest.section.minZ - padding &&
+              sCenterZ <= closest.section.maxZ + padding
+            );
+          });
+
+          // Get all remaining clamps in this section (excluding deleted one)
+          const nearbyClamps = placedClamps.filter(c => {
+            if (c.id === clampId) return false;
+            return (
+              c.position.x >= closest.section.minX - padding &&
+              c.position.x <= closest.section.maxX + padding &&
+              c.position.z >= closest.section.minZ - padding &&
+              c.position.z <= closest.section.maxZ + padding
+            );
+          });
+
+          // Calculate optimal bounds: may shrink to original if no supports/clamps nearby
+          const optimizedSection = calculateOptimalSectionBounds(closest.section, nearbySupports, nearbyClamps, padding);
+
+          // Only update if section actually changed
+          if (
+            optimizedSection.minX === closest.section.minX &&
+            optimizedSection.maxX === closest.section.maxX &&
+            optimizedSection.minZ === closest.section.minZ &&
+            optimizedSection.maxZ === closest.section.maxZ
+          ) {
+            return prev;
+          }
+
+          const updatedSections = prev.sections.map((s, i) =>
+            i === closest.index ? optimizedSection : s
+          );
+
+          // Dispatch event to notify AppShell
+          window.dispatchEvent(new CustomEvent('baseplate-section-updated', {
+            detail: {
+              basePlateId: prev.id,
+              sectionId: optimizedSection.id,
+              newBounds: {
+                minX: optimizedSection.minX,
+                maxX: optimizedSection.maxX,
+                minZ: optimizedSection.minZ,
+                maxZ: optimizedSection.maxZ,
+              }
+            }
+          }));
+
+          return {
+            ...prev,
+            sections: updatedSections,
+          };
+        });
       }
     };
     
@@ -3150,6 +3753,16 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       // Store the minimum offset for this clamp
       setClampMinOffsets(prev => new Map(prev).set(clampId, minPlacementOffset));
       
+      // Store support info for baseplate bounds calculation
+      if (supportInfo) {
+        setClampSupportInfos(prev => new Map(prev).set(clampId, {
+          polygon: supportInfo.polygon,
+          localCenter: { x: 0, y: 0 }, // Center is at origin in local space
+          fixturePointY: supportInfo.fixturePointY,
+          mountSurfaceLocalY: supportInfo.mountSurfaceLocalY,
+        }));
+      }
+      
       // Store full clamp data for CSG operations (cavity creation)
       loadedClampDataRef.current.set(clampId, {
         fixtureCutoutsGeometry,
@@ -3166,6 +3779,71 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
         }
         return c;
       }));
+
+      // Expand baseplate section now that clamp data is loaded
+      const clamp = placedClamps.find(c => c.id === clampId);
+      if (clamp && supportInfo) {
+        setBasePlate(prev => {
+          if (!prev || prev.type !== 'multi-section' || !prev.sections || prev.sections.length === 0) {
+            return prev;
+          }
+
+          const padding = prev.padding ?? 10;
+          const clampCenterX = clamp.position.x;
+          const clampCenterZ = clamp.position.z;
+
+          const closest = findClosestSection(clampCenterX, clampCenterZ, prev.sections);
+          if (!closest) return prev;
+
+          // Get all supports in this section
+          const nearbySupports = supports.filter(s => {
+            const sCenterX = s.center.x;
+            const sCenterZ = s.center.y;
+            return (
+              sCenterX >= closest.section.minX - padding &&
+              sCenterX <= closest.section.maxX + padding &&
+              sCenterZ >= closest.section.minZ - padding &&
+              sCenterZ <= closest.section.maxZ + padding
+            );
+          });
+
+          // Get all clamps in this section
+          const nearbyClamps = placedClamps.filter(c => {
+            return (
+              c.position.x >= closest.section.minX - padding &&
+              c.position.x <= closest.section.maxX + padding &&
+              c.position.z >= closest.section.minZ - padding &&
+              c.position.z <= closest.section.maxZ + padding
+            );
+          });
+
+          // Calculate optimal bounds
+          const optimizedSection = calculateOptimalSectionBounds(closest.section, nearbySupports, nearbyClamps, padding);
+
+          const updatedSections = prev.sections.map((s, i) =>
+            i === closest.index ? optimizedSection : s
+          );
+
+          // Dispatch event to notify AppShell
+          window.dispatchEvent(new CustomEvent('baseplate-section-updated', {
+            detail: {
+              basePlateId: prev.id,
+              sectionId: optimizedSection.id,
+              newBounds: {
+                minX: optimizedSection.minX,
+                maxX: optimizedSection.maxX,
+                minZ: optimizedSection.minZ,
+                maxZ: optimizedSection.maxZ,
+              }
+            }
+          }));
+
+          return {
+            ...prev,
+            sections: updatedSections,
+          };
+        });
+      }
     };
 
     const onClampSelect = (e: CustomEvent) => {
@@ -3177,6 +3855,53 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       setPlacedClamps([]);
       setSelectedClampId(null);
       setClampMinOffsets(new Map());
+
+      // Recalculate all sections considering remaining supports
+      setBasePlate(prev => {
+        if (!prev || prev.type !== 'multi-section' || !prev.sections || prev.sections.length === 0) {
+          return prev;
+        }
+
+        const padding = prev.padding ?? 10;
+
+        // Reset each section but keep supports in consideration
+        const resetSections = prev.sections.map(section => {
+          // Get supports in this section
+          const nearbySupports = supports.filter(s => {
+            const sCenterX = s.center.x;
+            const sCenterZ = s.center.y;
+            return (
+              sCenterX >= section.minX - padding &&
+              sCenterX <= section.maxX + padding &&
+              sCenterZ >= section.minZ - padding &&
+              sCenterZ <= section.maxZ + padding
+            );
+          });
+
+          return calculateOptimalSectionBounds(section, nearbySupports, [], padding);
+        });
+
+        // Dispatch events for all section updates
+        resetSections.forEach(section => {
+          window.dispatchEvent(new CustomEvent('baseplate-section-updated', {
+            detail: {
+              basePlateId: prev.id,
+              sectionId: section.id,
+              newBounds: {
+                minX: section.minX,
+                maxX: section.maxX,
+                minZ: section.minZ,
+                maxZ: section.maxZ,
+              }
+            }
+          }));
+        });
+
+        return {
+          ...prev,
+          sections: resetSections,
+        };
+      });
     };
 
     const onClampToggleDebug = (e: CustomEvent) => {
@@ -5225,10 +5950,49 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
               onTransformEnd={(newBounds) => {
                 isDraggingBasePlateSectionRef.current = false;
                 
-                // Update the section with new bounds
+                // Create section with new position
+                const editingSection = basePlate.sections!.find(s => s.id === editingBasePlateSectionId)!;
+                let movedSection = { 
+                  ...editingSection,
+                  ...newBounds,
+                  // Preserve original size (not position)
+                  originalWidth: editingSection.originalWidth ?? (editingSection.maxX - editingSection.minX),
+                  originalDepth: editingSection.originalDepth ?? (editingSection.maxZ - editingSection.minZ),
+                };
+
+                const padding = basePlate.padding ?? 10;
+                
+                // Find all supports that should be associated with this section
+                const nearbySupports = supports.filter(support => {
+                  const supportCenterX = support.center.x;
+                  const supportCenterZ = support.center.y;
+
+                  // Check if support center is within the moved section bounds (expanded by padding)
+                  return (
+                    supportCenterX >= movedSection.minX - padding &&
+                    supportCenterX <= movedSection.maxX + padding &&
+                    supportCenterZ >= movedSection.minZ - padding &&
+                    supportCenterZ <= movedSection.maxZ + padding
+                  );
+                });
+
+                // Find all clamps that should be associated with this section
+                const nearbyClamps = placedClamps.filter(clamp => {
+                  return (
+                    clamp.position.x >= movedSection.minX - padding &&
+                    clamp.position.x <= movedSection.maxX + padding &&
+                    clamp.position.z >= movedSection.minZ - padding &&
+                    clamp.position.z <= movedSection.maxZ + padding
+                  );
+                });
+
+                // Calculate optimal bounds: shrink to original or expand for supports and clamps
+                movedSection = calculateOptimalSectionBounds(movedSection, nearbySupports, nearbyClamps, padding);
+
+                // Update the section with optimized bounds
                 const updatedSections = basePlate.sections!.map(s => 
                   s.id === editingBasePlateSectionId 
-                    ? { ...s, ...newBounds }
+                    ? movedSection
                     : s
                 );
                 
@@ -5246,7 +6010,12 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
                   detail: {
                     basePlateId: basePlate.id,
                     sectionId: editingBasePlateSectionId,
-                    newBounds
+                    newBounds: {
+                      minX: movedSection.minX,
+                      maxX: movedSection.maxX,
+                      minZ: movedSection.minZ,
+                      maxZ: movedSection.maxZ,
+                    }
                   }
                 }));
               }}
@@ -5824,6 +6593,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
           modelBounds={modelBounds ? { min: modelBounds.min, max: modelBounds.max } : null}
           existingSupports={supports}
           snapThreshold={supportSnapEnabled ? 3 : 0}
+          basePlateSections={basePlate?.type === 'multi-section' ? basePlate.sections : undefined}
         />
       )}
 

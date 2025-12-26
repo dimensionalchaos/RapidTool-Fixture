@@ -2,6 +2,7 @@ import React from 'react';
 import * as THREE from 'three';
 import { AnySupport, SupportType, RectSupport, CylSupport, ConicalSupport } from './types';
 import { computeSupportMetrics as evaluateSupportMetrics } from './metrics';
+import type { BasePlateSection } from '../BasePlate/types';
 
 interface SupportPlacementProps {
   active: boolean;
@@ -18,6 +19,7 @@ interface SupportPlacementProps {
   modelBounds?: { min: THREE.Vector3; max: THREE.Vector3 } | null; // model bounding box for fallback height
   existingSupports?: AnySupport[]; // existing supports for snap alignment
   snapThreshold?: number; // snap threshold distance in mm (0 to disable)
+  basePlateSections?: BasePlateSection[]; // multi-section baseplate sections for boundary checking
 }
 
 /** Alignment information for snapping */
@@ -157,7 +159,23 @@ function computeSnapAlignment(
 
 
 
-const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initParams, onCreate, onCancel, defaultCenter, raycastTargets = [], baseTopY = 0, contactOffset = 0, maxRayHeight = 2000, baseTarget = null, modelBounds = null, existingSupports = [], snapThreshold = DEFAULT_SNAP_THRESHOLD }) => {
+/**
+ * Checks if a point (x, z) is within any of the baseplate sections.
+ */
+function isPointInBasePlateSections(
+  x: number,
+  z: number,
+  sections: BasePlateSection[] | undefined
+): boolean {
+  if (!sections || sections.length === 0) return false;
+  
+  return sections.some(section => 
+    x >= section.minX && x <= section.maxX &&
+    z >= section.minZ && z <= section.maxZ
+  );
+}
+
+const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initParams, onCreate, onCancel, defaultCenter, raycastTargets = [], baseTopY = 0, contactOffset = 0, maxRayHeight = 2000, baseTarget = null, modelBounds = null, existingSupports = [], snapThreshold = DEFAULT_SNAP_THRESHOLD, basePlateSections }) => {
   const [center, setCenter] = React.useState<THREE.Vector2 | null>(null);
   const [previewSupport, setPreviewSupport] = React.useState<AnySupport | null>(null);
   const [hover, setHover] = React.useState<THREE.Vector2 | null>(null);
@@ -465,6 +483,15 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
       if (intersections.length > 0) {
         hitOnTarget = true;
       }
+    }
+
+    // For multi-section baseplates, also check if the point is within any section bounds
+    if (!hitOnTarget && basePlateSections && basePlateSections.length > 0) {
+      hitOnTarget = isPointInBasePlateSections(
+        hitPointRef.current.x,
+        hitPointRef.current.z,
+        basePlateSections
+      );
     }
 
     const planePoint = new THREE.Vector2(hitPointRef.current.x, hitPointRef.current.z);

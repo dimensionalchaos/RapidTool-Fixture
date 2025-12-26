@@ -281,6 +281,18 @@ const BaseplatesStepContent: React.FC<BaseplatesStepContentProps> = ({
             </Alert>
           )}
 
+          {/* Create Baseplate Button - shown right after Cancel Drawing for multi-section */}
+          {hasDrawnSections && (
+            <Button
+              variant="default"
+              size="sm"
+              className="w-full font-tech"
+              onClick={handleCreateBaseplate}
+            >
+              {currentBaseplate ? 'Update Baseplate' : 'Create Baseplate'}
+            </Button>
+          )}
+
           {/* Drawn Sections List */}
           {hasDrawnSections && (
             <div className="space-y-2">
@@ -330,21 +342,17 @@ const BaseplatesStepContent: React.FC<BaseplatesStepContentProps> = ({
         </div>
       )}
 
-      {/* Create/Update Button */}
-      <Button
-        variant="default"
-        size="sm"
-        className="w-full font-tech"
-        onClick={handleCreateBaseplate}
-        disabled={isMultiSection && !hasDrawnSections && !isDrawingMode}
-      >
-        {isMultiSection 
-          ? (hasDrawnSections 
-              ? (currentBaseplate ? 'Update Baseplate' : 'Create Baseplate')
-              : 'Draw Baseplate')
-          : (currentBaseplate ? 'Update Baseplate' : 'Create Baseplate')
-        }
-      </Button>
+      {/* Create/Update Button - only for non-multi-section types */}
+      {!isMultiSection && (
+        <Button
+          variant="default"
+          size="sm"
+          className="w-full font-tech"
+          onClick={handleCreateBaseplate}
+        >
+          {currentBaseplate ? 'Update Baseplate' : 'Create Baseplate'}
+        </Button>
+      )}
 
       {/* Info Card */}
       <Card className="tech-glass">

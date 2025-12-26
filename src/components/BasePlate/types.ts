@@ -23,6 +23,9 @@ export interface BasePlateSection {
   minZ: number;
   /** Max Z coordinate in world space (mm) */
   maxZ: number;
+  /** Original size when first created (for maintaining minimum size) */
+  originalWidth?: number;
+  originalDepth?: number;
 }
 
 /**

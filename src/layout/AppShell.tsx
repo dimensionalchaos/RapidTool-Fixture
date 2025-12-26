@@ -873,8 +873,11 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
         setLabels([]);
         setMountingHoles([]);
         
-        // Dispatch events to notify 3D scene
-        window.dispatchEvent(new CustomEvent('clear-all-features'));
+        // Dispatch events to notify 3D scene to clear its internal state
+        window.dispatchEvent(new Event('supports-clear-all'));
+        window.dispatchEvent(new Event('clamps-clear-all'));
+        window.dispatchEvent(new Event('labels-clear-all'));
+        window.dispatchEvent(new Event('mounting-holes-clear-all'));
       }
       
       // If we're adding to an existing multi-section baseplate, preserve the ID and merge sections
@@ -998,8 +1001,11 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
         setLabels([]);
         setMountingHoles([]);
         
-        // Dispatch event to notify 3D scene
-        window.dispatchEvent(new CustomEvent('clear-all-features'));
+        // Dispatch events to notify 3D scene to clear its internal state
+        window.dispatchEvent(new Event('supports-clear-all'));
+        window.dispatchEvent(new Event('clamps-clear-all'));
+        window.dispatchEvent(new Event('labels-clear-all'));
+        window.dispatchEvent(new Event('mounting-holes-clear-all'));
       }
       
       setIsBaseplateDrawingMode(active);
