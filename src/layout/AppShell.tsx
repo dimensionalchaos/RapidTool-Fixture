@@ -23,6 +23,7 @@ import { SupportType } from "@/components/ContextOptionsPanel/steps/SupportsStep
 import { AnySupport } from "@/components/Supports/types";
 import { PlacedClamp } from "@/components/Clamps/types";
 import { PlacedHole, HoleConfig } from "@/components/MountingHoles/types";
+import { BasePlateSection } from "@/components/BasePlate/types";
 import { autoPlaceSupports, AutoPlacementStrategy } from "@/components/Supports/autoPlacement";
 import { CavitySettings, DEFAULT_CAVITY_SETTINGS, getAdaptivePixelsPerUnit } from "@/lib/offset/types";
 import UnitsDialog from "@/modules/FileImport/components/UnitsDialog";
@@ -139,7 +140,13 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
     const [isPropertiesCollapsed, setIsPropertiesCollapsed] = useState(false);
     const [undoStack, setUndoStack] = useState<any[]>([]);
     const [redoStack, setRedoStack] = useState<any[]>([]);
-    const [currentBaseplate, setCurrentBaseplate] = useState<{ id: string; type: string; padding?: number; height?: number; depth?: number } | null>(null);
+    const [currentBaseplate, setCurrentBaseplate] = useState<{ id: string; type: string; padding?: number; height?: number; depth?: number; sections?: Array<{ id: string; minX: number; maxX: number; minZ: number; maxZ: number }> } | null>(null);
+    const [selectedBasePlateSectionId, setSelectedBasePlateSectionId] = useState<string | null>(null);
+
+    // Multi-section baseplate drawing state
+    const [isBaseplateDrawingMode, setIsBaseplateDrawingMode] = useState(false);
+    const [drawnBaseplateSections, setDrawnBaseplateSections] = useState<Array<{ id: string; minX: number; maxX: number; minZ: number; maxZ: number }>>([]);
+    const [currentBaseplateParams, setCurrentBaseplateParams] = useState<{ padding: number; height: number }>({ padding: 10, height: 4 });
 
     // Workflow State
     const [activeStep, setActiveStep] = useState<WorkflowStep>('import');
@@ -853,13 +860,55 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
       const baseplateId = `baseplate-${Date.now()}`;
       // dimensions.height is the baseplate thickness (depth in Y direction)
       const baseplateDepth = dimensions?.height ?? 4;
-      setCurrentBaseplate({ 
-        id: baseplateId, 
-        type: option, 
-        padding: dimensions?.padding || dimensions?.oversizeXY, 
-        height: dimensions?.height,
-        depth: baseplateDepth
-      });
+      
+      // For multi-section, include the drawn sections
+      let sections = option === 'multi-section' ? dimensions?.sections : undefined;
+      
+      // If switching TO multi-section from a different type, clear all placed features
+      // to prevent errors with existing supports, clamps, labels, holes
+      if (option === 'multi-section' && currentBaseplate?.type !== 'multi-section') {
+        // Clear all features that depend on baseplate geometry
+        setSupports([]);
+        setClamps([]);
+        setLabels([]);
+        setMountingHoles([]);
+        
+        // Dispatch events to notify 3D scene
+        window.dispatchEvent(new CustomEvent('clear-all-features'));
+      }
+      
+      // If we're adding to an existing multi-section baseplate, preserve the ID and merge sections
+      if (option === 'multi-section' && currentBaseplate?.type === 'multi-section') {
+        // Merge existing sections with new ones
+        const existingSections = currentBaseplate.sections || [];
+        const newSections = sections || [];
+        sections = [...existingSections, ...newSections];
+        
+        setCurrentBaseplate({ 
+          id: currentBaseplate.id, // Keep the same ID
+          type: option, 
+          padding: dimensions?.padding || dimensions?.oversizeXY, 
+          height: dimensions?.height,
+          depth: baseplateDepth,
+          sections
+        });
+      } else {
+        setCurrentBaseplate({ 
+          id: baseplateId, 
+          type: option, 
+          padding: dimensions?.padding || dimensions?.oversizeXY, 
+          height: dimensions?.height,
+          depth: baseplateDepth,
+          sections
+        });
+      }
+      
+      // Clear drawn sections after creating the baseplate
+      if (option === 'multi-section') {
+        setDrawnBaseplateSections([]);
+        setIsBaseplateDrawingMode(false);
+      }
+      
       // Mark baseplates step as completed
       if (!completedSteps.includes('baseplates')) {
         setCompletedSteps(prev => [...prev, 'baseplates']);
@@ -873,9 +922,106 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
 
     const handleBaseplateRemoved = (basePlateId: string) => {
       setCurrentBaseplate(null);
+      setDrawnBaseplateSections([]);
+      setIsBaseplateDrawingMode(false);
       setCompletedSteps(prev => prev.filter(s => s !== 'baseplates'));
       window.dispatchEvent(new CustomEvent('remove-baseplate', { detail: { basePlateId } }));
     };
+
+    // Handle section drawn event from 3D scene
+    const handleSectionDrawn = useCallback((e: CustomEvent<{ id: string; minX: number; maxX: number; minZ: number; maxZ: number }>) => {
+      const section = e.detail;
+      setDrawnBaseplateSections(prev => [...prev, section]);
+    }, []);
+
+    // Handle section removal
+    const handleRemoveSection = useCallback((sectionId: string) => {
+      setDrawnBaseplateSections(prev => prev.filter(s => s.id !== sectionId));
+    }, []);
+
+    // Handle section removal from created baseplate
+    const handleRemoveBaseplateSection = useCallback((sectionId: string) => {
+      if (!currentBaseplate || currentBaseplate.type !== 'multi-section') return;
+      
+      const updatedSections = (currentBaseplate.sections || []).filter(s => s.id !== sectionId);
+      
+      // If no sections left, remove the entire baseplate
+      if (updatedSections.length === 0) {
+        handleBaseplateRemoved(currentBaseplate.id);
+        return;
+      }
+      
+      // Update the baseplate with remaining sections
+      const updatedBaseplate = {
+        ...currentBaseplate,
+        sections: updatedSections,
+      };
+      setCurrentBaseplate(updatedBaseplate);
+      
+      // Dispatch update event to 3D scene
+      window.dispatchEvent(new CustomEvent('baseplate-section-removed', {
+        detail: { sectionId, sections: updatedSections }
+      }));
+    }, [currentBaseplate]);
+
+    // Handle baseplate section position update (from drag in 3D scene)
+    const handleBasePlateSectionUpdated = useCallback((e: CustomEvent<{
+      basePlateId: string;
+      sectionId: string;
+      newBounds: { minX: number; maxX: number; minZ: number; maxZ: number };
+    }>) => {
+      if (!currentBaseplate || currentBaseplate.type !== 'multi-section') return;
+      
+      const { sectionId, newBounds } = e.detail;
+      
+      // Update the section in currentBaseplate
+      const updatedSections = (currentBaseplate.sections || []).map(s => 
+        s.id === sectionId ? { ...s, ...newBounds } : s
+      );
+      
+      setCurrentBaseplate({
+        ...currentBaseplate,
+        sections: updatedSections,
+      });
+    }, [currentBaseplate]);
+
+    // Toggle drawing mode for multi-section baseplate
+    const handleToggleDrawingMode = useCallback((active: boolean) => {
+      // If activating drawing mode and there's an existing non-multi-section baseplate, clear it
+      if (active && currentBaseplate && currentBaseplate.type !== 'multi-section') {
+        // Clear the existing baseplate
+        handleBaseplateRemoved(currentBaseplate.id);
+        
+        // Clear all features that depend on baseplate geometry
+        setSupports([]);
+        setClamps([]);
+        setLabels([]);
+        setMountingHoles([]);
+        
+        // Dispatch event to notify 3D scene
+        window.dispatchEvent(new CustomEvent('clear-all-features'));
+      }
+      
+      setIsBaseplateDrawingMode(active);
+      // Dispatch event to 3D scene to enable/disable drawing mode
+      window.dispatchEvent(new CustomEvent('baseplate-drawing-mode-changed', { 
+        detail: { 
+          active,
+          padding: currentBaseplateParams.padding 
+        } 
+      }));
+    }, [currentBaseplateParams, currentBaseplate]);
+
+    // Handle adding more sections to existing multi-section baseplate
+    const handleAddBaseplateSection = useCallback(() => {
+      if (!currentBaseplate || currentBaseplate.type !== 'multi-section') return;
+      
+      // Navigate to baseplates step
+      setActiveStep('baseplates');
+      
+      // Enable drawing mode
+      handleToggleDrawingMode(true);
+    }, [currentBaseplate, handleToggleDrawingMode]);
 
     const handleBaseplateUpdate = (updates: { padding?: number; height?: number }) => {
       if (!currentBaseplate) return;
@@ -945,6 +1091,54 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
     React.useEffect(() => {
       window.addEventListener('create-baseplate', handleBaseplateCreated as EventListener);
       return () => window.removeEventListener('create-baseplate', handleBaseplateCreated as EventListener);
+    }, []);
+
+    // Listen for baseplate section drawn events
+    React.useEffect(() => {
+      window.addEventListener('baseplate-section-drawn', handleSectionDrawn as EventListener);
+      return () => window.removeEventListener('baseplate-section-drawn', handleSectionDrawn as EventListener);
+    }, [handleSectionDrawn]);
+
+    // Listen for baseplate config updates from 3DScene (with merged sections)
+    React.useEffect(() => {
+      const handleConfigUpdate = (e: CustomEvent<{
+        id: string;
+        type: string;
+        sections?: BasePlateSection[];
+        padding?: number;
+        height?: number;
+        depth?: number;
+      }>) => {
+        const { id, type, sections, padding, height, depth } = e.detail;
+        // Update currentBaseplate with the merged sections from 3DScene
+        setCurrentBaseplate({
+          id,
+          type: type as any,
+          sections,
+          padding,
+          height,
+          depth
+        });
+      };
+      
+      window.addEventListener('baseplate-config-updated', handleConfigUpdate as EventListener);
+      return () => window.removeEventListener('baseplate-config-updated', handleConfigUpdate as EventListener);
+    }, []);
+
+    // Listen for baseplate section position updates from 3DScene
+    React.useEffect(() => {
+      window.addEventListener('baseplate-section-updated', handleBasePlateSectionUpdated as EventListener);
+      return () => window.removeEventListener('baseplate-section-updated', handleBasePlateSectionUpdated as EventListener);
+    }, [handleBasePlateSectionUpdated]);
+
+    // Listen for baseplate section selection from 3DScene
+    React.useEffect(() => {
+      const handleSectionSelected = (e: CustomEvent<{ sectionId: string }>) => {
+        setSelectedBasePlateSectionId(e.detail.sectionId);
+      };
+      
+      window.addEventListener('baseplate-section-selected', handleSectionSelected as EventListener);
+      return () => window.removeEventListener('baseplate-section-selected', handleSectionSelected as EventListener);
     }, []);
 
     // Listen for supports dialog open event - no longer needed as we use context panel
@@ -1439,6 +1633,9 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
                       hasWorkpiece={!!actualFile}
                       currentBaseplate={currentBaseplate}
                       onSelectBaseplate={(type, options) => {
+                        // Store params for drawing mode
+                        setCurrentBaseplateParams({ padding: options.padding, height: options.height });
+                        
                         window.dispatchEvent(new CustomEvent('create-baseplate', {
                           detail: { 
                             type: 'baseplate',
@@ -1446,12 +1643,17 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
                             dimensions: {
                               padding: options.padding,
                               height: options.height,
-                              oversizeXY: options.padding // For convex-hull
+                              oversizeXY: options.padding, // For convex-hull
+                              sections: options.sections // For multi-section
                             }
                           }
                         }));
                       }}
                       onRemoveBaseplate={() => currentBaseplate && handleBaseplateRemoved(currentBaseplate.id)}
+                      isDrawingMode={isBaseplateDrawingMode}
+                      onToggleDrawingMode={handleToggleDrawingMode}
+                      drawnSections={drawnBaseplateSections}
+                      onRemoveSection={handleRemoveSection}
                     />
                   )}
                   {activeStep === 'supports' && (
@@ -1669,6 +1871,9 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
                   baseplate={currentBaseplate}
                   onRemoveBaseplate={() => currentBaseplate && handleBaseplateRemoved(currentBaseplate.id)}
                   onUpdateBaseplate={handleBaseplateUpdate}
+                  onRemoveBaseplateSection={handleRemoveBaseplateSection}
+                  onAddBaseplateSection={handleAddBaseplateSection}
+                  selectedBasePlateSectionId={selectedBasePlateSectionId}
                   baseplateVisible={baseplateVisible}
                   onBaseplateVisibilityChange={setBaseplateVisible}
                   supports={supports}

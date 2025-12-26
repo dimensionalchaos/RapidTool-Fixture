@@ -3,7 +3,9 @@ import { useThree, ThreeEvent } from '@react-three/fiber';
 import { OrbitControls as DreiOrbitControls, Html, GizmoHelper, GizmoViewport, Line } from '@react-three/drei';
 import { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
 import BasePlate from "./BasePlate";
-import type { BasePlateConfig } from './BasePlate/types';
+import type { BasePlateConfig, BasePlateSection } from './BasePlate/types';
+import { mergeOverlappingSections } from './BasePlate/types';
+import { MultiSectionDrawing, MultiSectionBasePlate, BasePlateTransformControls } from './BasePlate/index';
 import { ProcessedFile, ViewOrientation } from "@/modules/FileImport/types";
 import SelectableTransformControls from './SelectableTransformControls';
 import * as THREE from 'three';
@@ -895,6 +897,11 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   // Baseplate configuration state
   const [basePlate, setBasePlate] = useState<BasePlateConfig | null>(null);
   
+  // Multi-section baseplate drawing state
+  const [isMultiSectionDrawingMode, setIsMultiSectionDrawingMode] = useState(false);
+  const [drawnSections, setDrawnSections] = useState<BasePlateSection[]>([]);
+  const [multiSectionPadding, setMultiSectionPadding] = useState(0);
+  
   // Store refs for each model mesh by part ID
   const modelMeshRefs = useRef<Map<string, React.RefObject<THREE.Mesh>>>(new Map());
   // Store initial offsets for each part (persists across renders to prevent position reset)
@@ -1128,6 +1135,11 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     depth: number;
   }>({ active: false, config: null, depth: 20 });
   const [holeSnapEnabled, setHoleSnapEnabled] = useState(true); // Snap to alignment enabled by default
+  
+  // Multi-section baseplate editing state
+  const [selectedBasePlateSectionId, setSelectedBasePlateSectionId] = useState<string | null>(null);
+  const [editingBasePlateSectionId, setEditingBasePlateSectionId] = useState<string | null>(null);
+  const isDraggingBasePlateSectionRef = useRef(false); // Track if section gizmo is being dragged
   
   // Support snap alignment state
   const [supportSnapEnabled, setSupportSnapEnabled] = useState(true); // Snap to alignment enabled by default
@@ -4319,6 +4331,38 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
         const holeDiameter = clampPos(dimensions?.holeDiameter, 1, 6);
         cfg = { ...cfg, type: 'metal-wooden-plate', width, height, depth, holeDiameter, oversizeXY: paddingValue };
         cfg.position = new THREE.Vector3(boxCenter.x, 0, boxCenter.z);
+      } else if (option === 'multi-section') {
+        // Multi-section baseplate - uses drawn sections
+        const sections = dimensions?.sections as BasePlateSection[] | undefined;
+        if (!sections || sections.length === 0) {
+          console.warn('Multi-section baseplate requires sections');
+          return;
+        }
+        
+        // If there's an existing multi-section baseplate, append new sections to it
+        const existingSections = basePlate?.type === 'multi-section' ? (basePlate.sections || []) : [];
+        const combinedSections = [...existingSections, ...sections];
+        
+        // Merge overlapping sections
+        const allSections = mergeOverlappingSections(combinedSections);
+        
+        const depth = clampPos(dimensions?.height, 1, DEFAULT_THICKNESS);
+        const paddingValue = clampPos(dimensions?.padding, 0, 0);
+        cfg = { 
+          ...cfg, 
+          type: 'multi-section', 
+          depth, 
+          oversizeXY: paddingValue,
+          sections: allSections,
+          // Calculate overall bounds for the multi-section baseplate
+          width: Math.max(...allSections.map(s => s.maxX)) - Math.min(...allSections.map(s => s.minX)),
+          height: Math.max(...allSections.map(s => s.maxZ)) - Math.min(...allSections.map(s => s.minZ)),
+        };
+        cfg.position = new THREE.Vector3(0, 0, 0);
+        // Clear drawn sections after creating the baseplate
+        setDrawnSections([]);
+        setIsMultiSectionDrawingMode(false);
+        setOrbitControlsEnabled(true);
       } else {
         console.warn('Unsupported baseplate option:', option);
         return;
@@ -4363,6 +4407,18 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
 
       setBasePlate(cfg);
       
+      // Notify AppShell of the final baseplate configuration with merged sections
+      window.dispatchEvent(new CustomEvent('baseplate-config-updated', {
+        detail: {
+          id: cfg.id,
+          type: cfg.type,
+          sections: cfg.sections,
+          padding: cfg.oversizeXY,
+          height: cfg.depth,
+          depth: cfg.depth
+        }
+      }));
+      
       // Emit transform updates for all parts after lifting
       importedParts.forEach(part => {
         const ref = modelMeshRefs.current.get(part.id);
@@ -4381,7 +4437,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
 
     window.addEventListener('create-baseplate', handleCreateBaseplate as EventListener);
     return () => window.removeEventListener('create-baseplate', handleCreateBaseplate as EventListener);
-  }, [importedParts, selectedPartId]);
+  }, [importedParts, selectedPartId, basePlate]);
 
   // Handle base plate deselection/cancellation/update
   React.useEffect(() => {
@@ -4486,18 +4542,79 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       setBasePlate(null);
     };
 
+    const handleSectionRemoved = (e: CustomEvent<{ sectionId: string; sections: BasePlateSection[] }>) => {
+      if (!basePlate || basePlate.type !== 'multi-section') return;
+      
+      // Update baseplate with remaining sections
+      setBasePlate({
+        ...basePlate,
+        sections: e.detail.sections,
+        // Recalculate overall bounds
+        width: Math.max(...e.detail.sections.map(s => s.maxX)) - Math.min(...e.detail.sections.map(s => s.minX)),
+        height: Math.max(...e.detail.sections.map(s => s.maxZ)) - Math.min(...e.detail.sections.map(s => s.minZ)),
+      });
+    };
+
     window.addEventListener('baseplate-deselected', handleDeselectBaseplate as EventListener);
     window.addEventListener('cancel-baseplate', handleCancelBaseplate as EventListener);
     window.addEventListener('update-baseplate', handleUpdateBaseplate as EventListener);
     window.addEventListener('remove-baseplate', handleRemoveBaseplate as EventListener);
+    window.addEventListener('baseplate-section-removed', handleSectionRemoved as EventListener);
 
     return () => {
       window.removeEventListener('baseplate-deselected', handleDeselectBaseplate as EventListener);
       window.removeEventListener('cancel-baseplate', handleCancelBaseplate as EventListener);
       window.removeEventListener('update-baseplate', handleUpdateBaseplate as EventListener);
       window.removeEventListener('remove-baseplate', handleRemoveBaseplate as EventListener);
+      window.removeEventListener('baseplate-section-removed', handleSectionRemoved as EventListener);
     };
   }, [basePlate, importedParts, selectedPartId]);
+
+  // Handle multi-section baseplate drawing mode
+  React.useEffect(() => {
+    const handleDrawingModeChanged = (e: CustomEvent<{ active: boolean; padding?: number }>) => {
+      const isActive = e.detail.active;
+      setIsMultiSectionDrawingMode(isActive);
+      
+      // Update padding if provided
+      if (e.detail.padding !== undefined) {
+        setMultiSectionPadding(e.detail.padding);
+      }
+      
+      if (isActive) {
+        // Entering drawing mode - switch to top view and disable orbit controls
+        prevOrientationRef.current = currentOrientation;
+        setCurrentOrientation('top');
+        updateCamera('top', modelBounds);
+        setOrbitControlsEnabled(false);
+      } else {
+        // Exiting drawing mode - restore previous view and enable orbit controls
+        setCurrentOrientation(prevOrientationRef.current);
+        updateCamera(prevOrientationRef.current, modelBounds);
+        setOrbitControlsEnabled(true);
+      }
+    };
+
+    window.addEventListener('baseplate-drawing-mode-changed', handleDrawingModeChanged as EventListener);
+    return () => window.removeEventListener('baseplate-drawing-mode-changed', handleDrawingModeChanged as EventListener);
+  }, [currentOrientation, updateCamera, modelBounds]);
+
+  // Handle section drawn - forward to AppShell
+  const handleSectionDrawn = useCallback((section: BasePlateSection) => {
+    window.dispatchEvent(new CustomEvent('baseplate-section-drawn', { detail: section }));
+    setDrawnSections(prev => [...prev, section]);
+  }, []);
+
+  // Sync drawn sections from AppShell events (for removal)
+  React.useEffect(() => {
+    const handleSectionRemoved = () => {
+      // Re-sync sections from the event if needed
+      // For now, the sections are managed locally and synced via events
+    };
+
+    window.addEventListener('baseplate-section-removed', handleSectionRemoved as EventListener);
+    return () => window.removeEventListener('baseplate-section-removed', handleSectionRemoved as EventListener);
+  }, []);
 
   // Update rectangular baseplate size and position when model transform changes
   // This recalculates dimensions based on new bounding box after gizmo closes
@@ -5004,8 +5121,8 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       {/* Scalable grid - sized based on combined model bounds (includes world positions) */}
       <ScalableGrid modelBounds={modelBounds} isDarkMode={isDarkMode} />
 
-      {/* Base plate - hide when merged fixture is shown OR when we have baseplateWithHoles */}
-      {basePlate && baseplateVisible && !mergedFixtureMesh && !baseplateWithHoles && (
+      {/* Base plate - hide when merged fixture is shown OR when we have baseplateWithHoles OR multi-section (rendered separately) */}
+      {basePlate && basePlate.type !== 'multi-section' && baseplateVisible && !mergedFixtureMesh && !baseplateWithHoles && (
         <BasePlate
           key={`baseplate-${basePlate.id}`}
           type={basePlate.type}
@@ -5065,6 +5182,88 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
         />
       )}
 
+      {/* Multi-section baseplate - rendered as multiple separate sections */}
+      {basePlate && basePlate.type === 'multi-section' && basePlate.sections && baseplateVisible && !mergedFixtureMesh && (
+        <MultiSectionBasePlate
+          sections={basePlate.sections}
+          depth={basePlate.depth ?? 4}
+          material={basePlate.material}
+          selected={false}
+          selectedSectionId={selectedBasePlateSectionId}
+          onSelect={() => {
+            window.dispatchEvent(new CustomEvent('baseplate-selected', {
+              detail: { basePlateId: basePlate.id }
+            }));
+          }}
+          onSectionDoubleClick={isMultiSectionDrawingMode ? undefined : (sectionId) => {
+            // Enter edit mode for this section (disabled during drawing mode)
+            setSelectedBasePlateSectionId(sectionId);
+            setEditingBasePlateSectionId(sectionId);
+            // Notify AppShell to highlight section in properties panel
+            window.dispatchEvent(new CustomEvent('baseplate-section-selected', {
+              detail: { sectionId }
+            }));
+          }}
+        />
+      )}
+
+      {/* BasePlate section transform controls - XZ plane only - disabled during drawing mode */}
+      {editingBasePlateSectionId && basePlate && basePlate.type === 'multi-section' && basePlate.sections && !mergedFixtureMesh && !isMultiSectionDrawingMode && (
+        (() => {
+          const editingSection = basePlate.sections.find(s => s.id === editingBasePlateSectionId);
+          if (!editingSection) return null;
+          return (
+            <BasePlateTransformControls
+              section={editingSection}
+              onDragStart={() => {
+                isDraggingBasePlateSectionRef.current = true;
+              }}
+              onTransformChange={(newBounds) => {
+                // Skip live updates during drag to prevent gizmo jumping
+                // The visual update is handled by PivotControls autoTransform
+              }}
+              onTransformEnd={(newBounds) => {
+                isDraggingBasePlateSectionRef.current = false;
+                
+                // Update the section with new bounds
+                const updatedSections = basePlate.sections!.map(s => 
+                  s.id === editingBasePlateSectionId 
+                    ? { ...s, ...newBounds }
+                    : s
+                );
+                
+                // Update basePlate with new sections
+                setBasePlate(prev => {
+                  if (!prev || prev.type !== 'multi-section') return prev;
+                  return {
+                    ...prev,
+                    sections: updatedSections
+                  };
+                });
+                
+                // Dispatch event to AppShell to update its state
+                window.dispatchEvent(new CustomEvent('baseplate-section-updated', {
+                  detail: {
+                    basePlateId: basePlate.id,
+                    sectionId: editingBasePlateSectionId,
+                    newBounds
+                  }
+                }));
+              }}
+              onDeselect={() => {
+                isDraggingBasePlateSectionRef.current = false;
+                setEditingBasePlateSectionId(null);
+                setSelectedBasePlateSectionId(null);
+                // Clear selection in properties panel
+                window.dispatchEvent(new CustomEvent('baseplate-section-selected', {
+                  detail: { sectionId: null }
+                }));
+              }}
+            />
+          );
+        })()
+      )}
+
       {/* Base plate with holes cut (CSG result) - show when baseplateWithHoles exists */}
       {basePlate && baseplateVisible && !mergedFixtureMesh && baseplateWithHoles && (
         <mesh
@@ -5087,6 +5286,20 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
           />
         </mesh>
       )}
+
+      {/* Multi-section baseplate drawing overlay */}
+      <MultiSectionDrawing
+        active={isMultiSectionDrawingMode}
+        planeY={0}
+        padding={multiSectionPadding}
+        onSectionDrawn={handleSectionDrawn}
+        onCancel={() => {
+          setIsMultiSectionDrawingMode(false);
+          setOrbitControlsEnabled(true);
+          window.dispatchEvent(new CustomEvent('baseplate-drawing-mode-changed', { detail: { active: false } }));
+        }}
+        existingSections={drawnSections}
+      />
 
       {/* Processing indicator for hole CSG */}
       {holeCSGProcessing && (

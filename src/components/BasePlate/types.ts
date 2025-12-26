@@ -7,7 +7,23 @@ export type BasePlateType =
   | 'rectangular' 
   | 'convex-hull' 
   | 'perforated-panel' 
-  | 'metal-wooden-plate';
+  | 'metal-wooden-plate'
+  | 'multi-section';
+
+/**
+ * A single section/region in a multi-section baseplate
+ */
+export interface BasePlateSection {
+  id: string;
+  /** Min X coordinate in world space (mm) */
+  minX: number;
+  /** Max X coordinate in world space (mm) */
+  maxX: number;
+  /** Min Z coordinate in world space (mm) */
+  minZ: number;
+  /** Max Z coordinate in world space (mm) */
+  maxZ: number;
+}
 
 /**
  * Material options for baseplates
@@ -40,6 +56,10 @@ export interface BasePlateConfig {
   holeDiameter?: number;
   /** Corner radius for convex hull (mm) - rounds off sharp vertices */
   cornerRadius?: number;
+  /** Sections for multi-section baseplate */
+  sections?: BasePlateSection[];
+  /** Whether multi-section drawing mode is active */
+  isDrawingMode?: boolean;
 }
 
 /**
@@ -89,4 +109,67 @@ export interface BasePlateProps {
   livePositionDelta?: { x: number; z: number } | null;
   /** Corner radius for convex hull (mm) - rounds off sharp vertices */
   cornerRadius?: number;
+}
+
+/**
+ * Checks if two baseplate sections overlap
+ */
+export function sectionsOverlap(a: BasePlateSection, b: BasePlateSection): boolean {
+  return !(a.maxX < b.minX || a.minX > b.maxX || a.maxZ < b.minZ || a.minZ > b.maxZ);
+}
+
+/**
+ * Merges two overlapping sections into one larger section
+ */
+export function mergeSections(a: BasePlateSection, b: BasePlateSection): BasePlateSection {
+  return {
+    id: `merged-${Date.now()}`,
+    minX: Math.min(a.minX, b.minX),
+    maxX: Math.max(a.maxX, b.maxX),
+    minZ: Math.min(a.minZ, b.minZ),
+    maxZ: Math.max(a.maxZ, b.maxZ),
+  };
+}
+
+/**
+ * Merges all overlapping sections in an array
+ * Returns a new array with overlapping sections combined
+ */
+export function mergeOverlappingSections(sections: BasePlateSection[]): BasePlateSection[] {
+  if (sections.length <= 1) return sections;
+  
+  let merged = [...sections];
+  let didMerge = true;
+  
+  // Keep merging until no more overlaps are found
+  while (didMerge) {
+    didMerge = false;
+    const newMerged: BasePlateSection[] = [];
+    const used = new Set<number>();
+    
+    for (let i = 0; i < merged.length; i++) {
+      if (used.has(i)) continue;
+      
+      let current = merged[i];
+      let mergedWithAny = false;
+      
+      for (let j = i + 1; j < merged.length; j++) {
+        if (used.has(j)) continue;
+        
+        if (sectionsOverlap(current, merged[j])) {
+          current = mergeSections(current, merged[j]);
+          used.add(j);
+          mergedWithAny = true;
+          didMerge = true;
+        }
+      }
+      
+      newMerged.push(current);
+      used.add(i);
+    }
+    
+    merged = newMerged;
+  }
+  
+  return merged;
 }
