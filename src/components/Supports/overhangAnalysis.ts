@@ -2441,7 +2441,7 @@ export function placeOverhangSupports(
   
   const supportHeight = Math.max(1, lowestY - baseTopY - opts.contactOffset);
   
-  let supports: CustomSupport[] = [];
+  const supports: CustomSupport[] = [];
   const clusters: OverhangCluster[] = [];
   let supportIndex = 0;
   
@@ -2530,7 +2530,7 @@ export function placeOverhangSupports(
   
   // Step 6: Check for significant interior overhangs that need additional supports
   // Only add if we have room (haven't hit MAX_SUPPORTS)
-  let overhangSupports: CustomSupport[] = [];
+  const overhangSupports: CustomSupport[] = [];
   const remainingSlots = MAX_SUPPORTS - supports.length;
   
   if (allOverhangs.length > 0 && remainingSlots > 0) {

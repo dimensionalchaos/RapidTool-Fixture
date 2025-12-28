@@ -4173,8 +4173,8 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     const effectiveBaseY = (support as any).baseY ?? baseTop;
 
     let geometry: THREE.BufferGeometry | null = null;
-    let position = new THREE.Vector3(center.x, effectiveBaseY, center.y);
-    let rotation = new THREE.Euler(0, rotY, 0);
+    const position = new THREE.Vector3(center.x, effectiveBaseY, center.y);
+    const rotation = new THREE.Euler(0, rotY, 0);
 
     if (type === 'cylindrical') {
       const { radius } = support as any;
@@ -4423,7 +4423,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
           console.log(`[3DScene] Preparing cutter geometry for part ${partId}`);
           
           // Get the cutter (offset mesh) geometry in world space
-          let cutterGeometry = offsetMesh.geometry.clone();
+          const cutterGeometry = offsetMesh.geometry.clone();
           offsetMesh.updateMatrixWorld(true);
           cutterGeometry.applyMatrix4(offsetMesh.matrixWorld);
           
@@ -6315,7 +6315,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
                     : h
                 ));
                 
-                let movedSection = { 
+                const movedSection = { 
                   ...editingSection,
                   ...newBounds,
                   // Preserve original size (not position)

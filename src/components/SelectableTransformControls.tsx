@@ -199,8 +199,8 @@ const SelectableTransformControls: React.FC<SelectableTransformControlsProps> = 
     gl.domElement.style.cursor = 'auto';
     
     // Capture world transform before hiding
-    let bakedPosition = new THREE.Vector3();
-    let bakedRotation = new THREE.Euler();
+    const bakedPosition = new THREE.Vector3();
+    const bakedRotation = new THREE.Euler();
     
     if (meshRef.current && pivotRef.current) {
       meshRef.current.updateMatrixWorld(true);

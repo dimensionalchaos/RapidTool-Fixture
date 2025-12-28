@@ -144,7 +144,7 @@ const CSGOperations: React.FC<CSGOperationsProps> = ({
     setIsProcessing(true);
     
     try {
-      let currentMesh = baseMesh;
+      const currentMesh = baseMesh;
       if (!currentMesh) return;
 
       for (const operation of operations) {

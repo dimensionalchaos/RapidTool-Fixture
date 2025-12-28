@@ -7,7 +7,7 @@ import type { CSGWorkerInput, CSGWorkerOutput } from './csgWorker';
 
 // Worker pool for CSG operations
 let csgWorker: Worker | null = null;
-let csgWorkerPromises: Map<string, { resolve: (value: any) => void; reject: (error: any) => void }> = new Map();
+const csgWorkerPromises: Map<string, { resolve: (value: any) => void; reject: (error: any) => void }> = new Map();
 
 /**
  * Get or create the CSG worker
@@ -396,7 +396,7 @@ export function terminateWorkers(): void {
 
 // Worker pool for clamp CSG operations
 let clampCSGWorker: Worker | null = null;
-let clampCSGWorkerPromises: Map<string, {
+const clampCSGWorkerPromises: Map<string, {
   resolve: (value: THREE.BufferGeometry | null) => void;
   reject: (error: Error) => void;
   onProgress?: (progress: number) => void;
@@ -556,7 +556,7 @@ export async function performClampCSGInWorker(
 // ============================================
 
 let holeCSGWorker: Worker | null = null;
-let holeCSGWorkerPromises: Map<string, {
+const holeCSGWorkerPromises: Map<string, {
   resolve: (value: any) => void;
   reject: (error: any) => void;
   onProgress?: (progress: number) => void;

@@ -107,7 +107,7 @@ export function autoPlaceSupports(
   let allClustersFound = 0;
   let allOverhangArea = 0;
   const allMessages: string[] = [];
-  let combinedDebugPerimeter: Array<{ x: number; z: number }> = [];
+  const combinedDebugPerimeter: Array<{ x: number; z: number }> = [];
   
   // Use raycasting to refine support heights (same technique as manual placement)
   const raycaster = new THREE.Raycaster();

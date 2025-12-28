@@ -358,7 +358,7 @@ export async function decimateMeshWithManifold(
     await yieldToUI();
     
     // Create Manifold from mesh
-    let manifold = new Manifold(mesh);
+    const manifold = new Manifold(mesh);
     
     const status = manifold.status();
     if (status !== 0) { // 0 = NoError

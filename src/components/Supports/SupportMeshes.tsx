@@ -359,7 +359,7 @@ const createPolygonFilletGeometry = (polygon: [number, number][], cornerRadius: 
     if (r < 0.01) {
       // Sharp corner - compute angle sweep from n1 to n2
       const startAngle = Math.atan2(n1z, n1x);
-      let endAngle = Math.atan2(n2z, n2x);
+      const endAngle = Math.atan2(n2z, n2x);
       let angleDiff = endAngle - startAngle;
       
       if (isCW) {
@@ -847,7 +847,7 @@ const createBottomCapGeometry = (
       if (nextCorner.r < 0.01) {
         // Sharp corner - add arc sweep from prevNormal direction to nextNormal direction
         const startAngle = Math.atan2(prevNormal[1], prevNormal[0]);
-        let endAngle = Math.atan2(nextNormal[1], nextNormal[0]);
+        const endAngle = Math.atan2(nextNormal[1], nextNormal[0]);
         let angleDiff = endAngle - startAngle;
         
         if (isCW) {

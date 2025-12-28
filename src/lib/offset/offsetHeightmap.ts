@@ -186,7 +186,7 @@ void main() {
 // ============================================
 
 let offsetRenderer = null;
-let renderTargetCache = new Map();
+const renderTargetCache = new Map();
 
 function getOffsetRenderer() {
     if (!offsetRenderer) {
