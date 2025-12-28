@@ -302,9 +302,9 @@ git checkout -b refactor/phase-N-name  # Start fresh
 - [x] Migrate labels module (`@/features/labels`)
 - [x] Migrate baseplate module (`@/features/baseplate`)
 
-**Phase 4:** ⏳ Not Started
-- [ ] 11-create-transform-core (`src/core/transform/`)
-- [ ] 12-create-transform-hooks (`src/core/transform/hooks/`)
+**Phase 4:** 🔄 In Progress
+- [x] 11-create-transform-core (`src/core/transform/`)
+- [x] 12-create-transform-hooks (`src/core/transform/hooks/`)
 - [ ] 13-migrate-transform-controls (6 components)
 
 **Phase 5:** ⏳ Planned
