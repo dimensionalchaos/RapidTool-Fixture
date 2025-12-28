@@ -1,9 +1,9 @@
 /**
  * HoleTransformControls
  *
- * Transform controls for mounting holes using PivotControls from @react-three/drei.
+ * Transform controls for mounting holes using the unified transform system.
  * Allows XZ plane translation only (no Y-axis movement or rotation).
- * Styled consistently with SupportTransformControls.
+ * Uses @/core/transform for constraint handling and gizmo management.
  */
 
 import React, { useRef, useCallback, useEffect, useMemo } from 'react';
@@ -11,6 +11,13 @@ import { useThree } from '@react-three/fiber';
 import { PivotControls, Html } from '@react-three/drei';
 import * as THREE from 'three';
 import type { PlacedHole } from '../types';
+import {
+  TransformController,
+  HOLE_TRANSFORM_CONFIG,
+  setOrbitControlsEnabled,
+  resetPivotMatrix,
+  calculateGizmoScale,
+} from '@/core/transform';
 
 // =============================================================================
 // Types
@@ -32,12 +39,6 @@ interface HoleTransformControlsProps {
 /** Height offset above baseplate for gizmo positioning */
 const GIZMO_Y_OFFSET = 5;
 
-/** Minimum scale for gizmo visibility */
-const MIN_GIZMO_SCALE = 30;
-
-/** Gizmo scale multiplier based on hole diameter */
-const GIZMO_SCALE_MULTIPLIER = 3;
-
 // =============================================================================
 // Reusable Objects (avoid per-frame allocations)
 // =============================================================================
@@ -56,15 +57,6 @@ function safeNum(value: number | undefined | null, defaultValue: number): number
   return Number.isNaN(num) ? defaultValue : num;
 }
 
-/**
- * Dispatches a custom event to enable/disable orbit controls.
- */
-function setOrbitControlsEnabled(enabled: boolean): void {
-  window.dispatchEvent(
-    new CustomEvent('disable-orbit-controls', { detail: { disabled: !enabled } })
-  );
-}
-
 // =============================================================================
 // Main Component
 // =============================================================================
@@ -81,7 +73,15 @@ const HoleTransformControls: React.FC<HoleTransformControlsProps> = ({
   const pivotRef = useRef<THREE.Group>(null);
   const anchorRef = useRef<THREE.Mesh>(null);
   const isDraggingRef = useRef(false);
-  const dragStartGroupPos = useRef<THREE.Vector3 | null>(null);
+  const controllerRef = useRef<TransformController | null>(null);
+
+  // Initialize transform controller
+  useEffect(() => {
+    controllerRef.current = new TransformController(HOLE_TRANSFORM_CONFIG);
+    return () => {
+      controllerRef.current = null;
+    };
+  }, []);
 
   // Extract and sanitize hole position
   const holeX = safeNum(hole.position?.x, 0);
@@ -94,9 +94,9 @@ const HoleTransformControls: React.FC<HoleTransformControlsProps> = ({
     return new THREE.Vector3(holeX, gizmoY, holeZ);
   }, [holeX, holeZ, gizmoY]);
 
-  // Calculate gizmo scale based on hole size
+  // Calculate gizmo scale using unified system
   const gizmoScale = useMemo(
-    () => Math.max(holeDiameter * GIZMO_SCALE_MULTIPLIER, MIN_GIZMO_SCALE),
+    () => calculateGizmoScale('hole', { diameter: holeDiameter }),
     [holeDiameter]
   );
 
@@ -148,13 +148,9 @@ const HoleTransformControls: React.FC<HoleTransformControlsProps> = ({
       onTransformEnd(newPosition);
     }
 
-    // Reset pivot to identity after drag ends
+    // Reset pivot to identity after drag ends using unified utility
     if (pivotRef.current) {
-      pivotRef.current.matrix.identity();
-      pivotRef.current.position.set(0, 0, 0);
-      pivotRef.current.rotation.set(0, 0, 0);
-      pivotRef.current.scale.set(1, 1, 1);
-      pivotRef.current.updateMatrix();
+      resetPivotMatrix(pivotRef.current);
     }
   }, [gl, getTransformFromAnchor, onTransformEnd]);
 

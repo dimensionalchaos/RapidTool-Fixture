@@ -16,6 +16,13 @@ import { useThree } from '@react-three/fiber';
 import { PivotControls, Html } from '@react-three/drei';
 import * as THREE from 'three';
 import { AnySupport } from '../types';
+import {
+  TransformController,
+  SUPPORT_TRANSFORM_CONFIG,
+  setOrbitControlsEnabled,
+  resetPivotMatrix,
+  calculateGizmoScale,
+} from '@/core/transform';
 
 interface SupportTransformControlsProps {
   support: AnySupport;
@@ -31,6 +38,9 @@ interface SupportTransformControlsProps {
 const tempPosition = new THREE.Vector3();
 const tempQuaternion = new THREE.Quaternion();
 const tempEuler = new THREE.Euler();
+
+// Transform controller for applying constraints (shared instance for performance)
+const transformController = new TransformController(SUPPORT_TRANSFORM_CONFIG);
 
 const SupportTransformControls: React.FC<SupportTransformControlsProps> = ({
   support,
@@ -64,10 +74,10 @@ const SupportTransformControls: React.FC<SupportTransformControlsProps> = ({
     : new THREE.Vector3(center.x, gizmoY, center.y);
   const displayRotY = isDraggingRef.current ? dragStartGroupRotY.current : currentRotationY;
   
-  // Gizmo scale based on support size
+  // Gizmo scale based on support size using unified system
   const gizmoScale = useMemo(() => {
     const supportRadius = (support as any).radius ?? (support as any).width ?? 10;
-    return Math.max(supportRadius * 2, 25);
+    return calculateGizmoScale('support', { radius: supportRadius });
   }, [support]);
 
   // Read world transform from the anchor mesh (inside PivotControls)
@@ -106,7 +116,7 @@ const SupportTransformControls: React.FC<SupportTransformControlsProps> = ({
     isDraggingRef.current = true;
     dragStartGroupPos.current = new THREE.Vector3(center.x, gizmoY, center.y);
     dragStartGroupRotY.current = currentRotationY;
-    window.dispatchEvent(new CustomEvent('disable-orbit-controls', { detail: { disabled: true } }));
+    setOrbitControlsEnabled(false);
     gl.domElement.style.cursor = 'grabbing';
     onDragStart?.();
   }, [gl, center, gizmoY, currentRotationY, onDragStart]);
@@ -115,7 +125,7 @@ const SupportTransformControls: React.FC<SupportTransformControlsProps> = ({
   const handleDragEnd = useCallback(() => {
     isDraggingRef.current = false;
     dragStartGroupPos.current = null;
-    window.dispatchEvent(new CustomEvent('disable-orbit-controls', { detail: { disabled: false } }));
+    setOrbitControlsEnabled(true);
     gl.domElement.style.cursor = 'auto';
     
     // Read final transform from anchor
@@ -127,14 +137,9 @@ const SupportTransformControls: React.FC<SupportTransformControlsProps> = ({
     // Notify parent drag ended (before resetting pivot)
     onDragEnd?.();
     
-    // Reset pivot to identity after drag ends
-    // The group position will update to new support position on next render
+    // Reset pivot to identity after drag ends using unified utility
     if (pivotRef.current) {
-      pivotRef.current.matrix.identity();
-      pivotRef.current.position.set(0, 0, 0);
-      pivotRef.current.rotation.set(0, 0, 0);
-      pivotRef.current.scale.set(1, 1, 1);
-      pivotRef.current.updateMatrix();
+      resetPivotMatrix(pivotRef.current);
     }
   }, [gl, getTransformFromAnchor, onTransformEnd]);
 

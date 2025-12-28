@@ -15,6 +15,13 @@ import { useThree } from '@react-three/fiber';
 import { PivotControls, Html } from '@react-three/drei';
 import * as THREE from 'three';
 import { PlacedClamp } from '../types';
+import {
+  TransformController,
+  CLAMP_TRANSFORM_CONFIG,
+  setOrbitControlsEnabled,
+  resetPivotMatrix,
+  calculateGizmoScale,
+} from '@/core/transform';
 
 interface ClampTransformControlsProps {
   placedClamp: PlacedClamp;
@@ -31,6 +38,9 @@ interface ClampTransformControlsProps {
 const tempPosition = new THREE.Vector3();
 const tempQuaternion = new THREE.Quaternion();
 const tempEuler = new THREE.Euler();
+
+// Transform controller for applying constraints (shared instance for performance)
+const transformController = new TransformController(CLAMP_TRANSFORM_CONFIG);
 
 const ClampTransformControls: React.FC<ClampTransformControlsProps> = ({
   placedClamp,
@@ -101,7 +111,7 @@ const ClampTransformControls: React.FC<ClampTransformControlsProps> = ({
     dragStartPos.current = new THREE.Vector3(position.x, position.y, position.z);
     // Only store Y rotation (green gizmo), like supports
     dragStartRot.current = new THREE.Euler(0, THREE.MathUtils.degToRad(rotation.y), 0);
-    window.dispatchEvent(new CustomEvent('disable-orbit-controls', { detail: { disabled: true } }));
+    setOrbitControlsEnabled(false);
     gl.domElement.style.cursor = 'grabbing';
     onDragStart?.();
   }, [gl, position, rotation, onDragStart]);
@@ -111,7 +121,7 @@ const ClampTransformControls: React.FC<ClampTransformControlsProps> = ({
     isDraggingRef.current = false;
     dragStartPos.current = null;
     dragStartRot.current = null;
-    window.dispatchEvent(new CustomEvent('disable-orbit-controls', { detail: { disabled: false } }));
+    setOrbitControlsEnabled(true);
     gl.domElement.style.cursor = 'auto';
     
     const transform = getTransformFromAnchor();
@@ -121,13 +131,9 @@ const ClampTransformControls: React.FC<ClampTransformControlsProps> = ({
     
     onDragEnd?.();
     
-    // Reset pivot
+    // Reset pivot using unified utility
     if (pivotRef.current) {
-      pivotRef.current.matrix.identity();
-      pivotRef.current.position.set(0, 0, 0);
-      pivotRef.current.rotation.set(0, 0, 0);
-      pivotRef.current.scale.set(1, 1, 1);
-      pivotRef.current.updateMatrix();
+      resetPivotMatrix(pivotRef.current);
     }
   }, [gl, getTransformFromAnchor, onTransformEnd, onDragEnd]);
 
@@ -165,7 +171,7 @@ const ClampTransformControls: React.FC<ClampTransformControlsProps> = ({
     >
       <PivotControls
         ref={pivotRef}
-        scale={40}
+        scale={calculateGizmoScale('clamp', {})}
         lineWidth={4}
         depthTest={false}
         fixed={false}

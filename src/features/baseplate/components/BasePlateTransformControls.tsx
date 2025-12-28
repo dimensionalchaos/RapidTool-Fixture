@@ -16,6 +16,13 @@ import { useThree } from '@react-three/fiber';
 import { PivotControls, Html } from '@react-three/drei';
 import * as THREE from 'three';
 import type { BasePlateSection } from '../types';
+import {
+  TransformController,
+  BASEPLATE_TRANSFORM_CONFIG,
+  setOrbitControlsEnabled,
+  resetPivotMatrix,
+  calculateGizmoScale,
+} from '@/core/transform';
 
 // =============================================================================
 // Types
@@ -36,38 +43,14 @@ interface BasePlateTransformControlsProps {
 /** Height offset above ground for gizmo positioning */
 const GIZMO_Y_OFFSET = 5;
 
-/** Minimum scale for gizmo visibility */
-const MIN_GIZMO_SCALE = 30;
-
-/** Gizmo scale multiplier based on section size */
-const GIZMO_SCALE_MULTIPLIER = 0.8;
+// Transform controller for applying constraints (shared instance for performance)
+const transformController = new TransformController(BASEPLATE_TRANSFORM_CONFIG);
 
 // =============================================================================
 // Reusable Objects (avoid per-frame allocations)
 // =============================================================================
 
 const tempPosition = new THREE.Vector3();
-
-// =============================================================================
-// Utility Functions
-// =============================================================================
-
-/**
- * Safely parses a number with a fallback default.
- */
-const safeNum = (value: number | undefined | null, defaultValue: number): number => {
-  const num = Number(value);
-  return Number.isNaN(num) ? defaultValue : num;
-};
-
-/**
- * Dispatches a custom event to enable/disable orbit controls.
- */
-const setOrbitControlsEnabled = (enabled: boolean): void => {
-  window.dispatchEvent(
-    new CustomEvent('disable-orbit-controls', { detail: { disabled: !enabled } })
-  );
-};
 
 /**
  * Calculates section bounds from world position and dimensions.
@@ -86,17 +69,6 @@ const calculateSectionBounds = (
     minZ: worldPosition.z - halfDepth,
     maxZ: worldPosition.z + halfDepth,
   };
-};
-
-/**
- * Resets a Three.js group's transform to identity.
- */
-const resetGroupTransform = (group: THREE.Group): void => {
-  group.matrix.identity();
-  group.position.set(0, 0, 0);
-  group.rotation.set(0, 0, 0);
-  group.scale.set(1, 1, 1);
-  group.updateMatrix();
 };
 
 // =============================================================================
@@ -145,9 +117,9 @@ const BasePlateTransformControls: React.FC<BasePlateTransformControlsProps> = ({
     return new THREE.Vector3(sectionDimensions.centerX, gizmoY, sectionDimensions.centerZ);
   }, [sectionDimensions.centerX, sectionDimensions.centerZ, gizmoY]);
 
-  // Calculate gizmo scale based on section size
+  // Calculate gizmo scale based on section size using unified system
   const gizmoScale = useMemo(
-    () => Math.max(MIN_GIZMO_SCALE, sectionDimensions.size * GIZMO_SCALE_MULTIPLIER),
+    () => calculateGizmoScale('baseplate', { size: sectionDimensions.size }),
     [sectionDimensions.size]
   );
 
@@ -209,9 +181,9 @@ const BasePlateTransformControls: React.FC<BasePlateTransformControlsProps> = ({
       onTransformEnd(newBounds);
     }
 
-    // Reset pivot to identity after drag ends
+    // Reset pivot to identity after drag ends using unified utility
     if (pivotRef.current) {
-      resetGroupTransform(pivotRef.current);
+      resetPivotMatrix(pivotRef.current);
     }
   }, [gl, getTransformFromAnchor, onTransformEnd]);
 

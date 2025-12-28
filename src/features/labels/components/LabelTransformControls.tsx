@@ -16,6 +16,13 @@ import { useThree } from '@react-three/fiber';
 import { PivotControls, Html } from '@react-three/drei';
 import * as THREE from 'three';
 import { LabelConfig, MIN_DEPTH, MAX_DEPTH, toVector3, toEuler } from '../types';
+import {
+  TransformController,
+  LABEL_TRANSFORM_CONFIG,
+  setOrbitControlsEnabled,
+  resetPivotMatrix,
+  calculateGizmoScale as calculateGizmoScaleBase,
+} from '@/core/transform';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -24,15 +31,12 @@ import { LabelConfig, MIN_DEPTH, MAX_DEPTH, toVector3, toEuler } from '../types'
 /** Vertical offset from label top to gizmo position */
 const GIZMO_OFFSET_Y = 5;
 
-/** Minimum gizmo scale */
-const MIN_GIZMO_SCALE = 20;
-
-/** Gizmo font size multiplier */
-const GIZMO_SCALE_MULTIPLIER = 2;
-
 /** UI click selectors for deselect detection */
 const UI_CLICK_SELECTORS =
   'button, input, select, [role="button"], [role="slider"], [data-radix-collection-item], [class*="accordion"]';
+
+// Transform controller for applying constraints (shared instance for performance)
+const transformController = new TransformController(LABEL_TRANSFORM_CONFIG);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -72,27 +76,6 @@ const tempEuler = new THREE.Euler();
 /** Clamps depth value to valid range */
 const clampDepth = (value: number): number =>
   Math.max(MIN_DEPTH, Math.min(MAX_DEPTH, value));
-
-/** Calculates gizmo scale based on label font size */
-const calculateGizmoScale = (fontSize: number): number =>
-  Math.max(fontSize * GIZMO_SCALE_MULTIPLIER, MIN_GIZMO_SCALE);
-
-/** Resets pivot controls to identity transform */
-const resetPivotTransform = (pivot: THREE.Group | null): void => {
-  if (!pivot) return;
-  pivot.matrix.identity();
-  pivot.position.set(0, 0, 0);
-  pivot.rotation.set(0, 0, 0);
-  pivot.scale.set(1, 1, 1);
-  pivot.updateMatrix();
-};
-
-/** Dispatches orbit controls enable/disable event */
-const setOrbitControlsEnabled = (enabled: boolean): void => {
-  window.dispatchEvent(
-    new CustomEvent('disable-orbit-controls', { detail: { disabled: !enabled } })
-  );
-};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Hooks
@@ -211,7 +194,10 @@ const LabelTransformControls: React.FC<LabelTransformControlsProps> = ({
   // Computed values
   const gizmoY = labelPosition.y + label.depth + GIZMO_OFFSET_Y;
   const currentRotationY = labelRotation.z; // Z rotation becomes Y in world space (label is flat)
-  const gizmoScale = useMemo(() => calculateGizmoScale(label.fontSize), [label.fontSize]);
+  const gizmoScale = useMemo(
+    () => calculateGizmoScaleBase('label', { fontSize: label.fontSize }),
+    [label.fontSize]
+  );
 
   // Display position (locked during drag to prevent feedback loop)
   // IMPORTANT: Don't use useMemo - refs don't trigger memo recalculation
@@ -288,7 +274,7 @@ const LabelTransformControls: React.FC<LabelTransformControlsProps> = ({
     }
 
     onDragEnd?.();
-    resetPivotTransform(pivotRef.current);
+    resetPivotMatrix(pivotRef.current);
   }, [gl, getTransformFromAnchor, onTransformEnd, onDragEnd]);
 
   // Event hooks
