@@ -303,7 +303,7 @@ git checkout -b refactor/phase-N-name  # Start fresh
 | 2 | ✅ Complete | Dec 29, 2025 | Dec 29, 2025 | Commit `ebfd88d` |
 | 3 | ✅ Complete | Dec 29, 2025 | Dec 29, 2025 | Commit `24e501a` |
 | 4 | ✅ Complete | Dec 29, 2025 | Dec 30, 2025 | Commits `4abeb1e`, `842bbb2`, `91e80c7` |
-| 5 | ⏳ Not Started | - | - | - |
+| 5 | 🔄 In Progress | Dec 30, 2025 | - | Foundation extracted, wiring pending |
 | 6 | ⏳ Not Started | - | - | - |
 
 ### Directive Checklist
@@ -331,9 +331,12 @@ git checkout -b refactor/phase-N-name  # Start fresh
 - [x] 12-create-transform-hooks (`src/core/transform/hooks/`)
 - [x] 13-migrate-transform-controls (all 6 components migrated)
 
-**Phase 5:** ⏳ Planned
-- [ ] 14-decompose-3dscene (TBD)
-- [ ] 15-create-scene-modules (TBD)
+**Phase 5:** 🔄 In Progress
+- [x] 14-extract-scene-types-utils (Commits `7fe8c3f`, `36a44bf`)
+- [x] 15-extract-scene-renderers (Commit `d295736`)
+- [x] 16-extract-state-hooks (Commit `d295736`)
+- [ ] Wire extracted components into 3DScene.tsx
+- [ ] Test all features work correctly
 
 **Phase 6:** ⏳ Planned
 - [ ] 16-extract-cad-core-package (TBD)
@@ -384,4 +387,36 @@ Directive [name] execution report:
 ---
 
 *Last Updated: December 30, 2025*
-*Next Action: Start Phase 5 (Scene Decomposition)*
+*Current: Phase 5 (Scene Decomposition) - Foundation extracted, wiring pending*
+
+## Phase 5 Progress Detail
+
+### Extracted Components (src/components/3DScene/)
+
+**Types** (`types.ts`):
+- ThreeDSceneProps, BoundsSummary, TransformData, GridConfig, ModelMeshProps
+
+**Utils** (`utils/`):
+- `geometryUtils.ts`: computeDominantUpQuaternion, getActualMinYFromMesh, getFootprintMetrics, calculateGridConfig
+- `colorUtils.ts`: MODEL_COLOR_PALETTE, getModelColor, getNextAvailableColor
+- `csgUtils.ts`: buildClampSupportGeometryAtOrigin, buildLabelGeometry
+
+**Renderers** (`renderers/`):
+- `ScalableGrid.tsx`: Grid component with dynamic sizing
+- `ModelMesh.tsx`: Model rendering with orientation correction
+- `DebugVisualization.tsx`: DebugPerimeterLine, DebugSilhouetteLine, FixtureComponent
+
+**State Hooks** (`hooks/`):
+- `useSupportState.ts`: Support placement and management
+- `useClampState.ts`: Clamp placement and management
+- `useLabelState.ts`: Label placement and management
+- `useHoleState.ts`: Mounting hole placement and management
+- `useBaseplateState.ts`: Baseplate configuration
+- `useSceneState.ts`: General scene state (models, camera, transforms)
+
+### Next Steps
+1. Wire extracted hooks into 3DScene.tsx ThreeDScene component
+2. Replace inline state declarations with hook calls
+3. Verify all features work correctly
+4. Extract remaining event handlers as needed
+5. Target: 3DScene.tsx from ~6,800 lines to ~500 lines
