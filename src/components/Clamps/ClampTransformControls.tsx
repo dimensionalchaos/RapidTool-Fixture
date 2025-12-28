@@ -23,6 +23,8 @@ interface ClampTransformControlsProps {
   onTransformChange: (position: { x: number; y: number; z: number }, rotation: { x: number; y: number; z: number }) => void;
   onTransformEnd: (position: { x: number; y: number; z: number }, rotation: { x: number; y: number; z: number }) => void;
   onDeselect: () => void;
+  onDragStart?: () => void;
+  onDragEnd?: () => void;
 }
 
 // Reusable THREE.js objects
@@ -36,6 +38,8 @@ const ClampTransformControls: React.FC<ClampTransformControlsProps> = ({
   onTransformChange,
   onTransformEnd,
   onDeselect,
+  onDragStart,
+  onDragEnd,
 }) => {
   const { gl } = useThree();
   const pivotRef = useRef<THREE.Group>(null);
@@ -99,7 +103,8 @@ const ClampTransformControls: React.FC<ClampTransformControlsProps> = ({
     dragStartRot.current = new THREE.Euler(0, THREE.MathUtils.degToRad(rotation.y), 0);
     window.dispatchEvent(new CustomEvent('disable-orbit-controls', { detail: { disabled: true } }));
     gl.domElement.style.cursor = 'grabbing';
-  }, [gl, position, rotation]);
+    onDragStart?.();
+  }, [gl, position, rotation, onDragStart]);
 
   // Drag end
   const handleDragEnd = useCallback(() => {
@@ -114,6 +119,8 @@ const ClampTransformControls: React.FC<ClampTransformControlsProps> = ({
       onTransformEnd(transform.position, transform.rotation);
     }
     
+    onDragEnd?.();
+    
     // Reset pivot
     if (pivotRef.current) {
       pivotRef.current.matrix.identity();
@@ -122,7 +129,7 @@ const ClampTransformControls: React.FC<ClampTransformControlsProps> = ({
       pivotRef.current.scale.set(1, 1, 1);
       pivotRef.current.updateMatrix();
     }
-  }, [gl, getTransformFromAnchor, onTransformEnd]);
+  }, [gl, getTransformFromAnchor, onTransformEnd, onDragEnd]);
 
   // Escape key to close
   useEffect(() => {
@@ -166,8 +173,7 @@ const ClampTransformControls: React.FC<ClampTransformControlsProps> = ({
         activeAxes={[true, true, true]}
         axisColors={['#ff4060', '#40ff60', '#4080ff']}
         hoveredColor="#ffff40"
-        annotations={true}
-        annotationsClass="pivot-annotation"
+        annotations={false}
         autoTransform={true}
         disableScaling={true}
         disableSliders={true}

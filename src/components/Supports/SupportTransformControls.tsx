@@ -23,6 +23,8 @@ interface SupportTransformControlsProps {
   onTransformChange: (newCenter: THREE.Vector2, rotationY?: number, height?: number) => void;
   onTransformEnd: (newCenter: THREE.Vector2, rotationY?: number, height?: number) => void;
   onDeselect: () => void;
+  onDragStart?: () => void;
+  onDragEnd?: () => void;
 }
 
 // Reusable THREE.js objects to avoid allocations
@@ -36,6 +38,8 @@ const SupportTransformControls: React.FC<SupportTransformControlsProps> = ({
   onTransformChange,
   onTransformEnd,
   onDeselect,
+  onDragStart,
+  onDragEnd,
 }) => {
   const { gl } = useThree();
   const pivotRef = useRef<THREE.Group>(null);
@@ -104,7 +108,8 @@ const SupportTransformControls: React.FC<SupportTransformControlsProps> = ({
     dragStartGroupRotY.current = currentRotationY;
     window.dispatchEvent(new CustomEvent('disable-orbit-controls', { detail: { disabled: true } }));
     gl.domElement.style.cursor = 'grabbing';
-  }, [gl, center, gizmoY, currentRotationY]);
+    onDragStart?.();
+  }, [gl, center, gizmoY, currentRotationY, onDragStart]);
 
   // Drag end - emit final transform and reset pivot
   const handleDragEnd = useCallback(() => {
@@ -118,6 +123,9 @@ const SupportTransformControls: React.FC<SupportTransformControlsProps> = ({
     if (transform) {
       onTransformEnd(transform.center, transform.rotationY, transform.height);
     }
+    
+    // Notify parent drag ended (before resetting pivot)
+    onDragEnd?.();
     
     // Reset pivot to identity after drag ends
     // The group position will update to new support position on next render
@@ -183,7 +191,7 @@ const SupportTransformControls: React.FC<SupportTransformControlsProps> = ({
         activeAxes={[true, true, true]}
         axisColors={['#ff4060', '#40ff60', '#4080ff']}
         hoveredColor="#ffff40"
-        annotations={true}
+        annotations={false}
         annotationsClass="pivot-annotation"
         autoTransform={true}
         disableScaling={true}

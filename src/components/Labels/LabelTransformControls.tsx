@@ -43,6 +43,8 @@ interface LabelTransformControlsProps {
   onTransformChange: (position: THREE.Vector3, rotation: THREE.Euler, depth?: number) => void;
   onTransformEnd: (position: THREE.Vector3, rotation: THREE.Euler, depth?: number) => void;
   onDeselect: () => void;
+  onDragStart?: () => void;
+  onDragEnd?: () => void;
 }
 
 interface DragState {
@@ -186,6 +188,8 @@ const LabelTransformControls: React.FC<LabelTransformControlsProps> = ({
   onTransformChange,
   onTransformEnd,
   onDeselect,
+  onDragStart,
+  onDragEnd,
 }) => {
   const { gl } = useThree();
 
@@ -268,7 +272,8 @@ const LabelTransformControls: React.FC<LabelTransformControlsProps> = ({
 
     setOrbitControlsEnabled(false);
     gl.domElement.style.cursor = 'grabbing';
-  }, [gl, labelPosition.x, labelPosition.z, gizmoY, currentRotationY, label.depth]);
+    onDragStart?.();
+  }, [gl, labelPosition.x, labelPosition.z, gizmoY, currentRotationY, label.depth, onDragStart]);
 
   const handleDragEnd = useCallback((): void => {
     isDraggingRef.current = false;
@@ -282,8 +287,9 @@ const LabelTransformControls: React.FC<LabelTransformControlsProps> = ({
       onTransformEnd(transform.position, transform.rotation, transform.depth);
     }
 
+    onDragEnd?.();
     resetPivotTransform(pivotRef.current);
-  }, [gl, getTransformFromAnchor, onTransformEnd]);
+  }, [gl, getTransformFromAnchor, onTransformEnd, onDragEnd]);
 
   // Event hooks
   useDocumentClickDeselect(gl.domElement, onDeselect);

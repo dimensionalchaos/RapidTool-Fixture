@@ -70,6 +70,8 @@ export interface LabelConfig {
   computedWidth?: number;
   /** Computed text height in mm (set by LabelMesh after rendering) */
   computedHeight?: number;
+  /** ID of the baseplate section this label belongs to (for multi-section baseplates) */
+  sectionId?: string;
 }
 
 /** Default configuration for new labels (excludes id and position) */

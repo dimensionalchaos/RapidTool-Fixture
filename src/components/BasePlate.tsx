@@ -239,13 +239,81 @@ const BasePlate: React.FC<BasePlateProps> = ({
   // Create geometry based on type
   const geometry = useMemo(() => {
     // Validate dimensions before creating any geometry
-    const safeWidth = (Number.isFinite(width) && width > 0 && width < 10000) ? width : 100;
-    const safeHeight = (Number.isFinite(height) && height > 0 && height < 10000) ? height : 100;
+    const configuredWidth = (Number.isFinite(width) && width > 0 && width < 10000) ? width : 100;
+    const configuredHeight = (Number.isFinite(height) && height > 0 && height < 10000) ? height : 100;
     const safeDepth = (Number.isFinite(depth) && depth > 0 && depth < 10000) ? depth : 10;
     
-    if (width !== safeWidth || height !== safeHeight || depth !== safeDepth) {
-      console.warn('[BasePlate] Invalid dimensions detected:', { width, height, depth }, '- using safe values:', { safeWidth, safeHeight, safeDepth });
+    if (width !== configuredWidth || height !== configuredHeight || depth !== safeDepth) {
+      console.warn('[BasePlate] Invalid dimensions detected:', { width, height, depth }, '- using safe values:', { configuredWidth, configuredHeight, safeDepth });
     }
+    
+    // For non-convex-hull types, calculate the baseplate bounds to cover all components
+    // The baseplate MUST cover:
+    // 1. The configured dimensions centered at the baseplate position
+    // 2. All additionalHullPoints (component footprints - already include their margins)
+    let safeWidth = configuredWidth;
+    let safeHeight = configuredHeight;
+    let geometryOffsetX = 0;
+    let geometryOffsetZ = 0;
+    
+    if (type !== 'convex-hull' && additionalHullPoints.length > 0) {
+      // Get baseplate world position
+      const bpX = position?.x ?? 0;
+      const bpZ = position?.z ?? 0;
+      
+      // Start with the configured baseplate bounds in WORLD space
+      let minX = bpX - configuredWidth / 2;
+      let maxX = bpX + configuredWidth / 2;
+      let minZ = bpZ - configuredHeight / 2;
+      let maxZ = bpZ + configuredHeight / 2;
+      
+      // Expand bounds to include ALL hull points
+      // Hull points already have margins applied from the component calculations
+      for (const pt of additionalHullPoints) {
+        if (Number.isFinite(pt.x) && Number.isFinite(pt.z)) {
+          minX = Math.min(minX, pt.x);
+          maxX = Math.max(maxX, pt.x);
+          minZ = Math.min(minZ, pt.z);
+          maxZ = Math.max(maxZ, pt.z);
+        }
+      }
+      
+      // Calculate final dimensions and center
+      const finalWidth = maxX - minX;
+      const finalHeight = maxZ - minZ;
+      const finalCenterX = (minX + maxX) / 2;
+      const finalCenterZ = (minZ + maxZ) / 2;
+      
+      // Calculate offset from baseplate mesh position to geometry center
+      geometryOffsetX = finalCenterX - bpX;
+      geometryOffsetZ = finalCenterZ - bpZ;
+      
+      safeWidth = finalWidth;
+      safeHeight = finalHeight;
+      
+      // Debug logging
+      if (Math.abs(geometryOffsetX) > 0.1 || Math.abs(geometryOffsetZ) > 0.1 || 
+          safeWidth !== configuredWidth || safeHeight !== configuredHeight) {
+        console.log('[BasePlate] Adjusted rectangular baseplate:', {
+          configured: { width: configuredWidth, height: configuredHeight },
+          final: { width: safeWidth, height: safeHeight },
+          offset: { x: geometryOffsetX, z: geometryOffsetZ },
+          bounds: { minX, maxX, minZ, maxZ },
+          hullPointsCount: additionalHullPoints.length
+        });
+      }
+    }
+    
+    // Helper function to create and offset rectangular geometry
+    const createOffsetRectGeometry = (w: number, h: number, d: number, cornerRadiusFactor: number, chamferFactor: number) => {
+      const shape = createRoundedRectShape(w, h, cornerRadiusFactor);
+      const g = createExtrudedBaseplate(shape, d, chamferFactor);
+      // Apply offset if needed (geometry is in local space, offset shifts it)
+      if (Math.abs(geometryOffsetX) > 0.01 || Math.abs(geometryOffsetZ) > 0.01) {
+        g.translate(geometryOffsetX, 0, geometryOffsetZ);
+      }
+      return g;
+    };
     
     switch (type) {
       case 'convex-hull':
@@ -425,22 +493,26 @@ const BasePlate: React.FC<BasePlateProps> = ({
             bevelEnabled: false
           });
           g.rotateX(-Math.PI / 2);
+          // Apply offset if needed
+          if (Math.abs(geometryOffsetX) > 0.01 || Math.abs(geometryOffsetZ) > 0.01) {
+            g.translate(geometryOffsetX, 0, geometryOffsetZ);
+          }
           return finalizeGeometry(g);
         }
 
       case 'perforated-panel':
         // Rounded rectangle with slight bevel for soft edges
-        return createExtrudedBaseplate(createRoundedRectShape(safeWidth, safeHeight, 0.08), safeDepth);
+        return createOffsetRectGeometry(safeWidth, safeHeight, safeDepth, 0.08, 0.15);
 
       case 'metal-wooden-plate':
         // Slightly smaller corner radius for metal/wooden plates
-        return createExtrudedBaseplate(createRoundedRectShape(safeWidth, safeHeight, 0.06), safeDepth, 0.2);
+        return createOffsetRectGeometry(safeWidth, safeHeight, safeDepth, 0.06, 0.2);
 
       case 'rectangular':
       default:
-        return createExtrudedBaseplate(createRoundedRectShape(safeWidth, safeHeight, 0.08), safeDepth);
+        return createOffsetRectGeometry(safeWidth, safeHeight, safeDepth, 0.08, 0.15);
     }
-  }, [type, width, height, depth, radius, modelGeometry, modelMatrixWorld, modelOrigin, oversizeXY, additionalHullPoints, livePositionDelta, cornerRadius]);
+  }, [type, width, height, depth, radius, modelGeometry, modelMatrixWorld, modelOrigin, oversizeXY, additionalHullPoints, livePositionDelta, cornerRadius, position]);
 
   // Update geometry when props change
   React.useEffect(() => {

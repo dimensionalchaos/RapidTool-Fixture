@@ -26,6 +26,9 @@ export interface BasePlateSection {
   /** Original size when first created (for maintaining minimum size) */
   originalWidth?: number;
   originalDepth?: number;
+  /** Original center position (for shrinking back to original position when items are removed) */
+  originalCenterX?: number;
+  originalCenterZ?: number;
 }
 
 /**
@@ -125,12 +128,40 @@ export function sectionsOverlap(a: BasePlateSection, b: BasePlateSection): boole
  * Merges two overlapping sections into one larger section
  */
 export function mergeSections(a: BasePlateSection, b: BasePlateSection): BasePlateSection {
+  // Validate inputs to prevent NaN propagation
+  const minX = Math.min(a.minX, b.minX);
+  const maxX = Math.max(a.maxX, b.maxX);
+  const minZ = Math.min(a.minZ, b.minZ);
+  const maxZ = Math.max(a.maxZ, b.maxZ);
+  
+  // Calculate original dimensions from first section's original values or current size
+  const origWidthA = a.originalWidth ?? (a.maxX - a.minX);
+  const origDepthA = a.originalDepth ?? (a.maxZ - a.minZ);
+  const origWidthB = b.originalWidth ?? (b.maxX - b.minX);
+  const origDepthB = b.originalDepth ?? (b.maxZ - b.minZ);
+  
+  // Use the larger original size to ensure we don't shrink below either section's original size
+  const originalWidth = Math.max(origWidthA, origWidthB);
+  const originalDepth = Math.max(origDepthA, origDepthB);
+  
+  // Log error if any value is NaN
+  if (!isFinite(minX) || !isFinite(maxX) || !isFinite(minZ) || !isFinite(maxZ) ||
+      !isFinite(originalWidth) || !isFinite(originalDepth)) {
+    console.error('[mergeSections] Invalid section bounds detected:', { 
+      a: { minX: a.minX, maxX: a.maxX, minZ: a.minZ, maxZ: a.maxZ, originalWidth: a.originalWidth, originalDepth: a.originalDepth },
+      b: { minX: b.minX, maxX: b.maxX, minZ: b.minZ, maxZ: b.maxZ, originalWidth: b.originalWidth, originalDepth: b.originalDepth },
+      result: { minX, maxX, minZ, maxZ, originalWidth, originalDepth }
+    });
+  }
+  
   return {
     id: `merged-${Date.now()}`,
-    minX: Math.min(a.minX, b.minX),
-    maxX: Math.max(a.maxX, b.maxX),
-    minZ: Math.min(a.minZ, b.minZ),
-    maxZ: Math.max(a.maxZ, b.maxZ),
+    minX,
+    maxX,
+    minZ,
+    maxZ,
+    originalWidth,
+    originalDepth,
   };
 }
 

@@ -52,6 +52,8 @@ export interface PlacedClamp {
   scale: { x: number; y: number; z: number };
   /** Whether the clamp body is visible (supports remain visible) */
   visible?: boolean;
+  /** ID of the baseplate section this clamp belongs to (for multi-section baseplates) */
+  sectionId?: string;
 }
 
 export interface ClampsState {

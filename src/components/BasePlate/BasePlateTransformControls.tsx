@@ -118,6 +118,14 @@ const BasePlateTransformControls: React.FC<BasePlateTransformControlsProps> = ({
 
   // Calculate section dimensions (memoized)
   const sectionDimensions = useMemo(() => {
+    // Validate section bounds
+    if (!isFinite(section.minX) || !isFinite(section.maxX) || 
+        !isFinite(section.minZ) || !isFinite(section.maxZ)) {
+      console.error('[BasePlateTransformControls] Invalid section dimensions:', section);
+      // Return fallback dimensions
+      return { centerX: 0, centerZ: 0, width: 100, depth: 100, size: 100 };
+    }
+    
     const centerX = (section.minX + section.maxX) / 2;
     const centerZ = (section.minZ + section.maxZ) / 2;
     const width = section.maxX - section.minX;
@@ -245,6 +253,21 @@ const BasePlateTransformControls: React.FC<BasePlateTransformControlsProps> = ({
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [onDeselect]);
+
+  // Close when another pivot control is activated (part or different section)
+  useEffect(() => {
+    const handleOtherActivated = (e: CustomEvent) => {
+      const eventPartId = e.detail?.partId;
+      const eventSectionId = e.detail?.sectionId;
+      // Deselect if another part or a different section is activated
+      if (eventPartId || (eventSectionId && eventSectionId !== section.id)) {
+        onDeselect();
+      }
+    };
+
+    window.addEventListener('pivot-control-activated', handleOtherActivated as EventListener);
+    return () => window.removeEventListener('pivot-control-activated', handleOtherActivated as EventListener);
+  }, [section.id, onDeselect]);
 
   // =============================================================================
   // Render

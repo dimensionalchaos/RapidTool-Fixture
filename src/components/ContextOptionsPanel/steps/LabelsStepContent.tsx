@@ -68,6 +68,16 @@ interface LabelsStepContentProps {
   onUpdateLabel?: (labelId: string, updates: Partial<LabelConfig>) => void;
   onDeleteLabel?: (labelId: string) => void;
   onSelectLabel?: (labelId: string | null) => void;
+  /** Current baseplate configuration (for multi-section support) */
+  currentBaseplate?: { 
+    id: string; 
+    type: string; 
+    sections?: Array<{ id: string; minX: number; maxX: number; minZ: number; maxZ: number }> 
+  } | null;
+  /** Selected section ID for multi-section baseplates */
+  selectedSectionId?: string | null;
+  /** Callback to select a section */
+  onSectionSelect?: (sectionId: string | null) => void;
 }
 
 interface Label3DPreviewProps {
@@ -92,7 +102,7 @@ interface LabelFormState {
 const generateLabelId = (): string => `label-${Date.now()}`;
 
 /** Creates a new label config from form state */
-const createLabelConfig = (form: LabelFormState): LabelConfig => ({
+const createLabelConfig = (form: LabelFormState, sectionId?: string): LabelConfig => ({
   id: generateLabelId(),
   text: form.text,
   fontSize: form.fontSize,
@@ -100,6 +110,7 @@ const createLabelConfig = (form: LabelFormState): LabelConfig => ({
   font: form.font,
   position: new THREE.Vector3(0, 10, 0), // Will be repositioned by 3DScene
   rotation: new THREE.Euler(-Math.PI / 2, 0, 0), // Face up
+  sectionId, // Include section ID if provided
 });
 
 /** Dispatches a label-related custom event */
@@ -268,12 +279,19 @@ const LabelsStepContent: React.FC<LabelsStepContentProps> = ({
   onUpdateLabel,
   onDeleteLabel,
   onSelectLabel,
+  currentBaseplate = null,
+  selectedSectionId = null,
+  onSectionSelect,
 }) => {
   // Form state
   const [labelText, setLabelText] = useState(DEFAULT_LABEL_CONFIG.text);
   const [fontSize, setFontSize] = useState(DEFAULT_LABEL_CONFIG.fontSize);
-  const [depth, setDepth] = useState(DEFAULT_LABEL_CONFIG.depth);
+  const [depth, setDepth] = useState(DEFAULT_DEPTH);
   const [font, setFont] = useState<LabelFont>(DEFAULT_LABEL_CONFIG.font);
+
+  // Check if using multi-section baseplate
+  const isMultiSection = currentBaseplate?.type === 'multi-section';
+  const sections = currentBaseplate?.sections || [];
 
   // Find selected label
   const selectedLabel = useMemo(
@@ -307,7 +325,8 @@ const LabelsStepContent: React.FC<LabelsStepContentProps> = ({
   );
 
   const handleAddLabel = useCallback((): void => {
-    const newLabel = createLabelConfig({ text: labelText, fontSize, depth, font });
+    // Don't pass sectionId - let 3DScene handle section selection for multi-section baseplates
+    const newLabel = createLabelConfig({ text: labelText, fontSize, depth, font }, undefined);
     dispatchLabelEvent('label-add', newLabel);
   }, [labelText, fontSize, depth, font]);
 
@@ -430,7 +449,9 @@ const LabelsStepContent: React.FC<LabelsStepContentProps> = ({
       </Button>
 
       <p className="text-[10px] text-muted-foreground font-tech text-center">
-        Click on the baseplate or fixture to position the label.
+        {isMultiSection 
+          ? "Click 'Add Label to Scene', then select a baseplate section to place the label."
+          : "Click on the baseplate or fixture to position the label."}
         <br />
         Use the gizmo to reposition. Z-axis adjusts emboss depth.
       </p>

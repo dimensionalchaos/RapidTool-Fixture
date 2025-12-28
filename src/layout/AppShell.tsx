@@ -146,7 +146,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
     // Multi-section baseplate drawing state
     const [isBaseplateDrawingMode, setIsBaseplateDrawingMode] = useState(false);
     const [drawnBaseplateSections, setDrawnBaseplateSections] = useState<Array<{ id: string; minX: number; maxX: number; minZ: number; maxZ: number }>>([]);
-    const [currentBaseplateParams, setCurrentBaseplateParams] = useState<{ padding: number; height: number }>({ padding: 10, height: 4 });
+    const [currentBaseplateParams, setCurrentBaseplateParams] = useState<{ padding: number; height: number }>({ padding: 5, height: 4 });
 
     // Workflow State
     const [activeStep, setActiveStep] = useState<WorkflowStep>('import');
@@ -864,9 +864,10 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
       // For multi-section, include the drawn sections
       let sections = option === 'multi-section' ? dimensions?.sections : undefined;
       
-      // If switching TO multi-section from a different type, clear all placed features
+      // If switching TO multi-section FROM a different existing baseplate type, clear all placed features
       // to prevent errors with existing supports, clamps, labels, holes
-      if (option === 'multi-section' && currentBaseplate?.type !== 'multi-section') {
+      // NOTE: Only clear if there IS a current baseplate AND it's not multi-section
+      if (option === 'multi-section' && currentBaseplate && currentBaseplate.type !== 'multi-section') {
         // Clear all features that depend on baseplate geometry
         setSupports([]);
         setClamps([]);
@@ -910,6 +911,11 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
       if (option === 'multi-section') {
         setDrawnBaseplateSections([]);
         setIsBaseplateDrawingMode(false);
+        
+        // Exit drawing mode - notify 3D scene to restore camera and enable orbit controls
+        window.dispatchEvent(new CustomEvent('baseplate-drawing-mode-changed', {
+          detail: { active: false }
+        }));
       }
       
       // Mark baseplates step as completed
@@ -1709,6 +1715,13 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
                       hasSupports={supports.length > 0}
                       labels={labels as any}
                       selectedLabelId={selectedLabelId}
+                      currentBaseplate={currentBaseplate}
+                      selectedSectionId={selectedBasePlateSectionId}
+                      onSectionSelect={(sectionId) => {
+                        setSelectedBasePlateSectionId(sectionId);
+                        // Dispatch event for 3D scene highlighting
+                        window.dispatchEvent(new CustomEvent('baseplate-section-select', { detail: sectionId }));
+                      }}
                       onAddLabel={(label) => {
                         setLabels(prev => [...prev, {
                           id: label.id,
@@ -1716,7 +1729,8 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
                           fontSize: label.fontSize,
                           depth: label.depth,
                           position: { x: label.position.x, y: label.position.y, z: label.position.z },
-                          rotation: { x: label.rotation.x, y: label.rotation.y, z: label.rotation.z }
+                          rotation: { x: label.rotation.x, y: label.rotation.y, z: label.rotation.z },
+                          sectionId: label.sectionId
                         }]);
                         // Mark labels step as completed
                         if (!completedSteps.includes('labels')) {

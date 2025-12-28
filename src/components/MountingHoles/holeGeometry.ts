@@ -290,21 +290,32 @@ export function positionHoleGeometry(
 }
 
 /**
- * Converts hole position from world space to local baseplate space.
+ * Converts hole position from world space to local baseplate geometry space.
+ *
+ * This accounts for two offsets:
+ * 1. baseplateOffset - The mesh position in world space (basePlate.position)
+ * 2. geometryOffset - Internal offset baked into geometry when baseplate expands asymmetrically
  *
  * @param holePosition - Hole position in world space (x = worldX, y = worldZ)
- * @param baseplateOffset - Optional XZ offset of baseplate in world space
- * @returns Local position as Vector2
+ * @param baseplateOffset - XZ position of baseplate mesh in world space
+ * @param geometryOffset - XZ offset baked into geometry for asymmetric expansion
+ * @returns Local position as Vector2 in geometry coordinate space
  */
 function worldToLocalPosition(
   holePosition: THREE.Vector2,
-  baseplateOffset?: { x: number; z: number }
+  baseplateOffset?: { x: number; z: number },
+  geometryOffset?: { x: number; z: number }
 ): THREE.Vector2 {
-  const offsetX = baseplateOffset?.x ?? 0;
-  const offsetZ = baseplateOffset?.z ?? 0;
+  const meshOffsetX = baseplateOffset?.x ?? 0;
+  const meshOffsetZ = baseplateOffset?.z ?? 0;
+  const geoOffsetX = geometryOffset?.x ?? 0;
+  const geoOffsetZ = geometryOffset?.z ?? 0;
+  
+  // Convert world position to geometry-local position
+  // First subtract mesh position, then subtract geometry's internal offset
   return new THREE.Vector2(
-    holePosition.x - offsetX,
-    holePosition.y - offsetZ
+    holePosition.x - meshOffsetX - geoOffsetX,
+    holePosition.y - meshOffsetZ - geoOffsetZ
   );
 }
 
@@ -313,13 +324,15 @@ function worldToLocalPosition(
  *
  * @param holes - Array of placed holes with world-space positions
  * @param baseTopY - Y coordinate of baseplate top surface in local space
- * @param baseplateOffset - Optional XZ offset for world→local coordinate transform
+ * @param baseplateOffset - XZ position of baseplate mesh in world space
+ * @param geometryOffset - XZ offset baked into geometry for asymmetric expansion
  * @returns Merged geometry or null if no holes
  */
 export function createMergedHolesGeometry(
   holes: PlacedHole[],
   baseTopY: number,
-  baseplateOffset?: { x: number; z: number }
+  baseplateOffset?: { x: number; z: number },
+  geometryOffset?: { x: number; z: number }
 ): THREE.BufferGeometry | null {
   if (holes.length === 0) {
     return null;
@@ -327,7 +340,7 @@ export function createMergedHolesGeometry(
 
   const geometries = holes.map((hole) => {
     const geo = createHoleGeometry(hole);
-    const localPosition = worldToLocalPosition(hole.position, baseplateOffset);
+    const localPosition = worldToLocalPosition(hole.position, baseplateOffset, geometryOffset);
     return positionHoleGeometry(geo, localPosition, baseTopY);
   });
 

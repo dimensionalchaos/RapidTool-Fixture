@@ -11,6 +11,7 @@ export interface SupportBase {
   rotationY?: number; // radians, rotation around vertical Y-axis
   rotationZ?: number; // deprecated, use rotationY - kept for backwards compatibility
   contactOffset?: number; // mm gap reserved from model contact
+  sectionId?: string; // ID of the baseplate section this support belongs to (for multi-section baseplates)
 }
 
 export interface RectSupport extends SupportBase {

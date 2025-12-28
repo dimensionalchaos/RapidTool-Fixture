@@ -211,6 +211,9 @@ const MultiSectionDrawing: React.FC<MultiSectionDrawingProps> = ({
         // Store original size (not position) for maintaining minimum dimensions
         originalWidth: rect.width,
         originalDepth: rect.depth,
+        // Store original center for shrinking back when items are removed
+        originalCenterX: (rect.minX + rect.maxX) / 2,
+        originalCenterZ: (rect.minZ + rect.maxZ) / 2,
       };
       
       onSectionDrawn(section);
@@ -219,18 +222,57 @@ const MultiSectionDrawing: React.FC<MultiSectionDrawingProps> = ({
     setDrawingState({ isDrawing: false, startPoint: null, currentPoint: null });
   }, [drawingState, onSectionDrawn]);
 
-  // Handle escape key to cancel drawing
+  // Handle escape key to cancel drawing, Enter key to confirm
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && active) {
+      if (!active) return;
+      
+      if (e.key === 'Escape') {
         setDrawingState({ isDrawing: false, startPoint: null, currentPoint: null });
         onCancel?.();
+      } else if (e.key === 'Enter') {
+        // If currently drawing, finish the current section first
+        if (drawingState.isDrawing && drawingState.startPoint && drawingState.currentPoint) {
+          const rect = calculateRectDimensions(drawingState.startPoint, drawingState.currentPoint);
+          
+          // Only create section if it meets minimum size requirements
+          if (rect.width >= MIN_SECTION_SIZE && rect.depth >= MIN_SECTION_SIZE) {
+            const section: BasePlateSection = {
+              id: `section-${Date.now()}`,
+              minX: rect.minX,
+              maxX: rect.maxX,
+              minZ: rect.minZ,
+              maxZ: rect.maxZ,
+              originalWidth: rect.width,
+              originalDepth: rect.depth,
+              originalCenterX: (rect.minX + rect.maxX) / 2,
+              originalCenterZ: (rect.minZ + rect.maxZ) / 2,
+            };
+            onSectionDrawn(section);
+          }
+          setDrawingState({ isDrawing: false, startPoint: null, currentPoint: null });
+        }
+        
+        // Dispatch event to confirm and create the baseplate with all drawn sections
+        if (existingSections && existingSections.length > 0) {
+          window.dispatchEvent(new CustomEvent('create-baseplate', {
+            detail: { 
+              type: 'baseplate',
+              option: 'multi-section',
+              dimensions: {
+                padding,
+                height: 5, // Default height
+                sections: existingSections
+              }
+            }
+          }));
+        }
       }
     };
     
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [active, onCancel]);
+  }, [active, onCancel, drawingState, existingSections, padding, onSectionDrawn]);
 
   // Calculate preview rectangle dimensions (center-based like supports)
   // Must be called before early return to satisfy Rules of Hooks
@@ -469,7 +511,9 @@ const MultiSectionDrawing: React.FC<MultiSectionDrawingProps> = ({
             className="bg-primary/90 text-white rounded-lg px-3 py-2 text-xs font-tech whitespace-nowrap shadow-lg"
             style={{ pointerEvents: 'none' }}
           >
-            Click and drag to draw a baseplate section • ESC to cancel
+            {existingSections && existingSections.length > 0 
+              ? 'Click and drag to draw another section • ENTER to confirm • ESC to cancel'
+              : 'Click and drag to draw a baseplate section • ESC to cancel'}
           </div>
         </Html>
       )}

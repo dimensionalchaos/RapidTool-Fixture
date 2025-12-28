@@ -887,7 +887,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   selectedSupportId,
   onSupportSelect,
 }) => {
-  const { camera, size, gl } = useThree();
+  const { camera, size, gl, scene } = useThree();
   const controlsRef = useRef<OrbitControlsImpl | null>(null);
   const raycasterRef = useRef(new THREE.Raycaster());
   
@@ -908,6 +908,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   // Store initial offsets for each part (persists across renders to prevent position reset)
   const partInitialOffsetsRef = useRef<Map<string, THREE.Vector3>>(new Map());
   const basePlateMeshRef = useRef<THREE.Mesh>(null);
+  const multiSectionBasePlateGroupRef = useRef<THREE.Group>(null);
   const [baseTopY, setBaseTopY] = useState<number>(0);
   const [modelDimensions, setModelDimensions] = useState<{ x?: number; y?: number; z?: number } | undefined>();
   const [orbitControlsEnabled, setOrbitControlsEnabled] = useState(true);
@@ -1066,6 +1067,9 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   const [selectedLabelId, setSelectedLabelId] = useState<string | null>(null);
   const labelsRef = useRef<LabelConfig[]>([]); // Ref to track latest labels for async operations
   
+  // Force bounds recalc when any item (support, clamp, label) is first added
+  const [itemBoundsUpdateTrigger, setItemBoundsUpdateTrigger] = useState(0);
+  
   // Keep labelsRef in sync with labels state
   useEffect(() => {
     labelsRef.current = labels;
@@ -1130,6 +1134,11 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   const [selectedHoleId, setSelectedHoleId] = useState<string | null>(null);
   const [editingHoleId, setEditingHoleId] = useState<string | null>(null);
   const isDraggingHoleRef = useRef(false); // Track if hole gizmo is being dragged
+  const [isDraggingHole, setIsDraggingHole] = useState(false); // State version for multi-section baseplate
+  const isDraggingSupportRef = useRef(false); // Track if support gizmo is being dragged (for CSG debounce)
+  const isDraggingLabelRef = useRef(false); // Track if label gizmo is being dragged (for CSG debounce)
+  const isDraggingClampRef = useRef(false); // Track if clamp gizmo is being dragged (for CSG debounce)
+  const [isDraggingAnyItem, setIsDraggingAnyItem] = useState(false); // Combined state for all drag operations
   const [holePlacementMode, setHolePlacementMode] = useState<{
     active: boolean;
     config: HoleConfig | null;
@@ -1137,10 +1146,16 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   }>({ active: false, config: null, depth: 20 });
   const [holeSnapEnabled, setHoleSnapEnabled] = useState(true); // Snap to alignment enabled by default
   
-  // Multi-section baseplate editing state
+  // Multi-section baseplate selection state (for feature placement)
   const [selectedBasePlateSectionId, setSelectedBasePlateSectionId] = useState<string | null>(null);
   const [editingBasePlateSectionId, setEditingBasePlateSectionId] = useState<string | null>(null);
   const isDraggingBasePlateSectionRef = useRef(false); // Track if section gizmo is being dragged
+  const [waitingForSectionSelection, setWaitingForSectionSelection] = useState(false); // Track if user needs to select section first
+  const [waitingForClampSectionSelection, setWaitingForClampSectionSelection] = useState(false); // Track if waiting for section during clamp placement
+  const [waitingForLabelSectionSelection, setWaitingForLabelSectionSelection] = useState(false); // Track if waiting for section during label placement
+  const [waitingForHoleSectionSelection, setWaitingForHoleSectionSelection] = useState(false); // Track if waiting for section during hole placement
+  const [pendingLabelConfig, setPendingLabelConfig] = useState<LabelConfig | null>(null); // Store label config while waiting for section
+  const [pendingHoleConfig, setPendingHoleConfig] = useState<{ config: HoleConfig; depth: number } | null>(null); // Store hole config while waiting for section
   
   // Support snap alignment state
   const [supportSnapEnabled, setSupportSnapEnabled] = useState(true); // Snap to alignment enabled by default
@@ -1165,10 +1180,12 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   // Modified baseplate geometry with holes cut out (for immediate visual feedback)
   const [baseplateWithHoles, setBaseplateWithHoles] = useState<THREE.BufferGeometry | null>(null);
   const [holeCSGProcessing, setHoleCSGProcessing] = useState(false);
-  // Store original baseplate geometry to re-apply holes when baseplate changes
-  const originalBaseplateGeoRef = useRef<THREE.BufferGeometry | null>(null);
   // Flag to trigger CSG update (only when hole editing ends or hole is placed)
   const [holeCSGTrigger, setHoleCSGTrigger] = useState(0);
+  // Cache original baseplate geometry for CSG operations
+  // This is needed because when baseplateWithHoles exists, the original BasePlate is hidden
+  // and basePlateMeshRef points to the CSG result mesh, not the original
+  const originalBaseplateGeoRef = useRef<THREE.BufferGeometry | null>(null);
   // Ref to track latest mountingHoles for CSG effect (avoids stale closure)
   const mountingHolesRef = useRef(mountingHoles);
   mountingHolesRef.current = mountingHoles;
@@ -1333,41 +1350,38 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   }, [placedClamps, clampSupportInfos]);
 
   // Calculate mounting hole footprint points for baseplate expansion
-  // Holes need the baseplate to extend underneath them
-  const prevHoleHullPointsRef = useRef<Array<{x: number; z: number}>>([]);
+  const HOLE_MARGIN = 3.0;
+  const POINTS_PER_HOLE = 8;
+  const prevHoleHullPointsRef = useRef<Array<{ x: number; z: number }>>([]);
+
   const holeHullPoints = useMemo(() => {
-    const points: Array<{x: number; z: number}> = [];
-    // Add margin around each hole for baseplate coverage
-    const HOLE_MARGIN = 3.0; // 3mm margin around hole edge
-    
+    const points: Array<{ x: number; z: number }> = [];
+
     for (const hole of mountingHoles) {
       const holeX = Number(hole.position?.x) || 0;
-      const holeZ = Number(hole.position?.y) || 0; // position.y is Z in world coords
+      const holeZ = Number(hole.position?.y) || 0;
       const radius = (Number(hole.diameter) || 6) / 2;
       const outerRadius = radius + HOLE_MARGIN;
-      
-      // Add 8 points around the hole perimeter for hull calculation
-      for (let i = 0; i < 8; i++) {
-        const angle = (i / 8) * Math.PI * 2;
+
+      for (let i = 0; i < POINTS_PER_HOLE; i++) {
+        const angle = (i / POINTS_PER_HOLE) * Math.PI * 2;
         points.push({
           x: holeX + Math.cos(angle) * outerRadius,
-          z: holeZ + Math.sin(angle) * outerRadius
+          z: holeZ + Math.sin(angle) * outerRadius,
         });
       }
     }
-    
-    // Check if points are the same as before to avoid unnecessary updates
+
+    // Avoid unnecessary updates if points unchanged
     const prev = prevHoleHullPointsRef.current;
     if (prev.length === points.length) {
-      let same = true;
-      for (let i = 0; i < points.length && same; i++) {
-        if (Math.abs(prev[i].x - points[i].x) > 0.001 || Math.abs(prev[i].z - points[i].z) > 0.001) {
-          same = false;
-        }
-      }
-      if (same) return prev; // Return the cached array to avoid triggering downstream updates
+      const isEqual = points.every(
+        (pt, i) =>
+          Math.abs(prev[i].x - pt.x) <= 0.001 && Math.abs(prev[i].z - pt.z) <= 0.001
+      );
+      if (isEqual) return prev;
     }
-    
+
     prevHoleHullPointsRef.current = points;
     return points;
   }, [mountingHoles]);
@@ -1387,8 +1401,20 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   React.useEffect(() => {
     const updateTopY = () => {
       const mesh = basePlateMeshRef.current;
+      const multiSectionGroup = multiSectionBasePlateGroupRef.current;
       // Fallback to basePlate.depth when mesh is not visible
       const fallbackTopY = basePlate?.depth ?? 5;
+      
+      // For multi-section baseplates, use the group
+      if (multiSectionGroup && basePlate?.type === 'multi-section') {
+        multiSectionGroup.updateMatrixWorld(true);
+        const box = new THREE.Box3().setFromObject(multiSectionGroup);
+        if (!box.isEmpty()) {
+          const newTopY = box.max.y;
+          setBaseTopY(prev => Math.abs(prev - newTopY) < 0.001 ? prev : newTopY);
+          return;
+        }
+      }
       
       if (!mesh) { 
         setBaseTopY(prev => Math.abs(prev - fallbackTopY) < 0.001 ? prev : fallbackTopY); 
@@ -1407,7 +1433,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     updateTopY();
     const id = setInterval(updateTopY, 250);
     return () => clearInterval(id);
-  }, [basePlate?.depth]);
+  }, [basePlate?.depth, basePlate?.type]);
 
   // Supports stay fixed in world space - they don't move when model moves
   // The baseplate will expand to include both the model and the supports
@@ -1807,6 +1833,13 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
           ...s,
           height: (s as any).height + moveUpAmount
         } as AnySupport)));
+        
+        // Move all clamps UP by the same amount
+        // This ensures clamps maintain their relative position to the elevated parts
+        setPlacedClamps(prev => prev.map(c => ({
+          ...c,
+          position: { ...c.position, y: c.position.y + moveUpAmount }
+        })));
       }
 
       // Process each part sequentially to generate offset meshes
@@ -2137,6 +2170,19 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       // exit any active support edit session when starting fresh placement
       editingSupportRef.current = null;
 
+      // For multi-section baseplates, require section selection only if none selected
+      if (basePlate?.type === 'multi-section' && !selectedBasePlateSectionId) {
+        // Don't start placement yet, wait for section selection
+        setWaitingForSectionSelection(true);
+        // Store the type and params for later
+        setPlacing({ active: false, type: type as SupportType, initParams: params || {} });
+        // Switch to top view for section selection
+        prevOrientationRef.current = currentOrientation;
+        setCurrentOrientation('top');
+        updateCamera('top', modelBounds);
+        return;
+      }
+
       // Disable orbit controls during placement
       setOrbitControlsEnabled(false);
 
@@ -2149,6 +2195,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     const handleCancelPlacement = () => {
       setPlacing({ active: false, type: null, initParams: {} });
       setOrbitControlsEnabled(true);
+      setWaitingForSectionSelection(false);
       // restore previous view
       setCurrentOrientation(prevOrientationRef.current);
       updateCamera(prevOrientationRef.current, modelBounds);
@@ -2166,12 +2213,19 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       window.removeEventListener('supports-cancel-placement', handleCancelPlacement as EventListener);
       window.removeEventListener('support-snap-enabled-changed', handleSupportSnapEnabledChanged as EventListener);
     };
-  }, [currentOrientation, updateCamera, modelBounds]);
+  }, [currentOrientation, updateCamera, modelBounds, basePlate, selectedBasePlateSectionId]);
 
   // Listen for mounting hole placement start/cancel
   React.useEffect(() => {
     const handleStartHolePlacement = (e: CustomEvent) => {
       const { config, depth } = e.detail as { config: HoleConfig; depth: number };
+      
+      // For multi-section baseplates, require section selection first
+      if (basePlate?.type === 'multi-section' && !selectedBasePlateSectionId) {
+        setWaitingForHoleSectionSelection(true);
+        setPendingHoleConfig({ config, depth });
+        return;
+      }
       
       // Disable orbit controls during placement
       setOrbitControlsEnabled(false);
@@ -2207,12 +2261,256 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       window.removeEventListener('hole-cancel-placement', handleCancelHolePlacement as EventListener);
       window.removeEventListener('hole-snap-enabled-changed', handleSnapEnabledChanged as EventListener);
     };
-  }, [currentOrientation, updateCamera, modelBounds, basePlate?.depth]);
+  }, [currentOrientation, updateCamera, modelBounds, basePlate?.depth, basePlate?.type, selectedBasePlateSectionId]);
+
+  // DOM-level click handler for section selection during support placement
+  // This allows clicking through parts/supports/clamps to select baseplate sections
+  useEffect(() => {
+    if (!waitingForSectionSelection) return;
+
+    const handleCanvasClick = (event: MouseEvent) => {
+      if (!basePlate?.type === 'multi-section' || !basePlate.sections) return;
+
+      const rect = gl.domElement.getBoundingClientRect();
+      const mouse = new THREE.Vector2(
+        ((event.clientX - rect.left) / rect.width) * 2 - 1,
+        -((event.clientY - rect.top) / rect.height) * 2 + 1
+      );
+
+      raycasterRef.current.setFromCamera(mouse, camera);
+
+      // Get all baseplate section meshes by traversing the scene
+      const baseplateObjects: THREE.Object3D[] = [];
+      scene.traverse((obj) => {
+        if (obj.userData.isBaseplateSection) {
+          baseplateObjects.push(obj);
+        }
+      });
+
+      if (baseplateObjects.length > 0) {
+        // Raycast only against baseplate sections (ignoring parts/supports/clamps)
+        const baseplateIntersects = raycasterRef.current.intersectObjects(baseplateObjects, false);
+        if (baseplateIntersects.length > 0) {
+          const sectionMesh = baseplateIntersects[0].object;
+          const sectionId = sectionMesh.userData.sectionId;
+          if (sectionId) {
+            setSelectedBasePlateSectionId(sectionId);
+            window.dispatchEvent(new CustomEvent('baseplate-section-selected', {
+              detail: { sectionId }
+            }));
+          }
+        }
+      }
+    };
+
+    gl.domElement.addEventListener('click', handleCanvasClick);
+    return () => gl.domElement.removeEventListener('click', handleCanvasClick);
+  }, [waitingForSectionSelection, basePlate, gl, camera, scene]);
+
+  // Handle section selection when waiting for it during support placement
+  useEffect(() => {
+    if (waitingForSectionSelection && selectedBasePlateSectionId && placing.type) {
+      // Section selected, now start support placement
+      setWaitingForSectionSelection(false);
+      setOrbitControlsEnabled(false);
+      setPlacing({ active: true, type: placing.type, initParams: placing.initParams });
+    }
+  }, [waitingForSectionSelection, selectedBasePlateSectionId, placing.type, placing.initParams]);
+
+  // Handle ESC key to cancel section selection
+  useEffect(() => {
+    if (!waitingForSectionSelection) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setWaitingForSectionSelection(false);
+        setPlacing({ active: false, type: null, initParams: {} });
+        setOrbitControlsEnabled(true);
+        // Restore previous view
+        setCurrentOrientation(prevOrientationRef.current);
+        updateCamera(prevOrientationRef.current, modelBounds);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [waitingForSectionSelection, updateCamera, modelBounds]);
+
+  // Handle section selection when waiting for it during clamp placement
+  useEffect(() => {
+    if (waitingForClampSectionSelection && selectedBasePlateSectionId && clampPlacementMode.clampModelId) {
+      console.log('[ClampPlacement] Section selected, starting placement');
+      setWaitingForClampSectionSelection(false);
+      
+      const { clampModelId, clampCategory } = clampPlacementMode;
+      
+      // Compute part silhouette for placement
+      const meshes = importedParts
+        .map(p => modelMeshRefs.current.get(p.id)?.current)
+        .filter((m): m is THREE.Mesh => m !== null);
+      
+      if (meshes.length > 0) {
+        import('./Clamps/clampPlacement').then(({ computePartSilhouetteForClamps }) => {
+          const silhouette = computePartSilhouetteForClamps(meshes, baseTopY);
+          partSilhouetteRef.current = silhouette;
+          
+          if (DEBUG_SHOW_CLAMP_SILHOUETTE) {
+            setDebugClampSilhouette(silhouette);
+          }
+        });
+      }
+      
+      setClampPlacementMode({
+        active: true,
+        clampModelId,
+        clampCategory
+      });
+      
+      // Deselect any currently selected item
+      onPartSelected(null);
+      onSupportSelect?.(null);
+      setSelectedClampId(null);
+    }
+  }, [waitingForClampSectionSelection, selectedBasePlateSectionId, clampPlacementMode, importedParts, baseTopY, onPartSelected, onSupportSelect]);
+
+  // Handle ESC key to cancel clamp section selection
+  useEffect(() => {
+    if (!waitingForClampSectionSelection) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setWaitingForClampSectionSelection(false);
+        setClampPlacementMode({ active: false, clampModelId: null, clampCategory: null });
+        partSilhouetteRef.current = null;
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [waitingForClampSectionSelection]);
+
+  // Handle section selection when waiting for it during label placement
+  useEffect(() => {
+    if (waitingForLabelSectionSelection && selectedBasePlateSectionId && pendingLabelConfig) {
+      setWaitingForLabelSectionSelection(false);
+      
+      // Add section to label and dispatch
+      const labelWithSection = { ...pendingLabelConfig, sectionId: selectedBasePlateSectionId };
+      setPendingLabelConfig(null);
+      
+      // Dispatch the label-add event again with section
+      window.dispatchEvent(new CustomEvent('label-add', { detail: labelWithSection }));
+    }
+  }, [waitingForLabelSectionSelection, selectedBasePlateSectionId, pendingLabelConfig]);
+
+  // Complete hole placement after section selected
+  useEffect(() => {
+    if (waitingForHoleSectionSelection && selectedBasePlateSectionId && pendingHoleConfig) {
+      console.log('[HolePlacement] Section selected, starting hole placement');
+      
+      // Log section state at this point
+      if (basePlate?.type === 'multi-section' && basePlate.sections) {
+        const selectedSection = basePlate.sections.find(s => s.id === selectedBasePlateSectionId);
+        console.log('[HolePlacement] Selected section:', JSON.stringify({
+          id: selectedSection?.id,
+          minX: selectedSection?.minX,
+          maxX: selectedSection?.maxX,
+          minZ: selectedSection?.minZ,
+          maxZ: selectedSection?.maxZ
+        }));
+      }
+      setWaitingForHoleSectionSelection(false);
+      
+      const { config, depth } = pendingHoleConfig;
+      setPendingHoleConfig(null);
+      
+      // Disable orbit controls during placement
+      setOrbitControlsEnabled(false);
+      
+      // Switch to top view for placement
+      prevOrientationRef.current = currentOrientation;
+      setCurrentOrientation('top');
+      updateCamera('top', modelBounds);
+      
+      // Use depth from event (baseplate thickness) or fallback to basePlate state
+      const holeDepth = depth ?? basePlate?.depth ?? 20;
+      setHolePlacementMode({ active: true, config, depth: holeDepth });
+    }
+  }, [waitingForHoleSectionSelection, selectedBasePlateSectionId, pendingHoleConfig, currentOrientation, updateCamera, modelBounds, basePlate]);
+
+  // Handle ESC key to cancel waiting for section selection
+  useEffect(() => {
+    if (!waitingForLabelSectionSelection && !waitingForHoleSectionSelection) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setWaitingForLabelSectionSelection(false);
+        setPendingLabelConfig(null);
+        setWaitingForHoleSectionSelection(false);
+        setPendingHoleConfig(null);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [waitingForLabelSectionSelection, waitingForHoleSectionSelection]);
 
   // Handle hole creation
   const handleHoleCreate = useCallback((hole: PlacedHole) => {
+    // For multi-section baseplates, require section selection first
+    if (basePlate?.type === 'multi-section' && !selectedBasePlateSectionId) {
+      console.warn('Cannot create hole: Please select a baseplate section first');
+      return;
+    }
+
+    // Validate hole position is within selected section for multi-section baseplates
+    if (basePlate?.type === 'multi-section' && selectedBasePlateSectionId && basePlate.sections) {
+      const section = basePlate.sections.find(s => s.id === selectedBasePlateSectionId);
+      console.log('[HolePlacement] handleHoleCreate - section:', JSON.stringify({
+        id: section?.id,
+        minX: section?.minX,
+        maxX: section?.maxX,
+        minZ: section?.minZ,
+        maxZ: section?.maxZ
+      }));
+      console.log('[HolePlacement] handleHoleCreate - all sections:', basePlate.sections.map(s => `${s.id}: minZ=${s.minZ}, maxZ=${s.maxZ}`).join(', '));
+      if (section && hole.position) {
+        // Note: hole.position is Vector2 where .x = world X, .y = world Z
+        const { x, y } = hole.position;
+        // Check if hole is within section bounds
+        if (x < section.minX || x > section.maxX || y < section.minZ || y > section.maxZ) {
+          console.warn('[HolePlacement] Hole position outside selected section bounds, skipping placement', {
+            holePos: { x, z: y },
+            sectionBounds: { minX: section.minX, maxX: section.maxX, minZ: section.minZ, maxZ: section.maxZ }
+          });
+          // Clear section selection and exit hole placement mode
+          setSelectedBasePlateSectionId(null);
+          setHolePlacementMode({ active: false, config: null, depth: 20 });
+          setOrbitControlsEnabled(true);
+          setCurrentOrientation(prevOrientationRef.current);
+          updateCamera(prevOrientationRef.current, modelBounds);
+          return;
+        }
+      }
+    }
+
+    // Add sectionId to hole if we have a multi-section baseplate
+    const holeWithSection: PlacedHole = basePlate?.type === 'multi-section' && selectedBasePlateSectionId
+      ? { ...hole, sectionId: selectedBasePlateSectionId }
+      : hole;
+
+    console.log('[HolePlacement] Hole being placed:', JSON.stringify({
+      id: holeWithSection.id,
+      position: holeWithSection.position,
+      diameter: holeWithSection.diameter,
+      sectionId: holeWithSection.sectionId
+    }));
+
     // Emit event to AppShell
-    window.dispatchEvent(new CustomEvent('hole-placed', { detail: hole }));
+    window.dispatchEvent(new CustomEvent('hole-placed', { detail: holeWithSection }));
+    
+    // Clear section selection after placing hole
+    setSelectedBasePlateSectionId(null);
     
     // Exit placement mode
     setHolePlacementMode({ active: false, config: null, depth: 20 });
@@ -2223,7 +2521,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     updateCamera(prevOrientationRef.current, modelBounds);
     
     // Note: CSG is triggered by handleHolesUpdated when AppShell sends back the updated holes array
-  }, [modelBounds, updateCamera]);
+  }, [modelBounds, updateCamera, basePlate, selectedBasePlateSectionId]);
 
   // Sync holes from AppShell
   React.useEffect(() => {
@@ -2305,201 +2603,192 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     };
   }, [editingHoleId]);
 
-  // Capture original baseplate geometry once when baseplate is first rendered
-  // This ref tracks if we've already captured to prevent re-captures
-  const hasCaputuredOriginalBaseplate = React.useRef(false);
-  
+  // =============================================================================
+  // HOLE CSG SYSTEM
+  // =============================================================================
+
+  /** Waits for React render cycle to complete. */
+  const waitForRenderCycle = useCallback((): Promise<void> => {
+    return new Promise((resolve) => {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(resolve);
+      });
+    });
+  }, []);
+
+  /** Triggers CSG recalculation with delay. */
+  const scheduleCSGTrigger = useCallback((delay = 150) => {
+    const timer = setTimeout(() => {
+      if (!isDraggingHoleRef.current) {
+        setHoleCSGTrigger((prev) => prev + 1);
+      }
+    }, delay);
+    return () => clearTimeout(timer);
+  }, []);
+
+  // Handle CSG updates when baseplate or holes change (skip during drag)
   React.useEffect(() => {
-    // Don't recapture during hole drag - wait for drag to complete
-    if (isDraggingHoleRef.current) {
+    if (basePlate?.type === 'multi-section' || isDraggingHoleRef.current) {
       return;
     }
-    
-    // Reset capture flag when baseplate changes
-    hasCaputuredOriginalBaseplate.current = false;
-    
-    // Try to capture after a short delay to ensure mesh is rendered
-    const timer = setTimeout(() => {
-      if (basePlateMeshRef.current?.geometry && !hasCaputuredOriginalBaseplate.current) {
-        console.log('[HoleCSG] Capturing original baseplate geometry');
-        originalBaseplateGeoRef.current = basePlateMeshRef.current.geometry.clone();
-        hasCaputuredOriginalBaseplate.current = true;
-      }
-    }, 100);
-    
-    return () => clearTimeout(timer);
-  }, [basePlate?.type, basePlate?.width, basePlate?.height, basePlate?.depth, combinedHullPoints]);
 
-  // Immediate hole CSG - cut holes into baseplate when triggered (not during live editing)
+    // No holes - clear CSG result
+    if (mountingHoles.length === 0) {
+      if (baseplateWithHoles !== null) {
+        setBaseplateWithHoles(null);
+      }
+      return;
+    }
+
+    // We have holes - trigger CSG recalculation
+    // Clear existing CSG first so BasePlate renders with correct size
+    if (baseplateWithHoles !== null) {
+      setBaseplateWithHoles(null);
+    }
+    
+    // Schedule CSG trigger
+    return scheduleCSGTrigger();
+  }, [
+    basePlate?.type,
+    basePlate?.width,
+    basePlate?.height,
+    basePlate?.depth,
+    combinedHullPoints,
+    mountingHoles.length,
+    scheduleCSGTrigger,
+  ]);
+
+  // Serialize hull points for stable dependency comparison
+  const hullPointsKey = React.useMemo(() => {
+    return JSON.stringify(combinedHullPoints.map(p => ({ x: Math.round(p.x * 100), z: Math.round(p.z * 100) })));
+  }, [combinedHullPoints]);
+
+  // Clear cached original geometry when baseplate configuration changes
+  // This forces re-capture of the geometry on next CSG trigger
+  React.useEffect(() => {
+    originalBaseplateGeoRef.current = null;
+    setBaseplateWithHoles(null);
+  }, [basePlate?.type, basePlate?.width, basePlate?.height, basePlate?.depth, hullPointsKey]);
+
+  // Execute CSG operation
   React.useEffect(() => {
     const performHoleCSG = async () => {
-      // Use ref to get latest holes (avoids stale closure)
+      // Skip conditions
+      if (
+        basePlate?.type === 'multi-section' ||
+        isDraggingHoleRef.current ||
+        holeCSGTrigger === 0
+      ) {
+        return;
+      }
+
       const currentHoles = mountingHolesRef.current;
-      
-      // No holes - clear any modified geometry
       if (currentHoles.length === 0) {
         setBaseplateWithHoles(null);
         return;
       }
+
+      // Wait for geometry to be ready
+      await waitForRenderCycle();
+
+      if (isDraggingHoleRef.current) return;
+
+      // Get source geometry - prefer cached original, fallback to mesh
+      let sourceGeo: THREE.BufferGeometry | null = null;
       
-      // Skip if trigger is 0 (initial state) - wait for explicit trigger
-      if (holeCSGTrigger === 0) {
-        return;
+      if (originalBaseplateGeoRef.current) {
+        // Use cached original geometry
+        sourceGeo = originalBaseplateGeoRef.current.clone();
+        console.log('[HoleCSG] Using cached original geometry');
+      } else {
+        // No cache - capture from mesh (must be original BasePlate since baseplateWithHoles is null)
+        const meshGeometry = basePlateMeshRef.current?.geometry;
+        if (!meshGeometry) {
+          scheduleCSGTrigger(100);
+          return;
+        }
+        // Cache the original geometry for future CSG operations
+        originalBaseplateGeoRef.current = meshGeometry.clone();
+        sourceGeo = meshGeometry.clone();
+        console.log('[HoleCSG] Captured and cached original geometry');
       }
-      
-      // Need original baseplate geometry
-      if (!originalBaseplateGeoRef.current) {
-        console.log('[HoleCSG] No original baseplate geometry cached - will retry');
-        // Give BasePlate a frame to render and capture
-        setTimeout(() => {
-          if (basePlateMeshRef.current?.geometry && !originalBaseplateGeoRef.current) {
-            originalBaseplateGeoRef.current = basePlateMeshRef.current.geometry.clone();
-            // Re-trigger CSG
-            setHoleCSGTrigger(prev => prev + 1);
-          }
-        }, 100);
-        return;
-      }
-      
-      // Create merged holes geometry
-      // Hole positions are in world space, but baseplate geometry is in local space
-      // We need to transform hole positions by subtracting the baseplate world position
-      const baseplateOffset = basePlate?.position 
+
+      const baseplateOffset = basePlate?.position
         ? { x: basePlate.position.x, z: basePlate.position.z }
         : undefined;
+      const depth = basePlate?.depth ?? 5;
+
+      // Calculate geometry offset - accounts for asymmetric expansion when hull points
+      // cause the baseplate to expand in one direction more than the other.
+      // 
+      // IMPORTANT: This only applies to RECTANGULAR baseplates where geometry is in local space
+      // and gets translated by (geometryOffsetX, geometryOffsetZ) when hull points cause asymmetric expansion.
+      //
+      // For CONVEX-HULL baseplates, the geometry is created directly in WORLD space (vertices have
+      // actual world coordinates) and the mesh position is (0,0,0). No geometry offset is needed.
+      let geometryOffset: { x: number; z: number } | undefined;
       
-      // baseTopY is the world Y of the baseplate top surface
-      // For local space geometry, we need the local Y which is just the depth
-      const localBaseTopY = basePlate?.depth ?? 5;
-      
-      // Ensure all holes have correct depth (use baseplate depth for through holes)
-      const holesWithCorrectDepth = currentHoles.map(hole => ({
-        ...hole,
-        depth: hole.depth || localBaseTopY
-      }));
-      
-      console.log(`[HoleCSG] Baseplate depth: ${localBaseTopY}mm, holes:`, holesWithCorrectDepth.map(h => ({
-        id: h.id,
-        type: h.type,
-        diameter: h.diameter,
-        depth: h.depth,
-        position: { x: h.position.x, z: h.position.y }
-      })));
-      
-      const holesGeo = createMergedHolesGeometry(holesWithCorrectDepth, localBaseTopY, baseplateOffset);
-      
-      if (!holesGeo) {
-        console.log('[HoleCSG] Failed to create merged holes geometry');
-        return;
-      }
-      
-      setHoleCSGProcessing(true);
-      console.log(`[HoleCSG] Cutting ${currentHoles.length} hole(s) into baseplate with depth ${localBaseTopY}...`);
-      
-      try {
-        // Use original baseplate geometry (not already-modified one)
-        const sourceGeo = originalBaseplateGeoRef.current.clone();
-        
-        const result = await performHoleCSGInWorker(
-          sourceGeo,
-          holesGeo,
-          (progress) => {
-            console.log(`[HoleCSG] Progress: ${Math.round(progress * 100)}%`);
+      if (basePlate?.type !== 'convex-hull') {
+        // Only calculate geometry offset for non-convex-hull types
+        sourceGeo.computeBoundingBox();
+        if (sourceGeo.boundingBox) {
+          const box = sourceGeo.boundingBox;
+          const geoCenterX = (box.min.x + box.max.x) / 2;
+          const geoCenterZ = (box.min.z + box.max.z) / 2;
+          // Only apply offset if significant (> 0.1mm)
+          if (Math.abs(geoCenterX) > 0.1 || Math.abs(geoCenterZ) > 0.1) {
+            geometryOffset = { x: geoCenterX, z: geoCenterZ };
+            console.log('[HoleCSG] Geometry offset detected (rectangular):', geometryOffset);
           }
-        );
-        
+        }
+      } else {
+        console.log('[HoleCSG] Convex-hull baseplate - no geometry offset needed');
+      }
+
+      const holesWithDepth = currentHoles.map((hole) => ({
+        ...hole,
+        depth: hole.depth || depth,
+      }));
+
+      const holesGeo = createMergedHolesGeometry(holesWithDepth, depth, baseplateOffset, geometryOffset);
+      if (!holesGeo) return;
+
+      setHoleCSGProcessing(true);
+
+      try {
+        const result = await performHoleCSGInWorker(sourceGeo, holesGeo);
+
+        if (isDraggingHoleRef.current) return;
+
         if (result) {
-          console.log('[HoleCSG] Successfully cut holes into baseplate');
           setBaseplateWithHoles(result);
-        } else {
-          console.error('[HoleCSG] Worker returned null result');
         }
       } catch (error) {
-        console.error('[HoleCSG] Error during CSG operation:', error);
+        console.error('[HoleCSG] Error:', error);
       } finally {
         setHoleCSGProcessing(false);
       }
     };
-    
-    performHoleCSG();
-    // Only trigger CSG when holeCSGTrigger changes (explicit trigger on drag end, hole placed, etc.)
-    // Do NOT watch mountingHoles directly - that would cause CSG during drag
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [holeCSGTrigger]);
 
-  // Reset hole CSG when baseplate changes significantly (including position or hull points for convex-hull)
-  // Skip during hole gizmo drag to prevent unnecessary recalculations
-  React.useEffect(() => {
-    // Don't reset during hole drag - wait for drag to complete
-    if (isDraggingHoleRef.current) {
-      return;
-    }
-    
-    // When baseplate type, dimensions, position, or hull points change, clear the cached original and result
-    console.log('[HoleCSG] Baseplate changed, clearing cached geometry');
-    originalBaseplateGeoRef.current = null;
-    hasCaputuredOriginalBaseplate.current = false;
-    setBaseplateWithHoles(null);
-    
-    // If there are existing holes, trigger CSG after a short delay to re-cut them
-    // The delay allows the new baseplate geometry to be captured first
-    if (mountingHoles.length > 0) {
-      setTimeout(() => {
-        setHoleCSGTrigger(prev => prev + 1);
-      }, 200);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [basePlate?.type, basePlate?.width, basePlate?.height, basePlate?.depth, basePlate?.position?.x, basePlate?.position?.z, combinedHullPoints]);
-  
-  // Track previous baseplate depth to detect changes
+    performHoleCSG();
+  }, [holeCSGTrigger, basePlate?.type, basePlate?.position, basePlate?.depth, waitForRenderCycle, scheduleCSGTrigger]);
+
+  // Track previous baseplate depth
   const prevBaseplateDepthRef = React.useRef(basePlate?.depth);
-  
-  // Update hole depths when baseplate depth changes (for through-holes)
+
+  // Sync hole depths with baseplate depth changes
   React.useEffect(() => {
     const newDepth = basePlate?.depth ?? 20;
     const prevDepth = prevBaseplateDepthRef.current;
-    
-    // Only update if depth actually changed
+
     if (prevDepth === newDepth) return;
     prevBaseplateDepthRef.current = newDepth;
-    
-    // Update all holes to use new baseplate depth
-    setMountingHoles(prev => {
+
+    setMountingHoles((prev) => {
       if (prev.length === 0) return prev;
-      
-      console.log(`[HoleCSG] Updating hole depths from ${prevDepth} to ${newDepth}`);
-      return prev.map(hole => ({
-        ...hole,
-        depth: newDepth
-      }));
+      return prev.map((hole) => ({ ...hole, depth: newDepth }));
     });
   }, [basePlate?.depth]);
-
-  /**
-   * Finds the closest baseplate section to a given point.
-   */
-  const findClosestSection = useCallback((x: number, z: number, sections: BasePlateSection[]): { section: BasePlateSection; index: number } | null => {
-    if (!sections || sections.length === 0) return null;
-
-    let closestSection: BasePlateSection | null = null;
-    let closestIndex = -1;
-    let minDistance = Infinity;
-
-    sections.forEach((section, index) => {
-      // Calculate distance from point to section's center
-      const centerX = (section.minX + section.maxX) / 2;
-      const centerZ = (section.minZ + section.maxZ) / 2;
-      const distance = Math.sqrt((x - centerX) ** 2 + (z - centerZ) ** 2);
-
-      if (distance < minDistance) {
-        minDistance = distance;
-        closestSection = section;
-        closestIndex = index;
-      }
-    });
-
-    return closestSection && closestIndex >= 0 ? { section: closestSection, index: closestIndex } : null;
-  }, []);
 
   /**
    * Gets the footprint bounds of a clamp in world space.
@@ -2545,16 +2834,27 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     section: BasePlateSection,
     nearbySupports: AnySupport[],
     nearbyClamps: PlacedClamp[],
-    padding: number
+    padding: number,
+    nearbyLabels: LabelConfig[] = [],
+    nearbyHoles: PlacedHole[] = []
   ): BasePlateSection => {
+    // Validate section has required bounds
+    if (!isFinite(section.minX) || !isFinite(section.maxX) || 
+        !isFinite(section.minZ) || !isFinite(section.maxZ)) {
+      console.error('[calculateOptimalSectionBounds] Invalid section bounds:', section);
+      // Return section unchanged if it's invalid
+      return section;
+    }
+    
     const originalWidth = section.originalWidth ?? (section.maxX - section.minX);
     const originalDepth = section.originalDepth ?? (section.maxZ - section.minZ);
     
-    // Calculate current center
-    const centerX = (section.minX + section.maxX) / 2;
-    const centerZ = (section.minZ + section.maxZ) / 2;
+    // Use original center if available, otherwise calculate from current bounds
+    // This prevents the section from drifting when items are added/removed
+    const centerX = section.originalCenterX ?? (section.minX + section.maxX) / 2;
+    const centerZ = section.originalCenterZ ?? (section.minZ + section.maxZ) / 2;
     
-    // Start with original size centered at current position
+    // Start with original size centered at original position
     let minX = centerX - originalWidth / 2;
     let maxX = centerX + originalWidth / 2;
     let minZ = centerZ - originalDepth / 2;
@@ -2580,6 +2880,34 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       }
     });
 
+    // Expand to include each nearby label
+    nearbyLabels.forEach(label => {
+      if (label.position) {
+        // Approximate label bounds based on text length and font size
+        const fontSize = label.fontSize ?? 10;
+        const textLength = (label.text?.length ?? 0) * fontSize * 0.6;
+        const labelHalfWidth = textLength / 2;
+        const labelHalfHeight = fontSize / 2;
+        
+        minX = Math.min(minX, label.position.x - labelHalfWidth - padding);
+        maxX = Math.max(maxX, label.position.x + labelHalfWidth + padding);
+        minZ = Math.min(minZ, label.position.z - labelHalfHeight - padding);
+        maxZ = Math.max(maxZ, label.position.z + labelHalfHeight + padding);
+      }
+    });
+
+    // Expand to include each nearby hole
+    nearbyHoles.forEach(hole => {
+      // Note: hole.position is Vector2 where .x = world X, .y = world Z
+      if (hole.position && isFinite(hole.position.x) && isFinite(hole.position.y)) {
+        const holeRadius = (hole.diameter ?? 5) / 2;
+        minX = Math.min(minX, hole.position.x - holeRadius - padding);
+        maxX = Math.max(maxX, hole.position.x + holeRadius + padding);
+        minZ = Math.min(minZ, hole.position.y - holeRadius - padding);
+        maxZ = Math.max(maxZ, hole.position.y + holeRadius + padding);
+      }
+    });
+
     return {
       ...section,
       minX,
@@ -2588,7 +2916,6 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       maxZ,
     };
   }, [getClampFootprintBounds]);
-
   /**
    * Expands a baseplate section to include a support's footprint with padding.
    */
@@ -2603,50 +2930,58 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   }, []);
 
   const handleSupportCreate = useCallback((support: AnySupport) => {
-    // For new supports created via placement, just emit event as-is
-    window.dispatchEvent(new CustomEvent('support-created', { detail: support }));
+    // For multi-section baseplates, require section selection first
+    if (basePlate?.type === 'multi-section' && !selectedBasePlateSectionId) {
+      console.warn('Cannot create support: Please select a baseplate section first');
+      return;
+    }
 
-    // Auto-expand baseplate if this support overhangs current footprint
+    // Add sectionId to support if we have a multi-section baseplate
+    const supportWithSection: AnySupport = basePlate?.type === 'multi-section' && selectedBasePlateSectionId
+      ? { ...support, sectionId: selectedBasePlateSectionId }
+      : support;
+
+    // Emit event with sectionId included
+    window.dispatchEvent(new CustomEvent('support-created', { detail: supportWithSection }));
+
+    // Auto-expand baseplate section if this support overhangs current footprint
     setBasePlate(prev => {
       if (!prev) return prev;
       
-      const padding = prev.padding ?? 10;
+      const padding = prev.padding ?? 5;
 
-      // For multi-section baseplates, recalculate the closest section bounds
-      if (prev.type === 'multi-section' && prev.sections && prev.sections.length > 0) {
-        const supportCenterX = support.center.x;
-        const supportCenterZ = support.center.y;
-        
-        const closest = findClosestSection(supportCenterX, supportCenterZ, prev.sections);
-        if (!closest) return prev;
+      // For multi-section baseplates, recalculate the selected section bounds
+      if (prev.type === 'multi-section' && prev.sections && prev.sections.length > 0 && selectedBasePlateSectionId) {
+        const sectionIndex = prev.sections.findIndex(s => s.id === selectedBasePlateSectionId);
+        if (sectionIndex === -1) return prev;
+
+        const section = prev.sections[sectionIndex];
 
         // Get all supports currently in this section (including the new one)
-        const nearbySupports = [...supports, support].filter(s => {
-          const sCenterX = s.center.x;
-          const sCenterZ = s.center.y;
-          return (
-            sCenterX >= closest.section.minX - padding &&
-            sCenterX <= closest.section.maxX + padding &&
-            sCenterZ >= closest.section.minZ - padding &&
-            sCenterZ <= closest.section.maxZ + padding
-          );
-        });
+        // Filter by sectionId to only include supports that belong to this section
+        const sectionSupports = [...supports, supportWithSection].filter(s => s.sectionId === selectedBasePlateSectionId);
 
-        // Get all clamps in this section
-        const nearbyClamps = placedClamps.filter(c => {
-          return (
-            c.position.x >= closest.section.minX - padding &&
-            c.position.x <= closest.section.maxX + padding &&
-            c.position.z >= closest.section.minZ - padding &&
-            c.position.z <= closest.section.maxZ + padding
-          );
-        });
+        // Get all clamps in this section (filter by sectionId)
+        const sectionClamps = placedClamps.filter(c => c.sectionId === selectedBasePlateSectionId);
 
-        // Calculate optimal bounds: shrink to original or expand for all supports and clamps
-        const optimizedSection = calculateOptimalSectionBounds(closest.section, nearbySupports, nearbyClamps, padding);
+        // Get all labels in this section (filter by sectionId)
+        const sectionLabels = labels.filter(l => l.sectionId === selectedBasePlateSectionId);
+
+        // Get all holes in this section (filter by sectionId)
+        const sectionHoles = mountingHoles.filter(h => h.sectionId === selectedBasePlateSectionId);
+
+        // Calculate optimal bounds based on items in this section only
+        const optimizedSection = calculateOptimalSectionBounds(
+          section, 
+          sectionSupports, 
+          sectionClamps, 
+          padding,
+          sectionLabels,
+          sectionHoles
+        );
         
         const updatedSections = prev.sections.map((s, i) => 
-          i === closest.index ? optimizedSection : s
+          i === sectionIndex ? optimizedSection : s
         );
 
         // Dispatch event to notify AppShell of section update
@@ -2716,11 +3051,101 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
 
     setPlacing({ active: false, type: null, initParams: {} });
     setOrbitControlsEnabled(true);
+    
+    // Clear selected section after support placement completes
+    setSelectedBasePlateSectionId(null);
+    
     // restore previous view after creation
     setCurrentOrientation(prevOrientationRef.current);
     updateCamera(prevOrientationRef.current, modelBounds);
     editingSupportRef.current = null;
-  }, [modelBounds, updateCamera, findClosestSection, expandSectionForSupport, calculateOptimalSectionBounds]);
+  }, [modelBounds, updateCamera, calculateOptimalSectionBounds, basePlate, selectedBasePlateSectionId, supports, placedClamps, labels, mountingHoles]);
+
+  // Auto-expand sections when holes are added (for multi-section baseplates)
+  useEffect(() => {
+    if (basePlate?.type !== 'multi-section' || !basePlate.sections || mountingHoles.length === 0) {
+      return;
+    }
+    
+    // Validate all sections before processing
+    const invalidSection = basePlate.sections.find(s => 
+      !isFinite(s.minX) || !isFinite(s.maxX) || !isFinite(s.minZ) || !isFinite(s.maxZ)
+    );
+    if (invalidSection) {
+      console.error('[HoleExpansion] Baseplate has invalid section:', {
+        id: invalidSection.id,
+        minX: invalidSection.minX,
+        maxX: invalidSection.maxX,
+        minZ: invalidSection.minZ,
+        maxZ: invalidSection.maxZ,
+        originalWidth: invalidSection.originalWidth,
+        originalDepth: invalidSection.originalDepth
+      });
+      console.error('[HoleExpansion] All sections:', basePlate.sections.map(s => ({
+        id: s.id,
+        minX: s.minX,
+        maxX: s.maxX,
+        minZ: s.minZ,
+        maxZ: s.maxZ
+      })));
+      return;
+    }
+    
+    // Group holes by section
+    const holesBySectionId = new Map<string, PlacedHole[]>();
+    mountingHoles.forEach(hole => {
+      if (hole.sectionId) {
+        const existing = holesBySectionId.get(hole.sectionId) || [];
+        existing.push(hole);
+        holesBySectionId.set(hole.sectionId, existing);
+      }
+    });
+    
+    // Update sections to accommodate holes
+    setBasePlate(prev => {
+      if (!prev || prev.type !== 'multi-section' || !prev.sections) return prev;
+      
+      const padding = prev.padding ?? 5;
+      let hasChanges = false;
+      
+      const updatedSections = prev.sections.map(section => {
+        const sectionHoles = holesBySectionId.get(section.id) || [];
+        if (sectionHoles.length === 0) return section;
+        
+        const sectionSupports = supports.filter(s => s.sectionId === section.id);
+        const sectionClamps = placedClamps.filter(c => c.sectionId === section.id);
+        const sectionLabels = labels.filter(l => l.sectionId === section.id);
+        
+        const optimizedSection = calculateOptimalSectionBounds(
+          section,
+          sectionSupports,
+          sectionClamps,
+          padding,
+          sectionLabels,
+          sectionHoles
+        );
+        
+        // Check if bounds actually changed
+        if (
+          optimizedSection.minX !== section.minX ||
+          optimizedSection.maxX !== section.maxX ||
+          optimizedSection.minZ !== section.minZ ||
+          optimizedSection.maxZ !== section.maxZ
+        ) {
+          hasChanges = true;
+        }
+        
+        return optimizedSection;
+      });
+      
+      if (!hasChanges) return prev;
+      
+      return {
+        ...prev,
+        sections: updatedSections
+      };
+    });
+  }, [mountingHoles, basePlate, supports, placedClamps, labels, calculateOptimalSectionBounds]);
 
   // Persist created supports in scene
   React.useEffect(() => {
@@ -2735,229 +3160,40 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
         }
         return [...prev, s];
       });
+      
+      // Force bounds recalculation after support is added to state
+      if (s.sectionId) {
+        setTimeout(() => setItemBoundsUpdateTrigger(t => t + 1), 0);
+      }
     };
     window.addEventListener('support-created', onSupportCreated as EventListener);
     return () => window.removeEventListener('support-created', onSupportCreated as EventListener);
   }, []);
 
   // Listen for support updates from properties panel
+  // Note: The reactive multi-section bounds effect will automatically recalculate section bounds
   React.useEffect(() => {
     const onSupportUpdated = (e: CustomEvent) => {
       const updatedSupport = e.detail as AnySupport;
+      // Update supports state - reactive effect will handle bounds recalculation
       setSupports(prev => prev.map(s => s.id === updatedSupport.id ? updatedSupport : s));
-
-      // Also recalculate baseplate section if it's a multi-section baseplate
-      setBasePlate(prev => {
-        if (!prev || prev.type !== 'multi-section' || !prev.sections || prev.sections.length === 0) {
-          return prev;
-        }
-
-        const padding = prev.padding ?? 10;
-        const supportCenterX = updatedSupport.center.x;
-        const supportCenterZ = updatedSupport.center.y;
-
-        const closest = findClosestSection(supportCenterX, supportCenterZ, prev.sections);
-        if (!closest) return prev;
-
-        // Get all supports currently in this section (with updated positions)
-        const allSupportsWithUpdate = supports.map(s => 
-          s.id === updatedSupport.id ? updatedSupport : s
-        );
-        
-        const nearbySupports = allSupportsWithUpdate.filter(s => {
-          const sCenterX = s.center.x;
-          const sCenterZ = s.center.y;
-          return (
-            sCenterX >= closest.section.minX - padding &&
-            sCenterX <= closest.section.maxX + padding &&
-            sCenterZ >= closest.section.minZ - padding &&
-            sCenterZ <= closest.section.maxZ + padding
-          );
-        });
-
-        // Get all clamps in this section
-        const nearbyClamps = placedClamps.filter(c => {
-          return (
-            c.position.x >= closest.section.minX - padding &&
-            c.position.x <= closest.section.maxX + padding &&
-            c.position.z >= closest.section.minZ - padding &&
-            c.position.z <= closest.section.maxZ + padding
-          );
-        });
-
-        // Calculate optimal bounds: shrink to original or expand for all nearby supports and clamps
-        const optimizedSection = calculateOptimalSectionBounds(closest.section, nearbySupports, nearbyClamps, padding);
-        
-        // Only update if section actually changed
-        if (
-          optimizedSection.minX === closest.section.minX &&
-          optimizedSection.maxX === closest.section.maxX &&
-          optimizedSection.minZ === closest.section.minZ &&
-          optimizedSection.maxZ === closest.section.maxZ
-        ) {
-          return prev;
-        }
-
-        const updatedSections = prev.sections.map((s, i) =>
-          i === closest.index ? optimizedSection : s
-        );
-
-        // Dispatch event to notify AppShell of section update
-        window.dispatchEvent(new CustomEvent('baseplate-section-updated', {
-          detail: {
-            basePlateId: prev.id,
-            sectionId: optimizedSection.id,
-            newBounds: {
-              minX: optimizedSection.minX,
-              maxX: optimizedSection.maxX,
-              minZ: optimizedSection.minZ,
-              maxZ: optimizedSection.maxZ,
-            }
-          }
-        }));
-
-        return {
-          ...prev,
-          sections: updatedSections,
-        };
-      });
     };
 
     const onSupportDelete = (e: CustomEvent) => {
       const supportId = e.detail as string;
-      const deletedSupport = supports.find(s => s.id === supportId);
-      
+      // Update supports state - reactive effect will handle bounds recalculation
       setSupports(prev => prev.filter(s => s.id !== supportId));
       
       // If we were editing this support, cancel the edit
       if (editingSupportRef.current?.id === supportId) {
         editingSupportRef.current = null;
       }
-
-      // Recalculate baseplate section after deletion (may shrink back)
-      if (deletedSupport) {
-        setBasePlate(prev => {
-          if (!prev || prev.type !== 'multi-section' || !prev.sections || prev.sections.length === 0) {
-            return prev;
-          }
-
-          const padding = prev.padding ?? 10;
-          const supportCenterX = deletedSupport.center.x;
-          const supportCenterZ = deletedSupport.center.y;
-
-          const closest = findClosestSection(supportCenterX, supportCenterZ, prev.sections);
-          if (!closest) return prev;
-
-          // Get all remaining supports in this section (excluding deleted one)
-          const nearbySupports = supports.filter(s => {
-            if (s.id === supportId) return false; // Exclude deleted support
-            const sCenterX = s.center.x;
-            const sCenterZ = s.center.y;
-            return (
-              sCenterX >= closest.section.minX - padding &&
-              sCenterX <= closest.section.maxX + padding &&
-              sCenterZ >= closest.section.minZ - padding &&
-              sCenterZ <= closest.section.maxZ + padding
-            );
-          });
-
-          // Get all clamps in this section
-          const nearbyClamps = placedClamps.filter(c => {
-            return (
-              c.position.x >= closest.section.minX - padding &&
-              c.position.x <= closest.section.maxX + padding &&
-              c.position.z >= closest.section.minZ - padding &&
-              c.position.z <= closest.section.maxZ + padding
-            );
-          });
-
-          // Calculate optimal bounds: may shrink to original if no supports/clamps nearby
-          const optimizedSection = calculateOptimalSectionBounds(closest.section, nearbySupports, nearbyClamps, padding);
-          
-          // Only update if section actually changed
-          if (
-            optimizedSection.minX === closest.section.minX &&
-            optimizedSection.maxX === closest.section.maxX &&
-            optimizedSection.minZ === closest.section.minZ &&
-            optimizedSection.maxZ === closest.section.maxZ
-          ) {
-            return prev;
-          }
-
-          const updatedSections = prev.sections.map((s, i) =>
-            i === closest.index ? optimizedSection : s
-          );
-
-          // Dispatch event to notify AppShell of section update
-          window.dispatchEvent(new CustomEvent('baseplate-section-updated', {
-            detail: {
-              basePlateId: prev.id,
-              sectionId: optimizedSection.id,
-              newBounds: {
-                minX: optimizedSection.minX,
-                maxX: optimizedSection.maxX,
-                minZ: optimizedSection.minZ,
-                maxZ: optimizedSection.maxZ,
-              }
-            }
-          }));
-
-          return {
-            ...prev,
-            sections: updatedSections,
-          };
-        });
-      }
     };
 
     const onSupportsClearAll = () => {
+      // Clear all supports - reactive effect will handle bounds recalculation
       setSupports([]);
       editingSupportRef.current = null;
-
-      // Recalculate all sections considering remaining clamps
-      setBasePlate(prev => {
-        if (!prev || prev.type !== 'multi-section' || !prev.sections || prev.sections.length === 0) {
-          return prev;
-        }
-
-        const padding = prev.padding ?? 10;
-        
-        // Reset each section but keep clamps in consideration
-        const resetSections = prev.sections.map(section => {
-          // Get clamps in this section
-          const nearbyClamps = placedClamps.filter(c => {
-            return (
-              c.position.x >= section.minX - padding &&
-              c.position.x <= section.maxX + padding &&
-              c.position.z >= section.minZ - padding &&
-              c.position.z <= section.maxZ + padding
-            );
-          });
-          
-          return calculateOptimalSectionBounds(section, [], nearbyClamps, padding);
-        });
-
-        // Dispatch events for all section updates
-        resetSections.forEach(section => {
-          window.dispatchEvent(new CustomEvent('baseplate-section-updated', {
-            detail: {
-              basePlateId: prev.id,
-              sectionId: section.id,
-              newBounds: {
-                minX: section.minX,
-                maxX: section.maxX,
-                minZ: section.minZ,
-                maxZ: section.maxZ,
-              }
-            }
-          }));
-        });
-
-        return {
-          ...prev,
-          sections: resetSections,
-        };
-      });
     };
 
     window.addEventListener('support-updated', onSupportUpdated as EventListener);
@@ -2969,7 +3205,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       window.removeEventListener('support-delete', onSupportDelete as EventListener);
       window.removeEventListener('supports-clear-all', onSupportsClearAll);
     };
-  }, [findClosestSection, calculateOptimalSectionBounds, supports, placedClamps]);
+  }, []);
 
   // Handle auto-place supports event
   React.useEffect(() => {
@@ -3078,6 +3314,61 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     const onLabelAdd = (e: CustomEvent) => {
       const newLabel = e.detail as LabelConfig;
       
+      // For multi-section baseplates, require section selection if not already provided
+      if (basePlate?.type === 'multi-section') {
+        if (!newLabel.sectionId && !selectedBasePlateSectionId) {
+          // Wait for section selection
+          setWaitingForLabelSectionSelection(true);
+          setPendingLabelConfig(newLabel);
+          return;
+        }
+        
+        // Use provided sectionId or selected section
+        const sectionId = newLabel.sectionId || selectedBasePlateSectionId;
+        if (sectionId && basePlate.sections) {
+          const section = basePlate.sections.find(s => s.id === sectionId);
+          if (section) {
+            // Add sectionId to label
+            newLabel.sectionId = sectionId;
+            
+            // Position label at the center-front of the section
+            const sectionCenterX = (section.minX + section.maxX) / 2;
+            const sectionFrontZ = section.maxZ;
+            
+            const labelY = baseTopY;
+            const labelX = sectionCenterX;
+            const labelZ = sectionFrontZ + newLabel.fontSize / 2;
+            
+            newLabel.position = new THREE.Vector3(labelX, labelY, labelZ);
+            newLabel.rotation = new THREE.Euler(-Math.PI / 2, 0, 0);
+            
+            setLabels(prev => [...prev, newLabel]);
+            setSelectedLabelId(newLabel.id);
+            
+            // Force bounds recalculation after label is added to state
+            setTimeout(() => setItemBoundsUpdateTrigger(t => t + 1), 0);
+            
+            // Clear selected section after label placement
+            setSelectedBasePlateSectionId(null);
+            
+            // Dispatch events
+            window.dispatchEvent(new CustomEvent('label-added', { detail: newLabel }));
+            window.dispatchEvent(new CustomEvent('label-placed', { 
+              detail: { 
+                labelId: newLabel.id, 
+                sectionId: newLabel.sectionId,
+                position: newLabel.position,
+                fontSize: newLabel.fontSize,
+                text: newLabel.text
+              } 
+            }));
+            
+            return;
+          }
+        }
+      }
+      
+      // Original logic for rectangular/convex-hull baseplates
       // Calculate rectangular bounding box of supports + part
       // Label should be placed at the lower-left boundary (outside)
       let minX = Infinity, maxX = -Infinity;
@@ -3216,6 +3507,35 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       // Set up raycaster
       raycasterRef.current.setFromCamera(mouse, camera);
       
+      // For multi-section baseplates, check if user clicked on a baseplate section first
+      if (basePlate?.type === 'multi-section' && basePlate.sections) {
+        // Get baseplate group reference and check intersections
+        const baseplateObjects: THREE.Object3D[] = [];
+        scene.traverse((obj) => {
+          if (obj.userData.isBaseplateSection) {
+            baseplateObjects.push(obj);
+          }
+        });
+        
+        if (baseplateObjects.length > 0) {
+          const baseplateIntersects = raycasterRef.current.intersectObjects(baseplateObjects, false);
+          if (baseplateIntersects.length > 0) {
+            // User clicked on a baseplate section - select it
+            const sectionMesh = baseplateIntersects[0].object;
+            const sectionId = sectionMesh.userData.sectionId;
+            if (sectionId) {
+              console.log('[ClampPlacement] Section selected:', sectionId);
+              setSelectedBasePlateSectionId(sectionId);
+              window.dispatchEvent(new CustomEvent('baseplate-section-selected', {
+                detail: { sectionId }
+              }));
+              // Don't proceed with clamp placement, just select the section
+              return;
+            }
+          }
+        }
+      }
+      
       // Get all part meshes to test against
       const partMeshes: THREE.Mesh[] = [];
       importedParts.forEach(part => {
@@ -3310,6 +3630,15 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
         }
         
         if (result.success) {
+          // For multi-section baseplates, require section selection first
+          if (basePlate?.type === 'multi-section' && !selectedBasePlateSectionId) {
+            console.warn('Cannot place clamp: Please select a baseplate section first');
+            window.dispatchEvent(new CustomEvent('clamp-progress', { 
+              detail: { stage: 'idle', progress: 0, message: 'Please select a section first' } 
+            }));
+            return;
+          }
+
           window.dispatchEvent(new CustomEvent('clamp-progress', { 
             detail: { stage: 'csg', progress: 80, message: 'Generating support geometry...' } 
           }));
@@ -3320,16 +3649,24 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
             position: { x: result.position.x, y: result.position.y, z: result.position.z },
             rotation: result.rotation,
             scale: { x: 1, y: 1, z: 1 },
+            // Add sectionId if multi-section baseplate
+            ...(basePlate?.type === 'multi-section' && selectedBasePlateSectionId ? { sectionId: selectedBasePlateSectionId } : {}),
           };
-          
-          console.log('[ClampPlacement] Creating new clamp:', newClamp);
           
           setPlacedClamps(prev => [...prev, newClamp]);
           setSelectedClampId(newClamp.id);
           
+          // Force bounds recalculation after clamp is added to state
+          if (newClamp.sectionId) {
+            setTimeout(() => setItemBoundsUpdateTrigger(t => t + 1), 0);
+          }
+          
           // Exit placement mode and notify UI
           setClampPlacementMode({ active: false, clampModelId: null, clampCategory: null });
           partSilhouetteRef.current = null;
+          
+          // Clear selected section after clamp placement
+          setSelectedBasePlateSectionId(null);
           
           window.dispatchEvent(new CustomEvent('clamp-progress', { 
             detail: { stage: 'idle', progress: 100, message: 'Clamp placed successfully' } 
@@ -3356,7 +3693,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       console.log('[ClampPlacement] Removing canvas click listener');
       gl.domElement.removeEventListener('click', handleCanvasClick);
     };
-  }, [clampPlacementMode, gl, camera, importedParts, partVisibility, supports, placedClamps, baseTopY]);
+  }, [clampPlacementMode, gl, camera, importedParts, partVisibility, supports, placedClamps, baseTopY, basePlate, selectedBasePlateSectionId]);
 
   // Handle clamp placement click on a part (legacy R3F handler - keeping for reference)
   const handleClampPlacementClick = useCallback((e: ThreeEvent<MouseEvent>, partMesh: THREE.Object3D) => {
@@ -3438,74 +3775,68 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
           position: { x: result.position.x, y: result.position.y, z: result.position.z },
           rotation: result.rotation,
           scale: { x: 1, y: 1, z: 1 },
+          sectionId: selectedBasePlateSectionId ?? undefined,  // Assign sectionId for multi-section baseplates
         };
-        
-        console.log('[ClampPlacement] Creating new clamp:', newClamp);
         
         setPlacedClamps(prev => [...prev, newClamp]);
         setSelectedClampId(newClamp.id);
         
+        // Force bounds recalculation after clamp is added to state
+        if (newClamp.sectionId) {
+          setTimeout(() => setItemBoundsUpdateTrigger(t => t + 1), 0);
+        }
+        
         // Auto-expand baseplate section if this is a multi-section baseplate
-        setBasePlate(prev => {
-          if (!prev || prev.type !== 'multi-section' || !prev.sections || prev.sections.length === 0) {
-            return prev;
-          }
-
-          const padding = prev.padding ?? 10;
-          const clampCenterX = newClamp.position.x;
-          const clampCenterZ = newClamp.position.z;
-
-          const closest = findClosestSection(clampCenterX, clampCenterZ, prev.sections);
-          if (!closest) return prev;
-
-          // Get all supports in this section
-          const nearbySupports = supports.filter(s => {
-            const sCenterX = s.center.x;
-            const sCenterZ = s.center.y;
-            return (
-              sCenterX >= closest.section.minX - padding &&
-              sCenterX <= closest.section.maxX + padding &&
-              sCenterZ >= closest.section.minZ - padding &&
-              sCenterZ <= closest.section.maxZ + padding
-            );
-          });
-
-          // Get all clamps in this section (including the new one)
-          const nearbyClamps = [...placedClamps, newClamp].filter(c => {
-            return (
-              c.position.x >= closest.section.minX - padding &&
-              c.position.x <= closest.section.maxX + padding &&
-              c.position.z >= closest.section.minZ - padding &&
-              c.position.z <= closest.section.maxZ + padding
-            );
-          });
-
-          // Calculate optimal bounds
-          const optimizedSection = calculateOptimalSectionBounds(closest.section, nearbySupports, nearbyClamps, padding);
-
-          const updatedSections = prev.sections.map((s, i) =>
-            i === closest.index ? optimizedSection : s
-          );
-
-          // Dispatch event to notify AppShell
-          window.dispatchEvent(new CustomEvent('baseplate-section-updated', {
-            detail: {
-              basePlateId: prev.id,
-              sectionId: optimizedSection.id,
-              newBounds: {
-                minX: optimizedSection.minX,
-                maxX: optimizedSection.maxX,
-                minZ: optimizedSection.minZ,
-                maxZ: optimizedSection.maxZ,
-              }
+        if (newClamp.sectionId) {
+          setBasePlate(prev => {
+            if (!prev || prev.type !== 'multi-section' || !prev.sections || prev.sections.length === 0) {
+              return prev;
             }
-          }));
 
-          return {
-            ...prev,
-            sections: updatedSections,
-          };
-        });
+            const sectionId = newClamp.sectionId!;
+            const section = prev.sections.find(s => s.id === sectionId);
+            if (!section) return prev;
+
+            const padding = prev.padding ?? 5;
+
+            // Filter all items by sectionId (including the new clamp)
+            const sectionSupports = supports.filter(s => s.sectionId === sectionId);
+            const sectionClamps = [...placedClamps, newClamp].filter(c => c.sectionId === sectionId);
+            const sectionLabels = labels.filter(l => l.sectionId === sectionId);
+            const sectionHoles = mountingHoles.filter(h => h.sectionId === sectionId);
+
+            // Calculate optimal bounds
+            const optimizedSection = calculateOptimalSectionBounds(
+              section, sectionSupports, sectionClamps, padding, sectionLabels, sectionHoles
+            );
+
+            const sectionIndex = prev.sections.findIndex(s => s.id === sectionId);
+            if (sectionIndex === -1) return prev;
+
+            const updatedSections = prev.sections.map((s, i) =>
+              i === sectionIndex ? optimizedSection : s
+            );
+
+            // Dispatch event to notify AppShell
+            window.dispatchEvent(new CustomEvent('baseplate-section-updated', {
+              detail: {
+                basePlateId: prev.id,
+                sectionId: optimizedSection.id,
+                newBounds: {
+                  minX: optimizedSection.minX,
+                  maxX: optimizedSection.maxX,
+                  minZ: optimizedSection.minZ,
+                  maxZ: optimizedSection.maxZ,
+                }
+              }
+            }));
+
+            return {
+              ...prev,
+              sections: updatedSections,
+            };
+          });
+        }
         
         // Exit placement mode and notify UI
         setClampPlacementMode({ active: false, clampModelId: null, clampCategory: null });
@@ -3518,7 +3849,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     }).catch(err => {
       console.error('[ClampPlacement] Error loading module:', err);
     });
-  }, [clampPlacementMode, importedParts, supports, placedClamps, baseTopY]);
+  }, [clampPlacementMode, importedParts, supports, placedClamps, baseTopY, selectedBasePlateSectionId, labels, mountingHoles, calculateOptimalSectionBounds]);
 
   // Clamp event listeners
   useEffect(() => {
@@ -3535,16 +3866,29 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       // Ensure Y is at least at minimum placement height
       defaultPosition.y = Math.max(defaultPosition.y, minPlacementY);
       
+      // For multi-section baseplates, require section selection first
+      if (basePlate?.type === 'multi-section' && !selectedBasePlateSectionId) {
+        console.warn('Cannot place clamp: Please select a baseplate section first');
+        return;
+      }
+      
       const newClamp: PlacedClamp = {
         id: `clamp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
         clampModelId,
         position: defaultPosition,
         rotation: { x: 0, y: 0, z: 0 },
         scale: { x: 1, y: 1, z: 1 },
+        // Add sectionId if multi-section baseplate
+        ...(basePlate?.type === 'multi-section' && selectedBasePlateSectionId ? { sectionId: selectedBasePlateSectionId } : {}),
       };
       
       setPlacedClamps(prev => [...prev, newClamp]);
       setSelectedClampId(newClamp.id);
+      
+      // Force bounds recalculation after clamp is added to state
+      if (newClamp.sectionId) {
+        setTimeout(() => setItemBoundsUpdateTrigger(t => t + 1), 0);
+      }
       
       // Notify UI about the clamp placement
       window.dispatchEvent(new CustomEvent('clamp-placed', { detail: newClamp }));
@@ -3560,91 +3904,14 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
         updates.position.y = Math.max(updates.position.y, minY);
       }
       
+      // Update clamp state - reactive effect will handle bounds recalculation
       setPlacedClamps(prev => prev.map(c => c.id === clampId ? { ...c, ...updates } : c));
-
-      // Recalculate baseplate section if it's a multi-section baseplate and clamp was moved
-      if (updates.position) {
-        setBasePlate(prev => {
-          if (!prev || prev.type !== 'multi-section' || !prev.sections || prev.sections.length === 0) {
-            return prev;
-          }
-
-          const padding = prev.padding ?? 10;
-          const clampCenterX = updates.position!.x;
-          const clampCenterZ = updates.position!.z;
-
-          const closest = findClosestSection(clampCenterX, clampCenterZ, prev.sections);
-          if (!closest) return prev;
-
-          // Get all supports in this section
-          const nearbySupports = supports.filter(s => {
-            const sCenterX = s.center.x;
-            const sCenterZ = s.center.y;
-            return (
-              sCenterX >= closest.section.minX - padding &&
-              sCenterX <= closest.section.maxX + padding &&
-              sCenterZ >= closest.section.minZ - padding &&
-              sCenterZ <= closest.section.maxZ + padding
-            );
-          });
-
-          // Get all clamps in this section (with updated position)
-          const allClampsWithUpdate = placedClamps.map(c =>
-            c.id === clampId ? { ...c, ...updates } : c
-          );
-          
-          const nearbyClamps = allClampsWithUpdate.filter(c => {
-            return (
-              c.position.x >= closest.section.minX - padding &&
-              c.position.x <= closest.section.maxX + padding &&
-              c.position.z >= closest.section.minZ - padding &&
-              c.position.z <= closest.section.maxZ + padding
-            );
-          });
-
-          // Calculate optimal bounds
-          const optimizedSection = calculateOptimalSectionBounds(closest.section, nearbySupports, nearbyClamps, padding);
-
-          // Only update if section actually changed
-          if (
-            optimizedSection.minX === closest.section.minX &&
-            optimizedSection.maxX === closest.section.maxX &&
-            optimizedSection.minZ === closest.section.minZ &&
-            optimizedSection.maxZ === closest.section.maxZ
-          ) {
-            return prev;
-          }
-
-          const updatedSections = prev.sections.map((s, i) =>
-            i === closest.index ? optimizedSection : s
-          );
-
-          // Dispatch event to notify AppShell
-          window.dispatchEvent(new CustomEvent('baseplate-section-updated', {
-            detail: {
-              basePlateId: prev.id,
-              sectionId: optimizedSection.id,
-              newBounds: {
-                minX: optimizedSection.minX,
-                maxX: optimizedSection.maxX,
-                minZ: optimizedSection.minZ,
-                maxZ: optimizedSection.maxZ,
-              }
-            }
-          }));
-
-          return {
-            ...prev,
-            sections: updatedSections,
-          };
-        });
-      }
     };
 
     const onClampDelete = (e: CustomEvent) => {
       const clampId = e.detail as string;
-      const deletedClamp = placedClamps.find(c => c.id === clampId);
       
+      // Update state - reactive effect will handle bounds recalculation
       setPlacedClamps(prev => prev.filter(c => c.id !== clampId));
       setClampMinOffsets(prev => {
         const next = new Map(prev);
@@ -3654,84 +3921,10 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       if (selectedClampId === clampId) {
         setSelectedClampId(null);
       }
-
-      // Recalculate baseplate section after deletion (may shrink back)
-      if (deletedClamp) {
-        setBasePlate(prev => {
-          if (!prev || prev.type !== 'multi-section' || !prev.sections || prev.sections.length === 0) {
-            return prev;
-          }
-
-          const padding = prev.padding ?? 10;
-          const clampCenterX = deletedClamp.position.x;
-          const clampCenterZ = deletedClamp.position.z;
-
-          const closest = findClosestSection(clampCenterX, clampCenterZ, prev.sections);
-          if (!closest) return prev;
-
-          // Get all supports in this section
-          const nearbySupports = supports.filter(s => {
-            const sCenterX = s.center.x;
-            const sCenterZ = s.center.y;
-            return (
-              sCenterX >= closest.section.minX - padding &&
-              sCenterX <= closest.section.maxX + padding &&
-              sCenterZ >= closest.section.minZ - padding &&
-              sCenterZ <= closest.section.maxZ + padding
-            );
-          });
-
-          // Get all remaining clamps in this section (excluding deleted one)
-          const nearbyClamps = placedClamps.filter(c => {
-            if (c.id === clampId) return false;
-            return (
-              c.position.x >= closest.section.minX - padding &&
-              c.position.x <= closest.section.maxX + padding &&
-              c.position.z >= closest.section.minZ - padding &&
-              c.position.z <= closest.section.maxZ + padding
-            );
-          });
-
-          // Calculate optimal bounds: may shrink to original if no supports/clamps nearby
-          const optimizedSection = calculateOptimalSectionBounds(closest.section, nearbySupports, nearbyClamps, padding);
-
-          // Only update if section actually changed
-          if (
-            optimizedSection.minX === closest.section.minX &&
-            optimizedSection.maxX === closest.section.maxX &&
-            optimizedSection.minZ === closest.section.minZ &&
-            optimizedSection.maxZ === closest.section.maxZ
-          ) {
-            return prev;
-          }
-
-          const updatedSections = prev.sections.map((s, i) =>
-            i === closest.index ? optimizedSection : s
-          );
-
-          // Dispatch event to notify AppShell
-          window.dispatchEvent(new CustomEvent('baseplate-section-updated', {
-            detail: {
-              basePlateId: prev.id,
-              sectionId: optimizedSection.id,
-              newBounds: {
-                minX: optimizedSection.minX,
-                maxX: optimizedSection.maxX,
-                minZ: optimizedSection.minZ,
-                maxZ: optimizedSection.maxZ,
-              }
-            }
-          }));
-
-          return {
-            ...prev,
-            sections: updatedSections,
-          };
-        });
-      }
     };
     
     // Handle clamp data loaded events (update minimum placement offset and store CSG data)
+    // Note: The reactive effect will handle bounds recalculation when clampSupportInfos changes
     const onClampDataLoaded = (e: CustomEvent) => {
       const { 
         clampId, 
@@ -3754,6 +3947,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       setClampMinOffsets(prev => new Map(prev).set(clampId, minPlacementOffset));
       
       // Store support info for baseplate bounds calculation
+      // The reactive effect will automatically recalculate section bounds when this changes
       if (supportInfo) {
         setClampSupportInfos(prev => new Map(prev).set(clampId, {
           polygon: supportInfo.polygon,
@@ -3779,71 +3973,6 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
         }
         return c;
       }));
-
-      // Expand baseplate section now that clamp data is loaded
-      const clamp = placedClamps.find(c => c.id === clampId);
-      if (clamp && supportInfo) {
-        setBasePlate(prev => {
-          if (!prev || prev.type !== 'multi-section' || !prev.sections || prev.sections.length === 0) {
-            return prev;
-          }
-
-          const padding = prev.padding ?? 10;
-          const clampCenterX = clamp.position.x;
-          const clampCenterZ = clamp.position.z;
-
-          const closest = findClosestSection(clampCenterX, clampCenterZ, prev.sections);
-          if (!closest) return prev;
-
-          // Get all supports in this section
-          const nearbySupports = supports.filter(s => {
-            const sCenterX = s.center.x;
-            const sCenterZ = s.center.y;
-            return (
-              sCenterX >= closest.section.minX - padding &&
-              sCenterX <= closest.section.maxX + padding &&
-              sCenterZ >= closest.section.minZ - padding &&
-              sCenterZ <= closest.section.maxZ + padding
-            );
-          });
-
-          // Get all clamps in this section
-          const nearbyClamps = placedClamps.filter(c => {
-            return (
-              c.position.x >= closest.section.minX - padding &&
-              c.position.x <= closest.section.maxX + padding &&
-              c.position.z >= closest.section.minZ - padding &&
-              c.position.z <= closest.section.maxZ + padding
-            );
-          });
-
-          // Calculate optimal bounds
-          const optimizedSection = calculateOptimalSectionBounds(closest.section, nearbySupports, nearbyClamps, padding);
-
-          const updatedSections = prev.sections.map((s, i) =>
-            i === closest.index ? optimizedSection : s
-          );
-
-          // Dispatch event to notify AppShell
-          window.dispatchEvent(new CustomEvent('baseplate-section-updated', {
-            detail: {
-              basePlateId: prev.id,
-              sectionId: optimizedSection.id,
-              newBounds: {
-                minX: optimizedSection.minX,
-                maxX: optimizedSection.maxX,
-                minZ: optimizedSection.minZ,
-                maxZ: optimizedSection.maxZ,
-              }
-            }
-          }));
-
-          return {
-            ...prev,
-            sections: updatedSections,
-          };
-        });
-      }
     };
 
     const onClampSelect = (e: CustomEvent) => {
@@ -3852,56 +3981,10 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     };
 
     const onClampsClearAll = () => {
+      // Clear all clamps - reactive effect will handle bounds recalculation
       setPlacedClamps([]);
       setSelectedClampId(null);
       setClampMinOffsets(new Map());
-
-      // Recalculate all sections considering remaining supports
-      setBasePlate(prev => {
-        if (!prev || prev.type !== 'multi-section' || !prev.sections || prev.sections.length === 0) {
-          return prev;
-        }
-
-        const padding = prev.padding ?? 10;
-
-        // Reset each section but keep supports in consideration
-        const resetSections = prev.sections.map(section => {
-          // Get supports in this section
-          const nearbySupports = supports.filter(s => {
-            const sCenterX = s.center.x;
-            const sCenterZ = s.center.y;
-            return (
-              sCenterX >= section.minX - padding &&
-              sCenterX <= section.maxX + padding &&
-              sCenterZ >= section.minZ - padding &&
-              sCenterZ <= section.maxZ + padding
-            );
-          });
-
-          return calculateOptimalSectionBounds(section, nearbySupports, [], padding);
-        });
-
-        // Dispatch events for all section updates
-        resetSections.forEach(section => {
-          window.dispatchEvent(new CustomEvent('baseplate-section-updated', {
-            detail: {
-              basePlateId: prev.id,
-              sectionId: section.id,
-              newBounds: {
-                minX: section.minX,
-                maxX: section.maxX,
-                minZ: section.minZ,
-                maxZ: section.maxZ,
-              }
-            }
-          }));
-        });
-
-        return {
-          ...prev,
-          sections: resetSections,
-        };
-      });
     };
 
     const onClampToggleDebug = (e: CustomEvent) => {
@@ -3917,6 +4000,19 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       };
       
       console.log('[ClampPlacement] Start placement event received:', { clampModelId, clampCategory });
+      
+      // For multi-section baseplates, require section selection first
+      if (basePlate?.type === 'multi-section' && !selectedBasePlateSectionId) {
+        console.log('[ClampPlacement] Waiting for section selection');
+        setWaitingForClampSectionSelection(true);
+        // Store clamp info for later
+        setClampPlacementMode({
+          active: false,
+          clampModelId,
+          clampCategory
+        });
+        return;
+      }
       
       // Compute part silhouette for placement
       const meshes = importedParts
@@ -3958,6 +4054,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     const onClampCancelPlacement = () => {
       setClampPlacementMode({ active: false, clampModelId: null, clampCategory: null });
       partSilhouetteRef.current = null;
+      setWaitingForClampSectionSelection(false);
       // Clear debug silhouette visualization
       setDebugClampSilhouette(null);
     };
@@ -3983,7 +4080,91 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       window.removeEventListener('clamp-start-placement', onClampStartPlacement as EventListener);
       window.removeEventListener('clamp-cancel-placement', onClampCancelPlacement);
     };
-  }, [selectedClampId, baseTopY, clampMinOffsets, importedParts]);
+  }, [selectedClampId, baseTopY, clampMinOffsets, importedParts, basePlate, selectedBasePlateSectionId]);
+
+  // Reactive multi-section baseplate bounds update
+  // This effect automatically recalculates section bounds when any items change
+  useEffect(() => {
+    // Skip if not a multi-section baseplate
+    if (!basePlate || basePlate.type !== 'multi-section' || !basePlate.sections || basePlate.sections.length === 0) {
+      return;
+    }
+
+    const padding = basePlate.padding ?? 5;
+    let sectionsUpdated = false;
+    
+    const updatedSections = basePlate.sections.map(section => {
+      // Find all items assigned to this section by sectionId
+      const sectionSupports = supports.filter(s => s.sectionId === section.id);
+      const sectionClamps = placedClamps.filter(c => c.sectionId === section.id);
+      const sectionLabels = labels.filter(l => l.sectionId === section.id);
+      const sectionHoles = mountingHoles.filter(h => h.sectionId === section.id);
+
+      // Calculate optimal bounds based only on items assigned to this section
+      const optimizedSection = calculateOptimalSectionBounds(
+        section, 
+        sectionSupports, 
+        sectionClamps, 
+        padding,
+        sectionLabels,
+        sectionHoles
+      );
+
+      // Check if section changed (with small tolerance for floating point)
+      if (
+        Math.abs(optimizedSection.minX - section.minX) > 0.01 ||
+        Math.abs(optimizedSection.maxX - section.maxX) > 0.01 ||
+        Math.abs(optimizedSection.minZ - section.minZ) > 0.01 ||
+        Math.abs(optimizedSection.maxZ - section.maxZ) > 0.01
+      ) {
+        sectionsUpdated = true;
+      }
+
+      return optimizedSection;
+    });
+
+    if (sectionsUpdated) {
+      setBasePlate(prev => {
+        if (!prev || prev.type !== 'multi-section' || !prev.sections) return prev;
+        
+        // Dispatch events for each updated section
+        updatedSections.forEach((section, index) => {
+          const originalSection = prev.sections![index];
+          if (
+            Math.abs(section.minX - originalSection.minX) > 0.01 ||
+            Math.abs(section.maxX - originalSection.maxX) > 0.01 ||
+            Math.abs(section.minZ - originalSection.minZ) > 0.01 ||
+            Math.abs(section.maxZ - originalSection.maxZ) > 0.01
+          ) {
+            window.dispatchEvent(new CustomEvent('baseplate-section-updated', {
+              detail: {
+                basePlateId: prev.id,
+                sectionId: section.id,
+                newBounds: {
+                  minX: section.minX,
+                  maxX: section.maxX,
+                  minZ: section.minZ,
+                  maxZ: section.maxZ,
+                }
+              }
+            }));
+          }
+        });
+        
+        return { ...prev, sections: updatedSections };
+      });
+      
+      // Trigger CSG recalculation after sections update - but only if not actively dragging
+      if (mountingHoles.length > 0 && !isDraggingHoleRef.current && !isDraggingSupportRef.current && !isDraggingLabelRef.current && !isDraggingClampRef.current) {
+        const timer = setTimeout(() => {
+          if (!isDraggingHoleRef.current && !isDraggingSupportRef.current && !isDraggingLabelRef.current && !isDraggingClampRef.current) {
+            setHoleCSGTrigger(t => t + 1);
+          }
+        }, 100);
+        return () => clearTimeout(timer);
+      }
+    }
+  }, [basePlate?.type, basePlate?.sections, basePlate?.padding, supports, placedClamps, labels, mountingHoles, clampSupportInfos, calculateOptimalSectionBounds, itemBoundsUpdateTrigger]);
 
   // Build a THREE.Mesh for a support using the same dimensions/origining as SupportMesh
   const buildSupportMesh = useCallback((support: AnySupport, baseTop: number) => {
@@ -5064,12 +5245,46 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
           return;
         }
         
+        console.log('[BasePlate Creation] Sections received from AppShell:', sections.map(s => JSON.stringify({
+          id: s.id,
+          minX: s.minX,
+          maxX: s.maxX,
+          minZ: s.minZ,
+          maxZ: s.maxZ
+        })).join('\\n'));
+        
+        // Validate all sections have valid bounds
+        const invalidSection = sections.find(s => 
+          !isFinite(s.minX) || !isFinite(s.maxX) || !isFinite(s.minZ) || !isFinite(s.maxZ)
+        );
+        if (invalidSection) {
+          console.error('[BasePlate Creation] Invalid section detected:', JSON.stringify(invalidSection));
+          return;
+        }
+        
         // If there's an existing multi-section baseplate, append new sections to it
         const existingSections = basePlate?.type === 'multi-section' ? (basePlate.sections || []) : [];
         const combinedSections = [...existingSections, ...sections];
         
         // Merge overlapping sections
         const allSections = mergeOverlappingSections(combinedSections);
+        
+        console.log('[BasePlate Creation] After merging, sections:', allSections.map(s => JSON.stringify({
+          id: s.id,
+          minX: s.minX,
+          maxX: s.maxX,
+          minZ: s.minZ,
+          maxZ: s.maxZ
+        })).join('\n'));
+        
+        // Validate merged sections
+        const invalidMerged = allSections.find(s =>
+          !isFinite(s.minX) || !isFinite(s.maxX) || !isFinite(s.minZ) || !isFinite(s.maxZ)
+        );
+        if (invalidMerged) {
+          console.error('[BasePlate Creation] Invalid merged section:', JSON.stringify(invalidMerged));
+          return;
+        }
         
         const depth = clampPos(dimensions?.height, 1, DEFAULT_THICKNESS);
         const paddingValue = clampPos(dimensions?.padding, 0, 0);
@@ -5326,6 +5541,15 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
 
   // Handle section drawn - forward to AppShell
   const handleSectionDrawn = useCallback((section: BasePlateSection) => {
+    console.log('[SectionDrawing] Section drawn:', JSON.stringify({
+      id: section.id,
+      minX: section.minX,
+      maxX: section.maxX,
+      minZ: section.minZ,
+      maxZ: section.maxZ,
+      originalWidth: section.originalWidth,
+      originalDepth: section.originalDepth
+    }));
     window.dispatchEvent(new CustomEvent('baseplate-section-drawn', { detail: section }));
     setDrawnSections(prev => [...prev, section]);
   }, []);
@@ -5894,7 +6118,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
             const firstPartRef = modelMeshRefs.current.get(importedParts[0].id);
             return firstPartRef?.current?.position;
           })() : undefined}
-          additionalHullPoints={basePlate.type === 'convex-hull' ? combinedHullPoints : undefined}
+          additionalHullPoints={combinedHullPoints}
           livePositionDelta={livePositionDelta}
           selected={false}
           meshRef={basePlateMeshRef}
@@ -5915,19 +6139,46 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
           material={basePlate.material}
           selected={false}
           selectedSectionId={selectedBasePlateSectionId}
+          holes={mountingHoles}
+          isDraggingHole={isDraggingHole}
+          isDraggingAnyItem={isDraggingAnyItem}
+          holeCSGTrigger={holeCSGTrigger}
+          groupRef={multiSectionBasePlateGroupRef}
           onSelect={() => {
             window.dispatchEvent(new CustomEvent('baseplate-selected', {
               detail: { basePlateId: basePlate.id }
             }));
           }}
-          onSectionDoubleClick={isMultiSectionDrawingMode ? undefined : (sectionId) => {
-            // Enter edit mode for this section (disabled during drawing mode)
+          onSectionClick={
+            // Only allow section selection when actively placing features
+            (waitingForSectionSelection || waitingForClampSectionSelection || waitingForLabelSectionSelection || waitingForHoleSectionSelection || clampPlacementMode.active || holePlacementMode.active)
+              ? (sectionId) => {
+                  // Single click - select section for feature placement
+                  console.log('[SectionSelection] Section clicked:', sectionId);
+                  if (basePlate?.type === 'multi-section' && basePlate.sections) {
+                    const section = basePlate.sections.find(s => s.id === sectionId);
+                    console.log('[SectionSelection] Section state:', JSON.stringify({
+                      id: section?.id,
+                      minX: section?.minX,
+                      maxX: section?.maxX,
+                      minZ: section?.minZ,
+                      maxZ: section?.maxZ,
+                      originalWidth: section?.originalWidth,
+                      originalDepth: section?.originalDepth
+                    }));
+                  }
+                  setSelectedBasePlateSectionId(sectionId);
+                }
+              : undefined
+          }
+          onSectionDoubleClick={(isMultiSectionDrawingMode || holePlacementMode.active) ? undefined : (sectionId) => {
+            // Double click - enter edit mode for moving this section
+            // First, notify all other controls to deactivate
+            window.dispatchEvent(new CustomEvent('pivot-control-activated', { detail: { sectionId } }));
+            // Clear part selection when selecting a baseplate section
+            onPartSelected(null);
             setSelectedBasePlateSectionId(sectionId);
             setEditingBasePlateSectionId(sectionId);
-            // Notify AppShell to highlight section in properties panel
-            window.dispatchEvent(new CustomEvent('baseplate-section-selected', {
-              detail: { sectionId }
-            }));
           }}
         />
       )}
@@ -5942,6 +6193,8 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
               section={editingSection}
               onDragStart={() => {
                 isDraggingBasePlateSectionRef.current = true;
+                // Set isDraggingAnyItem to prevent CSG during drag
+                setIsDraggingAnyItem(true);
               }}
               onTransformChange={(newBounds) => {
                 // Skip live updates during drag to prevent gizmo jumping
@@ -5952,44 +6205,58 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
                 
                 // Create section with new position
                 const editingSection = basePlate.sections!.find(s => s.id === editingBasePlateSectionId)!;
+                
+                // Calculate the movement delta
+                const oldCenterX = (editingSection.minX + editingSection.maxX) / 2;
+                const oldCenterZ = (editingSection.minZ + editingSection.maxZ) / 2;
+                const newCenterX = (newBounds.minX + newBounds.maxX) / 2;
+                const newCenterZ = (newBounds.minZ + newBounds.maxZ) / 2;
+                const deltaX = newCenterX - oldCenterX;
+                const deltaZ = newCenterZ - oldCenterZ;
+                
+                // Move all items in this section by the same delta
+                const sectionId = editingSection.id;
+                
+                // Move supports (supports use 'center' which is Vector2 with x,y where y is Z in world space)
+                setSupports(prev => prev.map(s => 
+                  s.sectionId === sectionId && s.center
+                    ? { ...s, center: new THREE.Vector2(s.center.x + deltaX, s.center.y + deltaZ) }
+                    : s
+                ));
+                
+                // Move clamps (check for position existence)
+                setPlacedClamps(prev => prev.map(c =>
+                  c.sectionId === sectionId && c.position
+                    ? { ...c, position: { ...c.position, x: c.position.x + deltaX, z: c.position.z + deltaZ } }
+                    : c
+                ));
+                
+                // Move labels (check for position existence)
+                setLabels(prev => prev.map(l =>
+                  l.sectionId === sectionId && l.position
+                    ? { ...l, position: { ...l.position, x: l.position.x + deltaX, z: l.position.z + deltaZ } }
+                    : l
+                ));
+                
+                // Move holes (check for position existence)
+                setMountingHoles(prev => prev.map(h =>
+                  h.sectionId === sectionId && h.position
+                    ? { ...h, position: { ...h.position, x: h.position.x + deltaX, z: h.position.z + deltaZ } }
+                    : h
+                ));
+                
                 let movedSection = { 
                   ...editingSection,
                   ...newBounds,
                   // Preserve original size (not position)
                   originalWidth: editingSection.originalWidth ?? (editingSection.maxX - editingSection.minX),
                   originalDepth: editingSection.originalDepth ?? (editingSection.maxZ - editingSection.minZ),
+                  // UPDATE the original center to the new position
+                  originalCenterX: newCenterX,
+                  originalCenterZ: newCenterZ,
                 };
 
-                const padding = basePlate.padding ?? 10;
-                
-                // Find all supports that should be associated with this section
-                const nearbySupports = supports.filter(support => {
-                  const supportCenterX = support.center.x;
-                  const supportCenterZ = support.center.y;
-
-                  // Check if support center is within the moved section bounds (expanded by padding)
-                  return (
-                    supportCenterX >= movedSection.minX - padding &&
-                    supportCenterX <= movedSection.maxX + padding &&
-                    supportCenterZ >= movedSection.minZ - padding &&
-                    supportCenterZ <= movedSection.maxZ + padding
-                  );
-                });
-
-                // Find all clamps that should be associated with this section
-                const nearbyClamps = placedClamps.filter(clamp => {
-                  return (
-                    clamp.position.x >= movedSection.minX - padding &&
-                    clamp.position.x <= movedSection.maxX + padding &&
-                    clamp.position.z >= movedSection.minZ - padding &&
-                    clamp.position.z <= movedSection.maxZ + padding
-                  );
-                });
-
-                // Calculate optimal bounds: shrink to original or expand for supports and clamps
-                movedSection = calculateOptimalSectionBounds(movedSection, nearbySupports, nearbyClamps, padding);
-
-                // Update the section with optimized bounds
+                // Update the section (don't recalculate bounds - just use the new position)
                 const updatedSections = basePlate.sections!.map(s => 
                   s.id === editingBasePlateSectionId 
                     ? movedSection
@@ -6018,23 +6285,28 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
                     }
                   }
                 }));
+                
+                // Clear dragging flag and trigger CSG after a short delay
+                // to allow state updates to propagate
+                setTimeout(() => {
+                  setIsDraggingAnyItem(false);
+                  // Trigger CSG recalculation
+                  setHoleCSGTrigger(t => t + 1);
+                }, 50);
               }}
               onDeselect={() => {
                 isDraggingBasePlateSectionRef.current = false;
+                setIsDraggingAnyItem(false);
                 setEditingBasePlateSectionId(null);
                 setSelectedBasePlateSectionId(null);
-                // Clear selection in properties panel
-                window.dispatchEvent(new CustomEvent('baseplate-section-selected', {
-                  detail: { sectionId: null }
-                }));
               }}
             />
           );
         })()
       )}
 
-      {/* Base plate with holes cut (CSG result) - show when baseplateWithHoles exists */}
-      {basePlate && baseplateVisible && !mergedFixtureMesh && baseplateWithHoles && (
+      {/* Base plate with holes cut (CSG result) - show when baseplateWithHoles exists - only for non-multi-section */}
+      {basePlate && basePlate.type !== 'multi-section' && baseplateVisible && !mergedFixtureMesh && baseplateWithHoles && (
         <mesh
           ref={basePlateMeshRef}
           geometry={baseplateWithHoles}
@@ -6154,6 +6426,9 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
                 }}
                 onDoubleClick={() => {
                   if (isVisible && !clampPlacementMode.active) {
+                    // Clear baseplate section selection when selecting a part
+                    setSelectedBasePlateSectionId(null);
+                    setEditingBasePlateSectionId(null);
                     onPartSelected(part.id);
                     window.dispatchEvent(new CustomEvent('mesh-double-click', { detail: { partId: part.id } }));
                   }
@@ -6239,21 +6514,37 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
             <SupportTransformControls
               support={selectedSupport}
               baseTopY={baseTopY}
+              onDragStart={() => {
+                isDraggingSupportRef.current = true;
+                setIsDraggingAnyItem(true);
+              }}
+              onDragEnd={() => {
+                isDraggingSupportRef.current = false;
+                setIsDraggingAnyItem(false);
+                // Trigger CSG after support drag ends if we have holes
+                if (basePlate?.type === 'multi-section' && mountingHoles.length > 0) {
+                  console.log('[SupportTransformControls] Drag ended, triggering CSG');
+                  setHoleCSGTrigger(t => t + 1);
+                }
+              }}
               onTransformChange={(newCenter, rotationY, height) => {
                 // Live update support position, rotation, and height
-                setSupports(prev => prev.map(s => {
-                  if (s.id === selectedSupportId) {
-                    const updates: Partial<AnySupport> = { center: newCenter };
-                    if (rotationY !== undefined) {
-                      (updates as any).rotationY = rotationY;
+                // The reactive effect will automatically recalculate section bounds
+                setSupports(prev => {
+                  return prev.map(s => {
+                    if (s.id === selectedSupportId) {
+                      const updates: Partial<AnySupport> = { center: newCenter };
+                      if (rotationY !== undefined) {
+                        (updates as any).rotationY = rotationY;
+                      }
+                      if (height !== undefined) {
+                        (updates as any).height = height;
+                      }
+                      return { ...s, ...updates } as AnySupport;
                     }
-                    if (height !== undefined) {
-                      (updates as any).height = height;
-                    }
-                    return { ...s, ...updates } as AnySupport;
-                  }
-                  return s;
-                }));
+                    return s;
+                  });
+                });
               }}
               onTransformEnd={(newCenter, rotationY, height) => {
                 // Dispatch event for AppShell to update its state
@@ -6314,6 +6605,18 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
           return (
             <LabelTransformControls
               label={selectedLabel}
+              onDragStart={() => {
+                isDraggingLabelRef.current = true;
+                setIsDraggingAnyItem(true);
+              }}
+              onDragEnd={() => {
+                isDraggingLabelRef.current = false;
+                setIsDraggingAnyItem(false);
+                // Trigger CSG after label drag ends if we have holes
+                if (basePlate?.type === 'multi-section' && mountingHoles.length > 0) {
+                  setHoleCSGTrigger(t => t + 1);
+                }
+              }}
               onTransformChange={(position, rotation, depth) => {
                 // Live update label position, rotation, and depth
                 setLabels(prev => prev.map(l => {
@@ -6476,8 +6779,22 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
             <ClampTransformControls
               placedClamp={selectedClamp}
               fixturePointWorldPos={fixturePointWorldPos}
+              onDragStart={() => {
+                isDraggingClampRef.current = true;
+                setIsDraggingAnyItem(true);
+              }}
+              onDragEnd={() => {
+                isDraggingClampRef.current = false;
+                setIsDraggingAnyItem(false);
+                // Trigger CSG after clamp drag ends if we have holes
+                if (basePlate?.type === 'multi-section' && mountingHoles.length > 0) {
+                  console.log('[ClampTransformControls] Drag ended, triggering CSG');
+                  setHoleCSGTrigger(t => t + 1);
+                }
+              }}
               onTransformChange={(position, rotation) => {
-                // Live update clamp position and rotation (don't dispatch events during drag)
+                // Live update clamp position and rotation
+                // The reactive effect will automatically recalculate section bounds
                 setPlacedClamps(prev => prev.map(c => {
                   if (c.id === selectedClampId) {
                     return { ...c, position, rotation };
@@ -6570,6 +6887,54 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
         <DebugSilhouetteLine silhouette={debugClampSilhouette} y={baseTopY + 0.5} color={0x00ffff} />
       )}
 
+      {/* Section selection tooltip for support placement */}
+      {waitingForSectionSelection && (
+        <Html position={[0, baseTopY + 5, 0]} center>
+          <div
+            className="bg-primary/90 text-white rounded-lg px-3 py-2 text-xs font-tech whitespace-nowrap shadow-lg"
+            style={{ pointerEvents: 'none' }}
+          >
+            Select the baseplate section, then click-drag to place supports • ESC to cancel
+          </div>
+        </Html>
+      )}
+
+      {/* Section selection tooltip for clamp placement */}
+      {waitingForClampSectionSelection && (
+        <Html position={[0, baseTopY + 5, 0]} center>
+          <div
+            className="bg-primary/90 text-white rounded-lg px-3 py-2 text-xs font-tech whitespace-nowrap shadow-lg"
+            style={{ pointerEvents: 'none' }}
+          >
+            Select the baseplate section, then click on part to place clamp • ESC to cancel
+          </div>
+        </Html>
+      )}
+
+      {/* Section selection tooltip for label placement */}
+      {waitingForLabelSectionSelection && (
+        <Html position={[0, baseTopY + 5, 0]} center>
+          <div
+            className="bg-primary/90 text-white rounded-lg px-3 py-2 text-xs font-tech whitespace-nowrap shadow-lg"
+            style={{ pointerEvents: 'none' }}
+          >
+            Click on a baseplate section to place label • ESC to cancel
+          </div>
+        </Html>
+      )}
+
+      {/* Section selection tooltip for hole placement */}
+      {waitingForHoleSectionSelection && (
+        <Html position={[0, baseTopY + 5, 0]} center>
+          <div
+            className="bg-primary/90 text-white rounded-lg px-3 py-2 text-xs font-tech whitespace-nowrap shadow-lg"
+            style={{ pointerEvents: 'none' }}
+          >
+            Click on a baseplate section to place hole • ESC to cancel
+          </div>
+        </Html>
+      )}
+
       {/* Support placement controller */}
       {placing.active && (
         <SupportPlacement
@@ -6580,6 +6945,10 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
           onCancel={() => {
             setPlacing({ active: false, type: null, initParams: {} });
             setOrbitControlsEnabled(true);
+            setWaitingForSectionSelection(false);
+            // restore previous view
+            setCurrentOrientation(prevOrientationRef.current);
+            updateCamera(prevOrientationRef.current, modelBounds);
           }}
           defaultCenter={new THREE.Vector2(modelBounds?.center.x || 0, modelBounds?.center.z || 0)}
           raycastTargets={importedParts.map(part => {
@@ -6587,7 +6956,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
             return ref?.current;
           }).filter(Boolean) as THREE.Mesh[]}
           baseTopY={baseTopY}
-          baseTarget={basePlateMeshRef.current}
+          baseTarget={basePlate?.type === 'multi-section' ? multiSectionBasePlateGroupRef.current : basePlateMeshRef.current}
           contactOffset={Number(placing.initParams?.contactOffset ?? 0)}
           maxRayHeight={2000}
           modelBounds={modelBounds ? { min: modelBounds.min, max: modelBounds.max } : null}
@@ -6598,11 +6967,11 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       )}
 
       {/* Mounting hole placement controller */}
-      {holePlacementMode.active && holePlacementMode.config && basePlateMeshRef.current && (
+      {holePlacementMode.active && holePlacementMode.config && (basePlateMeshRef.current || basePlate?.type === 'multi-section') && (
         <HolePlacement
           active={holePlacementMode.active}
           holeConfig={holePlacementMode.config}
-          baseTarget={basePlateMeshRef.current}
+          baseTarget={basePlate?.type === 'multi-section' ? multiSectionBasePlateGroupRef.current : basePlateMeshRef.current}
           baseTopY={baseTopY}
           depth={holePlacementMode.depth}
           existingHoles={mountingHoles}
@@ -6652,9 +7021,16 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
               baseTopY={baseTopY}
               onDragStart={() => {
                 isDraggingHoleRef.current = true;
+                setIsDraggingHole(true); // State for multi-section baseplate
+                setIsDraggingAnyItem(true);
+                // Clear CSG result to show original baseplate during drag
+                setBaseplateWithHoles(null);
+                // Clear cached geometry since baseplate may resize during drag
+                originalBaseplateGeoRef.current = null;
               }}
               onTransformChange={(newPosition) => {
-                // Live update hole position (visual only, no CSG during drag)
+                // Live update hole position
+                // This updates holeHullPoints -> combinedHullPoints -> BasePlate resizes dynamically
                 setMountingHoles(prev => prev.map(h => {
                   if (h.id === editingHoleId) {
                     return { ...h, position: newPosition };
@@ -6664,18 +7040,28 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
               }}
               onTransformEnd={(newPosition) => {
                 isDraggingHoleRef.current = false;
+                setIsDraggingHole(false); // State for multi-section baseplate
+                setIsDraggingAnyItem(false);
                 // Dispatch event for AppShell to update its state
                 const updatedHole = { ...editingHole, position: newPosition };
                 window.dispatchEvent(new CustomEvent('hole-updated', { detail: updatedHole }));
-                // Trigger CSG update after drag ends
-                setHoleCSGTrigger(prev => prev + 1);
+                
+                // Trigger CSG after BasePlate has rendered with final size
+                setTimeout(() => {
+                  setHoleCSGTrigger(prev => prev + 1);
+                }, 150);
               }}
               onDeselect={() => {
                 isDraggingHoleRef.current = false;
+                setIsDraggingHole(false); // State for multi-section baseplate
                 setEditingHoleId(null);
                 setSelectedHoleId(null);
-                // Trigger CSG update when closing gizmo
-                setHoleCSGTrigger(prev => prev + 1);
+                // Trigger CSG update when closing gizmo (in case holes exist)
+                if (mountingHoles.length > 0) {
+                  setTimeout(() => {
+                    setHoleCSGTrigger(prev => prev + 1);
+                  }, 150);
+                }
               }}
             />
           );

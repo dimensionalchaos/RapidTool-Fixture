@@ -89,11 +89,8 @@ const HoleTransformControls: React.FC<HoleTransformControlsProps> = ({
   const holeDiameter = safeNum(hole.diameter, 6);
   const gizmoY = baseTopY + GIZMO_Y_OFFSET;
 
-  // Use locked position during drag to prevent feedback loop
+  // Always use current hole position for gizmo
   const displayPos = useMemo(() => {
-    if (isDraggingRef.current && dragStartGroupPos.current) {
-      return dragStartGroupPos.current;
-    }
     return new THREE.Vector3(holeX, gizmoY, holeZ);
   }, [holeX, holeZ, gizmoY]);
 
@@ -129,22 +126,20 @@ const HoleTransformControls: React.FC<HoleTransformControlsProps> = ({
   }, [getTransformFromAnchor, onTransformChange]);
 
   /**
-   * Handles drag start - locks group position to prevent feedback loop.
+   * Handles drag start.
    */
   const handleDragStart = useCallback(() => {
     isDraggingRef.current = true;
-    dragStartGroupPos.current = new THREE.Vector3(holeX, gizmoY, holeZ);
     setOrbitControlsEnabled(false);
     gl.domElement.style.cursor = 'grabbing';
     onDragStartProp?.();
-  }, [gl, holeX, holeZ, gizmoY, onDragStartProp]);
+  }, [gl, onDragStartProp]);
 
   /**
    * Handles drag end - emits final transform and resets pivot.
    */
   const handleDragEnd = useCallback(() => {
     isDraggingRef.current = false;
-    dragStartGroupPos.current = null;
     setOrbitControlsEnabled(true);
     gl.domElement.style.cursor = 'auto';
 

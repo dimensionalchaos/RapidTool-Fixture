@@ -33,6 +33,8 @@ export interface PlacedHole extends HoleConfig {
   depth: number;
   /** Optional rotation around Y axis (radians) - useful for patterns */
   rotationY?: number;
+  /** ID of the baseplate section this hole belongs to (for multi-section baseplates) */
+  sectionId?: string;
 }
 
 /**

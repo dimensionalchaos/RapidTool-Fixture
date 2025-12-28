@@ -55,7 +55,7 @@ interface BaseplateAccordionProps {
 // Constants
 // ─────────────────────────────────────────────────────────────────────────────
 
-const DEFAULT_PADDING = 10;
+const DEFAULT_PADDING = 5;
 const DEFAULT_HEIGHT = 5;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -397,7 +397,7 @@ const BaseplateAccordion: React.FC<BaseplateAccordionProps> = ({
                   : 'Extra space around the workpiece boundary'
                 }
                 min={0}
-                max={100}
+                max={20}
               />
 
               <PropertyInput
