@@ -15,15 +15,14 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Cog } from 'lucide-react';
 import { ProcessedFile } from '@/modules/FileImport/types';
-import SupportsAccordion from './Supports/SupportsAccordion';
-import BaseplateAccordion from './BaseplateAccordion';
+import { SupportsAccordion, AnySupport } from '@/features/supports';
+import { BaseplateAccordion } from '@/features/baseplate';
 import CavityAccordion from './CavityAccordion';
-import { LabelsAccordion, LabelConfig } from './Labels';
-import { ClampsAccordion, PlacedClamp } from './Clamps';
+import { LabelsAccordion, LabelConfig } from '@/features/labels';
+import { ClampsAccordion, PlacedClamp } from '@/features/clamps';
 import PartItemAccordion from './PartItemAccordion';
 import MountingHolesAccordion from './MountingHolesAccordion';
-import { PlacedHole } from '@/components/MountingHoles/types';
-import { AnySupport } from './Supports/types';
+import { PlacedHole } from '@/features/holes';
 import { CavitySettings, DEFAULT_CAVITY_SETTINGS } from '@/lib/offset/types';
 import {
   Transform3D,

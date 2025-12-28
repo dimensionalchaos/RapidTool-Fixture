@@ -36,7 +36,7 @@ import {
   LabelFont,
   LABEL_FONTS,
   getFontFile,
-} from '@/components/Labels/types';
+} from '@/features/labels';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants

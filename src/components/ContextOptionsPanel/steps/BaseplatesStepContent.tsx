@@ -6,7 +6,7 @@ import { Slider } from '@/components/ui/slider';
 import { Label } from '@/components/ui/label';
 import { Square, Hexagon, Check, AlertCircle, Settings2, LayoutGrid, Trash2, PenTool, XCircle } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import type { BasePlateSection } from '@/components/BasePlate/types';
+import type { BasePlateSection } from '@/features/baseplate';
 
 interface BaseplateType {
   id: 'rectangular' | 'convex-hull' | 'multi-section';

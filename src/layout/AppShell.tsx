@@ -20,11 +20,10 @@ import {
   ExportStepContent
 } from "@/components/ContextOptionsPanel/steps";
 import { SupportType } from "@/components/ContextOptionsPanel/steps/SupportsStepContent";
-import { AnySupport } from "@/components/Supports/types";
-import { PlacedClamp } from "@/components/Clamps/types";
-import { PlacedHole, HoleConfig } from "@/components/MountingHoles/types";
-import { BasePlateSection } from "@/components/BasePlate/types";
-import { autoPlaceSupports, AutoPlacementStrategy } from "@/components/Supports/autoPlacement";
+import { AnySupport, autoPlaceSupports, AutoPlacementStrategy } from "@/features/supports";
+import { PlacedClamp } from "@/features/clamps";
+import { PlacedHole, HoleConfig } from "@/features/holes";
+import { BasePlateSection } from "@/features/baseplate";
 import { CavitySettings, DEFAULT_CAVITY_SETTINGS, getAdaptivePixelsPerUnit } from "@/lib/offset/types";
 import UnitsDialog from "@/modules/FileImport/components/UnitsDialog";
 import MeshOptimizationDialog from "@/modules/FileImport/components/MeshOptimizationDialog";

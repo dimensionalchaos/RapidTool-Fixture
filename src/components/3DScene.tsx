@@ -2,29 +2,30 @@ import React, { useRef, useState, useCallback, useMemo, useEffect, Suspense } fr
 import { useThree, ThreeEvent } from '@react-three/fiber';
 import { OrbitControls as DreiOrbitControls, Html, GizmoHelper, GizmoViewport, Line } from '@react-three/drei';
 import { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
-import BasePlate from "./BasePlate";
-import type { BasePlateConfig, BasePlateSection } from './BasePlate/types';
-import { mergeOverlappingSections } from './BasePlate/types';
-import { MultiSectionDrawing, MultiSectionBasePlate, BasePlateTransformControls } from './BasePlate/index';
+import { BasePlate, MultiSectionDrawing, MultiSectionBasePlate, BasePlateTransformControls, mergeOverlappingSections } from '@/features/baseplate';
+import type { BasePlateConfig, BasePlateSection } from '@/features/baseplate';
 import { ProcessedFile, ViewOrientation } from "@/modules/FileImport/types";
 import SelectableTransformControls from './SelectableTransformControls';
 import * as THREE from 'three';
-import SupportPlacement from './Supports/SupportPlacement';
-import SupportMesh, { buildFullSupportGeometry } from './Supports/SupportMeshes';
-// SupportEditOverlay removed - supports are now moved via double-click gizmo
-import { SupportType, AnySupport } from './Supports/types';
-import { getSupportFootprintBounds, getSupportFootprintPoints } from './Supports/metrics';
-import type { FootprintBounds } from './Supports/metrics';
-import { autoPlaceSupports } from './Supports/autoPlacement';
+import {
+  SupportPlacement,
+  SupportMesh,
+  buildFullSupportGeometry,
+  SupportTransformControls,
+  SupportType,
+  AnySupport,
+  getSupportFootprintBounds,
+  getSupportFootprintPoints,
+  FootprintBounds,
+  autoPlaceSupports,
+} from '@/features/supports';
 import { CSGEngine } from '@/lib/csgEngine';
 import { createOffsetMesh, extractVertices, csgSubtract, initManifold } from '@/lib/offset';
 import { performBatchCSGSubtractionInWorker, performBatchCSGUnionInWorker, performHoleCSGInWorker } from '@/lib/workers';
 import { decimateMesh, repairMesh, analyzeMesh, laplacianSmooth, cleanupCSGResult } from '@/modules/FileImport/services/meshAnalysisService';
-import SupportTransformControls from './Supports/SupportTransformControls';
-import { LabelMesh, LabelTransformControls } from './Labels';
-import { LabelConfig } from './Labels/types';
-import { ClampMesh, ClampTransformControls, ClampWithSupport, PlacedClamp, ClampModel, getClampById } from './Clamps';
-import { HoleMesh, HolePlacement, HoleTransformControls, PlacedHole, HoleConfig, createMergedHolesGeometry } from './MountingHoles';
+import { LabelMesh, LabelTransformControls, LabelConfig } from '@/features/labels';
+import { ClampMesh, ClampTransformControls, ClampWithSupport, PlacedClamp, ClampModel, getClampById } from '@/features/clamps';
+import { HoleMesh, HolePlacement, HoleTransformControls, PlacedHole, HoleConfig, createMergedHolesGeometry } from '@/features/holes';
 
 /** Target triangle count for offset mesh decimation */
 const OFFSET_MESH_DECIMATION_TARGET = 50_000;
@@ -2350,7 +2351,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
         .filter((m): m is THREE.Mesh => m !== null);
       
       if (meshes.length > 0) {
-        import('./Clamps/clampPlacement').then(({ computePartSilhouetteForClamps }) => {
+        import('@/features/clamps/utils/clampPlacement').then(({ computePartSilhouetteForClamps }) => {
           const silhouette = computePartSilhouetteForClamps(meshes, baseTopY);
           partSilhouetteRef.current = silhouette;
           
@@ -3585,7 +3586,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
         detail: { stage: 'loading', progress: 10, message: 'Loading placement module...' } 
       }));
       
-      import('./Clamps/clampPlacement').then(({ calculateVerticalClampPlacement }) => {
+      import('@/features/clamps/utils/clampPlacement').then(({ calculateVerticalClampPlacement }) => {
         console.log('[ClampPlacement] Module loaded, calculating placement...');
         
         window.dispatchEvent(new CustomEvent('clamp-progress', { 
@@ -3740,7 +3741,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     
     console.log('[ClampPlacement] Loading clampPlacement module...');
     
-    import('./Clamps/clampPlacement').then(({ calculateVerticalClampPlacement, isPointInsidePolygon }) => {
+    import('@/features/clamps/utils/clampPlacement').then(({ calculateVerticalClampPlacement, isPointInsidePolygon }) => {
       console.log('[ClampPlacement] Module loaded');
       const silhouette = partSilhouetteRef.current || [];
       console.log('[ClampPlacement] Silhouette points:', silhouette.length);
@@ -4023,7 +4024,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       
       if (meshes.length > 0) {
         // Import and compute silhouette
-        import('./Clamps/clampPlacement').then(({ computePartSilhouetteForClamps }) => {
+        import('@/features/clamps/utils/clampPlacement').then(({ computePartSilhouetteForClamps }) => {
           console.log('[ClampPlacement] Computing silhouette...');
           const silhouette = computePartSilhouetteForClamps(meshes, baseTopY);
           partSilhouetteRef.current = silhouette;
@@ -6795,7 +6796,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
                         ? { x: debugPointsFromRef.closestBoundaryPoint.x, z: debugPointsFromRef.closestBoundaryPoint.z }
                         : null;
                       
-                      import('./Clamps/clampPlacement').then(({ adjustClampAfterDataLoad }) => {
+                      import('@/features/clamps/utils/clampPlacement').then(({ adjustClampAfterDataLoad }) => {
                         const result = adjustClampAfterDataLoad(
                           clamp.position,
                           clamp.rotation,
@@ -6888,7 +6889,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
                     .map(p => modelMeshRefs.current.get(p.id)?.current)
                     .filter((m): m is THREE.Mesh => m !== null && partVisibility.get(importedParts.find(ip => modelMeshRefs.current.get(ip.id)?.current === m)?.id || '') !== false);
                   
-                  import('./Clamps/clampPlacement').then(({ adjustClampPositionAfterTransform, computePartSilhouetteForClamps }) => {
+                  import('@/features/clamps/utils/clampPlacement').then(({ adjustClampPositionAfterTransform, computePartSilhouetteForClamps }) => {
                     let silhouette = partSilhouetteRef.current;
                     if (!silhouette || silhouette.length === 0) {
                       silhouette = computePartSilhouetteForClamps(partMeshes, baseTopY);
