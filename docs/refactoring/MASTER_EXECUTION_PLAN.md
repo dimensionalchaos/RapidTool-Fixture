@@ -164,9 +164,33 @@ git commit -m "refactor(phase-4): unified transform system"
 
 ---
 
-### Phase 5-6: Advanced (Future)
+### Phase 5-6: Scene Decomposition & Final Cleanup
 
-These phases require the foundation from Phases 1-3 and are more complex. Detailed directives will be created after Phase 3 completion.
+**Branch:** `phase-5-scene`
+
+**⚠️ HIGH RISK PHASE - 3DScene.tsx is 6,800+ lines with 188 hooks!**
+
+| Order | Directive | Time | Checkpoint |
+|-------|-----------|------|------------|
+| 5.1 | `14-extract-scene-state.md` | 4-5 hr | State hooks in `src/components/3DScene/hooks/` |
+| 5.2 | `15-extract-scene-renderers.md` | 4-5 hr | Renderers in `src/components/3DScene/renderers/` |
+| 5.3 | `16-extract-event-handlers.md` | 3-4 hr | Handlers in `src/components/3DScene/handlers/` |
+
+**Target Outcome:**
+- 3DScene.tsx reduced from ~6,800 lines to ~300 lines
+- State management in 8 dedicated hooks
+- Rendering in 8 dedicated renderer components
+- Event handlers in 8 organized modules
+
+**Phase 5 Gate:**
+```bash
+npm run build
+# PLUS manual testing of ALL features:
+# - File import works
+# - All transforms work
+# - Export/CSG generates correctly
+# - Keyboard shortcuts work
+```
 
 ---
 
