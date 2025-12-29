@@ -51,6 +51,7 @@ import {
   DebugSilhouetteLine as ExtractedDebugSilhouetteLine,
   FixtureComponent as ExtractedFixtureComponent,
   LabelsRenderer,
+  SupportsRenderer,
   // State Hooks (for future use)
   useSupportState,
   useClampState,
@@ -5742,124 +5743,29 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
         />
       ))}
 
-      {/* Supports rendering - hide when merged fixture is shown */}
-      {!mergedFixtureMesh && supportsTrimPreview.length === 0
-        ? (() => {
-            // Render individual supports (with modified geometry if CSG-cut)
-            return supports.map((s) => {
-              // Check if this support has a modified geometry (from individual cavity subtraction)
-              const modifiedGeometry = modifiedSupportGeometries.get(s.id);
-            
-            if (modifiedGeometry) {
-              // Render the modified geometry - it's already in world space from the CSG operation
-              // Use amber/orange color to indicate the support has been cut
-              const isSelected = selectedSupportId === s.id;
-              const cutSupportColor = 0xf59e0b; // Amber-500 - indicates support has been cut
-              const cutSupportSelectedColor = 0xfbbf24; // Amber-400 - lighter when selected
-              
-              return (
-                <mesh
-                  key={s.id}
-                  geometry={modifiedGeometry}
-                  onDoubleClick={(e) => {
-                    e.stopPropagation();
-                    window.dispatchEvent(new CustomEvent('pivot-control-activated', { detail: { supportId: s.id } }));
-                    onSupportSelect?.(s.id);
-                  }}
-                >
-                  <meshStandardMaterial 
-                    color={isSelected ? cutSupportSelectedColor : cutSupportColor}
-                    metalness={0.0}
-                    roughness={0.6}
-                    emissive={isSelected ? cutSupportSelectedColor : cutSupportColor}
-                    emissiveIntensity={isSelected ? 0.25 : 0.1}
-                  />
-                </mesh>
-              );
-            }
-            
-            // Render standard support mesh
-            return (
-              <SupportMesh 
-                key={s.id} 
-                support={s} 
-                baseTopY={baseTopY}
-                selected={selectedSupportId === s.id}
-                onDoubleClick={(supportId) => {
-                  // Notify part gizmos to close
-                  window.dispatchEvent(new CustomEvent('pivot-control-activated', { detail: { supportId } }));
-                  onSupportSelect?.(supportId);
-                  // Don't disable orbit controls here - let the gizmo handle it during drag
-                  // This allows pan/tilt/zoom while gizmo is active (same as part gizmo)
-                }}
-              />
-            );
-          });
-        })()
-        : supportsTrimPreview.map((mesh, idx) => <primitive key={`${mesh.uuid}-${idx}`} object={mesh} />)}
-      
-      {/* Support transform controls - XY plane only */}
-      {selectedSupportId && !placing.active && (
-        (() => {
-          const selectedSupport = supports.find(s => s.id === selectedSupportId);
-          if (!selectedSupport) return null;
-          return (
-            <SupportTransformControls
-              support={selectedSupport}
-              baseTopY={baseTopY}
-              onDragStart={() => {
-                isDraggingSupportRef.current = true;
-                setIsDraggingAnyItem(true);
-              }}
-              onDragEnd={() => {
-                isDraggingSupportRef.current = false;
-                setIsDraggingAnyItem(false);
-                // Trigger CSG after support drag ends if we have holes
-                if (basePlate?.type === 'multi-section' && mountingHoles.length > 0) {
-                  console.log('[SupportTransformControls] Drag ended, triggering CSG');
-                  setHoleCSGTrigger(t => t + 1);
-                }
-              }}
-              onTransformChange={(newCenter, rotationY, height) => {
-                // Live update support position, rotation, and height
-                // The reactive effect will automatically recalculate section bounds
-                setSupports(prev => {
-                  return prev.map(s => {
-                    if (s.id === selectedSupportId) {
-                      const updates: Partial<AnySupport> = { center: newCenter };
-                      if (rotationY !== undefined) {
-                        (updates as any).rotationY = rotationY;
-                      }
-                      if (height !== undefined) {
-                        (updates as any).height = height;
-                      }
-                      return { ...s, ...updates } as AnySupport;
-                    }
-                    return s;
-                  });
-                });
-              }}
-              onTransformEnd={(newCenter, rotationY, height) => {
-                // Dispatch event for AppShell to update its state
-                const updatedSupport = supports.find(s => s.id === selectedSupportId);
-                if (updatedSupport) {
-                  const finalSupport: any = { ...updatedSupport, center: newCenter };
-                  if (rotationY !== undefined) {
-                    finalSupport.rotationY = rotationY;
-                  }
-                  if (height !== undefined) {
-                    finalSupport.height = height;
-                  }
-                  window.dispatchEvent(new CustomEvent('support-updated', { detail: finalSupport }));
-                }
-              }}
-              onDeselect={() => {
-                onSupportSelect?.(null);
-              }}
-            />
-          );
-        })()
-      )}
+      {/* Supports rendering - extracted to SupportsRenderer */}
+      <SupportsRenderer
+        supports={supports}
+        selectedSupportId={selectedSupportId}
+        mergedFixtureMesh={mergedFixtureMesh}
+        supportsTrimPreview={supportsTrimPreview}
+        modifiedSupportGeometries={modifiedSupportGeometries}
+        baseTopY={baseTopY}
+        placingActive={placing.active}
+        basePlate={basePlate}
+        mountingHolesCount={mountingHoles.length}
+        onSupportSelect={onSupportSelect}
+        setSupports={setSupports}
+        onDragStart={() => {
+          isDraggingSupportRef.current = true;
+          setIsDraggingAnyItem(true);
+        }}
+        onDragEnd={() => {
+          isDraggingSupportRef.current = false;
+          setIsDraggingAnyItem(false);
+        }}
+        triggerHoleCSG={() => setHoleCSGTrigger(t => t + 1)}
+      />
 
       {/* Labels rendering - extracted to LabelsRenderer */}
       <LabelsRenderer

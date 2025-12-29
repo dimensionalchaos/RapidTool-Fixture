@@ -20,3 +20,6 @@ export type {
 
 export { LabelsRenderer } from './LabelsRenderer';
 export type { LabelsRendererProps } from './LabelsRenderer';
+
+export { SupportsRenderer } from './SupportsRenderer';
+export type { SupportsRendererProps } from './SupportsRenderer';
