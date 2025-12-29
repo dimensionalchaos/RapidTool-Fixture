@@ -41,6 +41,7 @@ import {
   buildClampSupportGeometryAtOrigin as extractedBuildClampSupportGeometryAtOrigin,
   buildLabelGeometry as extractedBuildLabelGeometry,
   calculateGridConfig as extractedCalculateGridConfig,
+  getFootprintMetrics as extractedGetFootprintMetrics,
   // Renderers
   ScalableGrid as ExtractedScalableGrid,
   DebugPerimeterLine as ExtractedDebugPerimeterLine,
@@ -95,6 +96,9 @@ const buildLabelGeometry = extractedBuildLabelGeometry;
 // Use extracted renderer (see src/components/3DScene/renderers/ScalableGrid.tsx)
 const ScalableGrid = ExtractedScalableGrid;
 
+// Use extracted utility (see src/components/3DScene/utils/geometryUtils.ts)
+const getFootprintMetrics = extractedGetFootprintMetrics;
+
 interface BoundsSummary {
   min: THREE.Vector3;
   max: THREE.Vector3;
@@ -103,25 +107,6 @@ interface BoundsSummary {
   radius: number;
   unitsScale?: number;
 }
-
-const getFootprintMetrics = (bounds: BoundsSummary | null) => {
-  if (!bounds) {
-    return {
-      radius: 25,
-      padding: 12,
-      halfLength: 37,
-    };
-  }
-
-  const unitsScale = bounds.unitsScale ?? 1;
-  const sizeX = Math.max(bounds.size.x, 0) * unitsScale;
-  const sizeZ = Math.max(bounds.size.z, 0) * unitsScale;
-  const longestHalfEdge = Math.max(sizeX, sizeZ) * 0.5;
-  const padding = Math.max(longestHalfEdge * 0.35, 5);
-  const halfLength = Math.max(longestHalfEdge + padding, longestHalfEdge + 5, longestHalfEdge * 1.5, 36);
-
-  return { radius: longestHalfEdge, padding, halfLength };
-};
 
 // Component for the main 3D model
 const ModelMesh = React.memo(function ModelMesh({ 
