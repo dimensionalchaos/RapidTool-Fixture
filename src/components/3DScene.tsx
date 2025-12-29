@@ -42,6 +42,8 @@ import {
   buildLabelGeometry as extractedBuildLabelGeometry,
   calculateGridConfig as extractedCalculateGridConfig,
   getFootprintMetrics as extractedGetFootprintMetrics,
+  ORIENTATION_CONFIG,
+  getProjectedSizeForOrientation,
   // Renderers
   ScalableGrid as ExtractedScalableGrid,
   DebugPerimeterLine as ExtractedDebugPerimeterLine,
