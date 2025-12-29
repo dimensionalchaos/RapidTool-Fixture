@@ -14,7 +14,7 @@
 
 import * as THREE from 'three';
 import Module from 'manifold-3d';
-import { decimateMesh as fallbackDecimateMesh } from './meshAnalysisService';
+import { decimateMesh as fallbackDecimateMesh } from './meshAnalysis';
 
 // ============================================================================
 // Types & Interfaces

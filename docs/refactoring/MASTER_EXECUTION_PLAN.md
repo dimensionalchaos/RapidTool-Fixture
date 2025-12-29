@@ -393,21 +393,70 @@ git checkout -b refactor/phase-N-name  # Start fresh
 
 **Result:** 3DScene.tsx reduced from 6,163 to 2,339 lines (62% reduction)
 
-**Phase 6:** ✅ Phase 6.1-6.3 Complete (Package Extraction)
+**Phase 6:** ✅ Phase 6.1-6.4 Complete (Package Extraction)
 - [x] 6.1: Setup monorepo structure (`packages/cad-core`, `packages/cad-ui`)
 - [x] 6.2: Extract @rapidtool/cad-core package
   - [x] Transform system → `packages/cad-core/src/transform/`
   - [x] CSG Engine → `packages/cad-core/src/csg/`
   - [x] Transform utilities → `packages/cad-core/src/utils/`
   - [x] CAD operations → `packages/cad-core/src/cad/`
+  - [x] Snapping system → `packages/cad-core/src/snapping/`
+  - [x] Mesh utilities → `packages/cad-core/src/mesh/`
+  - [x] File parsers → `packages/cad-core/src/parsers/`
+  - [x] Offset mesh → `packages/cad-core/src/offset/`
+  - [x] Web workers → `packages/cad-core/src/workers/`
 - [x] 6.3: Extract @rapidtool/cad-ui package
   - [x] ViewCube component → `packages/cad-ui/src/viewport/`
   - [x] ScalableGrid component → `packages/cad-ui/src/viewport/`
   - [x] Viewport types (BoundsSummary, ViewOrientation, GridConfig)
-- [ ] 6.4: Update app imports to use @rapidtool/cad-core
+- [x] 6.4: Update app imports to use @rapidtool/cad-core and @rapidtool/cad-ui
+  - [x] Migrate snappingSystem imports → @rapidtool/cad-core
+  - [x] Migrate fastQuadricSimplify imports → @rapidtool/cad-core
+  - [x] Migrate offset/* imports → @rapidtool/cad-core
+  - [x] Migrate workers/* imports → @rapidtool/cad-core
+  - [x] Migrate ViewCube import → @rapidtool/cad-ui
+  - [x] Delete duplicate files from src/lib/
+  - [x] Delete duplicate files from src/components/
 - [x] 6.5: Documentation (README.md for both packages)
 
 **See:** [`docs/refactoring/directives/PHASE_6_PACKAGE_EXTRACTION.md`](directives/PHASE_6_PACKAGE_EXTRACTION.md)
+
+---
+
+## Post-Production Cleanup ✅
+
+**Completed: December 29, 2025**
+
+### Cleanup Items Completed:
+
+- [x] **Fix DECIMATION constants** - Import `MeshProcessingProgress` and `DECIMATION_TARGET` from `@rapidtool/cad-core` in AppShell.tsx
+  - Renamed local constant to `OPTIMIZATION_DIALOG_THRESHOLD` for clarity (UI-specific threshold)
+  - Removed duplicate constant definitions
+
+- [x] **Extract SVG Icons** - Created `src/components/icons/ViewIcons.tsx`
+  - Extracted `IconIsoFace`, `IconIsoTop`, `IconTopFace`, `IconIsoLeftFace` from AppShell.tsx
+  - AppShell.tsx reduced by ~50 lines
+
+- [x] **Create Workflow State Hook** - Created `src/hooks/useWorkflowState.ts`
+  - Reusable hook for workflow step management
+  - Provides `markStepCompleted`, `markStepIncomplete`, `skipStep`, etc.
+
+- [x] **Refactor transformUtils.ts** - Clean up duplication with cad-core
+  - Re-export pure functions from `@rapidtool/cad-core`
+  - Keep only app-specific event dispatchers in local file
+  - Added `SimpleTransform` type alias for UI components
+  - Use `THREE.MathUtils` for `radToDeg`/`degToRad`
+
+### Files Modified:
+- `src/layout/AppShell.tsx` - Reduced by ~50 lines (icons extracted)
+- `src/lib/transformUtils.ts` - Reduced from 207 lines to ~130 lines
+
+### Files Created:
+- `src/components/icons/ViewIcons.tsx` - Isometric view SVG icons
+- `src/components/icons/index.ts` - Barrel export
+- `src/hooks/useWorkflowState.ts` - Workflow state management hook
+
+### Build Status: ✅ Passing
 
 ---
 
@@ -454,7 +503,7 @@ Directive [name] execution report:
 ---
 
 *Last Updated: December 29, 2025*
-*Current: Phase 6.3-6.4 (Package Extraction) - cad-ui extraction & app import updates remaining*
+*Status: ✅ All Phases Complete + Post-Production Cleanup Done*
 
 ## Phase 5 Final Results
 

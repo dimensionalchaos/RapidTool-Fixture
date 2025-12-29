@@ -10,8 +10,8 @@ import { useEffect } from 'react';
 import * as THREE from 'three';
 import type { ProcessedFile } from '@/modules/FileImport';
 import type { AnySupport } from '../types';
-import type { CSGEngine } from '@/lib/csgEngine';
-import { createOffsetMesh, extractVertices } from '@/lib/offset';
+import type { CSGEngine } from '@rapidtool/cad-core';
+import { createOffsetMesh, extractVertices } from '@rapidtool/cad-core';
 
 export interface UseSupportTrimPreviewParams {
   // State setters

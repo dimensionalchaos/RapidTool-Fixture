@@ -1,7 +1,3 @@
-// Core CAD Operations
-export { CADOperations } from './cad/cadOperations';
-export type { CADOperationResult, TransformationParams, BooleanParams } from './cad/cadOperations';
-
 // Events System
 export { EVENTS, dispatchAppEvent, addAppEventListener } from './events';
 export type { EventName } from './events';

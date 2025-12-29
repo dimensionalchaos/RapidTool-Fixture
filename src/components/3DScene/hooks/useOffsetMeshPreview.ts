@@ -12,8 +12,7 @@ import * as THREE from 'three';
 import type { ProcessedFile } from '@/modules/FileImport';
 import type { AnySupport } from '../types';
 import type { PlacedClamp } from './useClampState';
-import { createOffsetMesh, extractVertices } from '@/lib/offset';
-import { decimateMesh, laplacianSmooth } from '@/modules/FileImport/services/meshAnalysisService';
+import { createOffsetMesh, extractVertices, decimateMesh, laplacianSmooth } from '@rapidtool/cad-core';
 
 // Decimation target for offset mesh (to keep GPU happy)
 const OFFSET_MESH_DECIMATION_TARGET = 50000;

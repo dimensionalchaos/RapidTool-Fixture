@@ -19,7 +19,7 @@ import * as THREE from 'three';
 import type { BasePlateConfig } from '@/features/baseplate';
 import type { PlacedHole } from '@/features/holes';
 import { createMergedHolesGeometry } from '@/features/holes';
-import { performHoleCSGInWorker } from '@/lib/workers';
+import { performHoleCSGInWorker } from '@rapidtool/cad-core';
 
 export interface UseHoleCSGProps {
   // Baseplate state

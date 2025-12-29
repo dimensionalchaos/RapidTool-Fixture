@@ -7,7 +7,7 @@
 
 import * as THREE from 'three';
 import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { simplifyGeometry } from '@/lib/fastQuadricSimplify';
+import { simplifyGeometry } from './simplify';
 
 // ============================================================================
 // Types & Interfaces
@@ -143,6 +143,9 @@ export interface ProcessingProgress {
   progress: number;
   message: string;
 }
+
+/** Alias for ProcessingProgress for backwards compatibility */
+export type MeshProcessingProgress = ProcessingProgress;
 
 export type ProgressCallback = (progress: ProcessingProgress) => void;
 

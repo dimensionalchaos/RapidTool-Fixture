@@ -19,7 +19,7 @@ import {
   ArrowUpLeft,
   ArrowUpRight
 } from 'lucide-react';
-import { CSGEngine } from '@/lib/csgEngine';
+import { CSGEngine } from '@rapidtool/cad-core';
 import * as THREE from 'three';
 
 interface CSGOperationsProps {

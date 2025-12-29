@@ -51,7 +51,8 @@ export class SnappingSystem {
    * Generate snap points for a specific object
    */
   private generateObjectSnapPoints(object: THREE.Object3D) {
-    if (!object.geomeqtry) return;
+    // Skip objects without geometry (groups, lights, etc.)
+    if (!(object as THREE.Mesh).geometry) return;
 
     const worldPosition = new THREE.Vector3();
     object.getWorldPosition(worldPosition);

@@ -2,18 +2,60 @@
  * @rapidtool/cad-ui
  * 
  * Reusable React components for building CAD applications.
- * Built on top of @rapidtool/cad-core, Three.js, and React Three Fiber.
+ * Works with Three.js/React Three Fiber for 3D rendering.
  * 
  * Features:
- * - Viewport components (ViewCube, ScalableGrid)
- * - UI primitives (shadcn-based components) - TODO: Future
+ * - Layout components (CADLayout - main app shell)
+ * - Toolbar components (VerticalToolbar - customizable workflow toolbar)
+ * - Panel components (CollapsiblePanel - accordion panels for properties)
+ * - Viewport components (ViewCube, ScalableGrid, SnapIndicator)
+ * - Transform controls (SelectableTransformControls)
+ * - Loading components (LoadingIndicator, LoadingOverlay)
+ * - Primitive inputs (NumberInput, PositionControl, RotationControl)
+ * 
+ * Usage:
+ * ```tsx
+ * import { CADLayout, VerticalToolbar, CollapsiblePanel, ViewCube } from '@rapidtool/cad-ui';
+ * 
+ * function MyCADApp() {
+ *   return (
+ *     <CADLayout
+ *       toolbar={<VerticalToolbar items={myTools} />}
+ *       sidebar={<CollapsiblePanel title="Properties">...</CollapsiblePanel>}
+ *     >
+ *       <Canvas>
+ *         <ViewCube />
+ *         ...
+ *       </Canvas>
+ *     </CADLayout>
+ *   );
+ * }
+ * ```
  */
 
-// Re-export core for convenience
-export * from '@rapidtool/cad-core';
+// Layout components
+export * from './layout';
 
-// Viewport Components
+// Toolbar components
+export * from './toolbar';
+
+// Panel components
+export * from './panels';
+
+// Viewport components
 export * from './viewport';
 
-// UI Primitives - TODO: Add when extracting shadcn components
-// export * from './primitives';
+// Controls
+export * from './controls';
+
+// Transform components
+export * from './transform';
+
+// Loading components  
+export * from './loading';
+
+// Primitive input components
+export * from './primitives';
+
+// Utilities
+export { cn } from './utils/utils';

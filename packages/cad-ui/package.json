@@ -12,7 +12,9 @@
     }
   },
   "dependencies": {
-    "@rapidtool/cad-core": "*"
+    "@rapidtool/cad-core": "*",
+    "clsx": "^2.1.1",
+    "tailwind-merge": "^2.5.5"
   },
   "peerDependencies": {
     "react": "^18.0.0",
@@ -28,6 +30,6 @@
     "@react-three/fiber": "^8.0.0",
     "typescript": "^5.6.3"
   },
-  "keywords": ["cad", "3d", "react", "three.js", "viewport"],
+  "keywords": ["cad", "3d", "react", "three.js", "viewport", "controls"],
   "license": "MIT"
 }

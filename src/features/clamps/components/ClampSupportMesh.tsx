@@ -18,7 +18,7 @@ import { Brush, Evaluator, SUBTRACTION } from 'three-bvh-csg';
 import { ClampSupportInfo } from '../utils/clampSupportUtils';
 import { PlacedClamp } from '../types';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { performClampCSGInWorker } from '@/lib/workers/workerManager';
+import { performClampCSGInWorker } from '@rapidtool/cad-core';
 
 // Reusable CSG evaluator for better performance
 const csgEvaluator = new Evaluator();

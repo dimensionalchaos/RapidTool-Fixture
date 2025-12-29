@@ -6,7 +6,7 @@ import {
 } from '@/components/ui/accordion';
 import { Badge } from '@/components/ui/badge';
 import { SquaresSubtract, Eye, Loader2 } from 'lucide-react';
-import { CavitySettings } from '@/lib/offset/types';
+import { CavitySettings } from '@rapidtool/cad-core';
 
 interface CavityAccordionProps {
   settings: CavitySettings;

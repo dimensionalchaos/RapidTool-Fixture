@@ -19,8 +19,7 @@ import type { PlacedHole } from '@/features/holes/types';
 import { buildClampSupportGeometryAtOrigin, buildLabelGeometry } from '../utils/csgUtils';
 import { buildFullSupportGeometry } from '@/features/supports';
 import { createMergedHolesGeometry } from '@/features/holes';
-import { performBatchCSGSubtractionInWorker, performBatchCSGUnionInWorker, performHoleCSGInWorker } from '@/lib/workers';
-import { analyzeMesh, repairMesh, cleanupCSGResult } from '@/modules/FileImport/services/meshAnalysisService';
+import { performBatchCSGSubtractionInWorker, performBatchCSGUnionInWorker, performHoleCSGInWorker, analyzeMesh, repairMesh, cleanupCSGResult } from '@rapidtool/cad-core';
 
 export interface UseCavityOperationsParams {
   // State

@@ -23,7 +23,7 @@ import { ClampsAccordion, PlacedClamp } from '@/features/clamps';
 import PartItemAccordion from './PartItemAccordion';
 import MountingHolesAccordion from './MountingHolesAccordion';
 import { PlacedHole } from '@/features/holes';
-import { CavitySettings, DEFAULT_CAVITY_SETTINGS } from '@/lib/offset/types';
+import { CavitySettings, DEFAULT_CAVITY_SETTINGS } from '@rapidtool/cad-core';
 import {
   Transform3D,
   DEFAULT_TRANSFORM,

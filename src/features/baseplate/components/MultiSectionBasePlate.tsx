@@ -11,7 +11,7 @@ import { ThreeEvent } from '@react-three/fiber';
 import type { BasePlateSection, BasePlateMaterial } from '../types';
 import type { PlacedHole } from '@/features/holes';
 import { createMergedHolesGeometry } from '@/features/holes';
-import { performHoleCSGInWorker } from '@/lib/workers';
+import { performHoleCSGInWorker } from '@rapidtool/cad-core';
 
 // =============================================================================
 // Types

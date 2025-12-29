@@ -19,10 +19,20 @@ import {
   FootprintBounds,
   autoPlaceSupports,
 } from '@/features/supports';
-import { CSGEngine } from '@/lib/csgEngine';
-import { createOffsetMesh, extractVertices, csgSubtract, initManifold } from '@/lib/offset';
-import { performBatchCSGSubtractionInWorker, performBatchCSGUnionInWorker } from '@/lib/workers';
-import { decimateMesh, repairMesh, analyzeMesh, laplacianSmooth, cleanupCSGResult } from '@/modules/FileImport/services/meshAnalysisService';
+import {
+  CSGEngine, 
+  createOffsetMesh, 
+  extractVertices, 
+  csgSubtract, 
+  initManifold,
+  performBatchCSGSubtractionInWorker, 
+  performBatchCSGUnionInWorker,
+  decimateMesh, 
+  repairMesh, 
+  analyzeMesh, 
+  laplacianSmooth, 
+  cleanupCSGResult 
+} from '@rapidtool/cad-core';
 import { LabelMesh, LabelTransformControls, LabelConfig } from '@/features/labels';
 import { ClampMesh, ClampTransformControls, ClampWithSupport, PlacedClamp, ClampModel, getClampById } from '@/features/clamps';
 import { HoleMesh, HolePlacement, HoleTransformControls, PlacedHole, HoleConfig } from '@/features/holes';

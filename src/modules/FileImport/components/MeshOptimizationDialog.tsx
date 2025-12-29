@@ -30,7 +30,7 @@ import {
   MeshProcessingProgress,
   DECIMATION_THRESHOLD,
   DECIMATION_TARGET,
-} from '../services/meshAnalysis';
+} from '@rapidtool/cad-core';
 
 /** Files larger than 5MB should be auto-optimized */
 const LARGE_FILE_THRESHOLD = 5 * 1024 * 1024; // 5MB

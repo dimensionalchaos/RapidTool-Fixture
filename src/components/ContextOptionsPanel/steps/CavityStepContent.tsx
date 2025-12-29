@@ -19,7 +19,7 @@ import {
   ChevronUp,
   SquaresSubtract,
 } from 'lucide-react';
-import { CavitySettings, DEFAULT_CAVITY_SETTINGS } from '@/lib/offset/types';
+import { CavitySettings, DEFAULT_CAVITY_SETTINGS } from '@rapidtool/cad-core';
 
 // ============================================
 // Types

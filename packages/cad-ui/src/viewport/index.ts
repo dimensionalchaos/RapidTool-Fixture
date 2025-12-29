@@ -12,3 +12,4 @@ export type { BoundsSummary, ViewOrientation, GridConfig } from './types';
 // Components
 export { default as ViewCube } from './ViewCube';
 export { default as ScalableGrid } from './ScalableGrid';
+export { default as SnapIndicator } from './SnapIndicator';

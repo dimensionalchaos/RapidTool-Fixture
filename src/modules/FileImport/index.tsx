@@ -17,7 +17,7 @@ import {
   MeshProcessingProgress,
   DECIMATION_THRESHOLD,
   DECIMATION_TARGET,
-} from "./services/meshAnalysis";
+} from "@rapidtool/cad-core";
 import * as THREE from 'three';
 
 interface FileImportProps {

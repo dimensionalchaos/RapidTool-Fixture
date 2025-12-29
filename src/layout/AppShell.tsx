@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import { ThemeToggle } from "@/components/ThemeToggle";
-import ViewCube from "@/components/ViewCube";
+import { ViewCube } from "@rapidtool/cad-ui";
 import VerticalToolbar from "@/components/VerticalToolbar";
 import ThreeDViewer from "@/components/3DViewer";
 
@@ -24,25 +24,26 @@ import { AnySupport, autoPlaceSupports, AutoPlacementStrategy } from "@/features
 import { PlacedClamp } from "@/features/clamps";
 import { PlacedHole, HoleConfig } from "@/features/holes";
 import { BasePlateSection } from "@/features/baseplate";
-import { CavitySettings, DEFAULT_CAVITY_SETTINGS, getAdaptivePixelsPerUnit } from "@/lib/offset/types";
+import { CavitySettings, DEFAULT_CAVITY_SETTINGS, getAdaptivePixelsPerUnit } from "@rapidtool/cad-core";
 import UnitsDialog from "@/modules/FileImport/components/UnitsDialog";
 import MeshOptimizationDialog from "@/modules/FileImport/components/MeshOptimizationDialog";
 import { useFileProcessing } from "@/modules/FileImport/hooks/useFileProcessing";
-import { LARGE_FILE_THRESHOLD } from "@/modules/FileImport/hooks/useFileProcessingRefactored";
+import { LARGE_FILE_THRESHOLD } from "@/modules/FileImport/hooks/useFileProcessing";
 import { ProcessedFile } from "@/modules/FileImport/types";
 import {
   analyzeMesh,
   repairMesh,
   decimateMesh,
-  MeshAnalysisResult,
-  MeshProcessingProgress,
-  DECIMATION_THRESHOLD,
-  DECIMATION_TARGET,
-} from "@/modules/FileImport/services/meshAnalysis";
-import {
   repairAndDecimateMesh,
-  initManifold,
-} from "@/modules/FileImport/services/manifoldMeshService";
+  initManifoldMeshService as initManifold,
+  type MeshAnalysisResult,
+  type MeshProcessingProgress,
+  DECIMATION_TARGET,
+} from "@rapidtool/cad-core";
+
+// UI threshold for showing optimization dialog (500k triangles)
+// This is higher than the actual decimation threshold to avoid unnecessary dialogs
+const OPTIMIZATION_DIALOG_THRESHOLD = 500_000;
 import * as THREE from 'three';
 import {
   Aperture,
@@ -64,53 +65,7 @@ import {
   LogOut,
   Zap
 } from "lucide-react";
-
-// Small perspective cube icons matching the reference style
-const IconIsoFace: React.FC<{ className?: string }> = ({ className }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    {/* top diamond */}
-    <polygon points="12,4 19,8 12,12 5,8" fill="none" />
-    {/* left face */}
-    <polygon points="5,8 12,12 12,20 5,16" fill="none" />
-    {/* right face (filled) */}
-    <polygon points="19,8 12,12 12,20 19,16" fill="currentColor" />
-    {/* edges */}
-    <polyline points="5,8 12,12 19,8" />
-    <polyline points="5,16 12,20 19,16" />
-    <line x1="12" y1="12" x2="12" y2="20" />
-  </svg>
-);
-
-const IconIsoTop: React.FC<{ className?: string }> = ({ className }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    {/* top diamond (filled) */}
-    <polygon points="12,4 19,8 12,12 5,8" fill="currentColor" />
-    {/* side outlines */}
-    <polygon points="5,8 12,12 12,20 5,16" fill="none" />
-    <polygon points="19,8 12,12 12,20 19,16" fill="none" />
-    <polyline points="5,16 12,20 19,16" />
-    <line x1="12" y1="12" x2="12" y2="20" />
-  </svg>
-);
-
-const IconTopFace: React.FC<{ className?: string }> = ({ className }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <polygon points="12,6 18,10 12,14 6,10" fill="currentColor" />
-    <polygon points="6,10 12,14 18,10 12,6 6,10" fill="none" />
-  </svg>
-);
-
-// Left face filled variant
-const IconIsoLeftFace: React.FC<{ className?: string }> = ({ className }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <polygon points="12,4 19,8 12,12 5,8" fill="none" />
-    <polygon points="5,8 12,12 12,20 5,16" fill="currentColor" />
-    <polygon points="19,8 12,12 12,20 19,16" fill="none" />
-    <polyline points="5,8 12,12 19,8" />
-    <polyline points="5,16 12,20 19,16" />
-    <line x1="12" y1="12" x2="12" y2="20" />
-  </svg>
-);
+import { IconIsoFace, IconIsoTop, IconTopFace, IconIsoLeftFace } from "@/components/icons";
 
 export interface AppShellHandle {
   openFilePicker: () => void;
@@ -426,7 +381,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
           const isLargeFile = pendingFileRef.current && pendingFileRef.current.size > LARGE_FILE_THRESHOLD;
           
           // If mesh has issues, needs decimation, or is a large file, show the optimization dialog
-          if (analysis.issues.length > 0 || analysis.triangleCount > DECIMATION_THRESHOLD || isLargeFile) {
+          if (analysis.issues.length > 0 || analysis.triangleCount > OPTIMIZATION_DIALOG_THRESHOLD || isLargeFile) {
             setIsProcessing(false);
             setIsOptimizationDialogOpen(true);
             
