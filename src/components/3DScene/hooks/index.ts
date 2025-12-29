@@ -49,3 +49,9 @@ export type { UseBaseplateEffectsParams, UseBaseplateEffectsReturn } from './use
 
 export { useMultiSectionSelection } from './useMultiSectionSelection';
 export type { UseMultiSectionSelectionParams, UseMultiSectionSelectionReturn } from './useMultiSectionSelection';
+
+export { useSupportHandlers } from './useSupportHandlers';
+export type { UseSupportHandlersParams } from './useSupportHandlers';
+
+export { useHoleHandlers } from './useHoleHandlers';
+export type { UseHoleHandlersParams } from './useHoleHandlers';

@@ -66,6 +66,8 @@ import {
   useBaseplateHandlers,
   useBaseplateEffects,
   useMultiSectionSelection,
+  useSupportHandlers,
+  useHoleHandlers,
   // Container
   Scene3DProvider,
   useScene3DContext,
@@ -559,6 +561,59 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     camera,
     scene,
     raycasterRef,
+  });
+
+  // Support handlers from hook
+  // NOTE: Must be called after updateCamera is defined
+  const { handleSupportCreate } = useSupportHandlers({
+    basePlate,
+    setBasePlate,
+    selectedBasePlateSectionId,
+    setSelectedBasePlateSectionId,
+    supports,
+    setSupports,
+    placedClamps,
+    labels,
+    mountingHoles,
+    placing,
+    setPlacing,
+    setWaitingForSectionSelection,
+    currentOrientation,
+    setCurrentOrientation,
+    modelBounds,
+    prevOrientationRef,
+    setOrbitControlsEnabled,
+    setSupportSnapEnabled,
+    editingSupportRef,
+    updateCamera,
+    calculateOptimalSectionBounds,
+    setItemBoundsUpdateTrigger,
+  });
+
+  // Hole handlers from hook
+  // NOTE: Must be called after updateCamera is defined
+  const { handleHoleCreate } = useHoleHandlers({
+    basePlate,
+    selectedBasePlateSectionId,
+    setSelectedBasePlateSectionId,
+    mountingHoles,
+    setMountingHoles,
+    selectedHoleId,
+    setSelectedHoleId,
+    editingHoleId,
+    setEditingHoleId,
+    holePlacementMode,
+    setHolePlacementMode,
+    setWaitingForHoleSectionSelection,
+    setPendingHoleConfig,
+    setHoleSnapEnabled,
+    setHoleCSGTrigger,
+    currentOrientation,
+    setCurrentOrientation,
+    modelBounds,
+    prevOrientationRef,
+    setOrbitControlsEnabled,
+    updateCamera,
   });
 
   // Track previous orientation to detect explicit orientation changes
@@ -1080,255 +1135,8 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     return () => window.removeEventListener('component-selected', handleComponentSelect as EventListener);
   }, [selectedComponent]);
 
-  // Listen for support placement start/cancel
-  React.useEffect(() => {
-    const handleStartPlacement = (e: CustomEvent) => {
-      const { type, params } = e.detail || {};
-      // exit any active support edit session when starting fresh placement
-      editingSupportRef.current = null;
-
-      // For multi-section baseplates, require section selection only if none selected
-      if (basePlate?.type === 'multi-section' && !selectedBasePlateSectionId) {
-        // Don't start placement yet, wait for section selection
-        setWaitingForSectionSelection(true);
-        // Store the type and params for later
-        setPlacing({ active: false, type: type as SupportType, initParams: params || {} });
-        // Switch to top view for section selection
-        prevOrientationRef.current = currentOrientation;
-        setCurrentOrientation('top');
-        updateCamera('top', modelBounds);
-        return;
-      }
-
-      // Disable orbit controls during placement
-      setOrbitControlsEnabled(false);
-
-      // remember previous view, switch to Top for placement
-      prevOrientationRef.current = currentOrientation;
-      setCurrentOrientation('top');
-      updateCamera('top', modelBounds);
-      setPlacing({ active: true, type: type as SupportType, initParams: params || {} });
-    };
-    const handleCancelPlacement = () => {
-      setPlacing({ active: false, type: null, initParams: {} });
-      setOrbitControlsEnabled(true);
-      setWaitingForSectionSelection(false);
-      // restore previous view
-      setCurrentOrientation(prevOrientationRef.current);
-      updateCamera(prevOrientationRef.current, modelBounds);
-      // Clear any editing state
-      editingSupportRef.current = null;
-    };
-    const handleSupportSnapEnabledChanged = (e: CustomEvent) => {
-      setSupportSnapEnabled(e.detail.enabled);
-    };
-    window.addEventListener('supports-start-placement', handleStartPlacement as EventListener);
-    window.addEventListener('supports-cancel-placement', handleCancelPlacement as EventListener);
-    window.addEventListener('support-snap-enabled-changed', handleSupportSnapEnabledChanged as EventListener);
-    return () => {
-      window.removeEventListener('supports-start-placement', handleStartPlacement as EventListener);
-      window.removeEventListener('supports-cancel-placement', handleCancelPlacement as EventListener);
-      window.removeEventListener('support-snap-enabled-changed', handleSupportSnapEnabledChanged as EventListener);
-    };
-  }, [currentOrientation, updateCamera, modelBounds, basePlate, selectedBasePlateSectionId]);
-
-  // Listen for mounting hole placement start/cancel
-  React.useEffect(() => {
-    const handleStartHolePlacement = (e: CustomEvent) => {
-      const { config, depth } = e.detail as { config: HoleConfig; depth: number };
-      
-      // For multi-section baseplates, require section selection first
-      if (basePlate?.type === 'multi-section' && !selectedBasePlateSectionId) {
-        setWaitingForHoleSectionSelection(true);
-        setPendingHoleConfig({ config, depth });
-        return;
-      }
-      
-      // Disable orbit controls during placement
-      setOrbitControlsEnabled(false);
-      
-      // Switch to top view for placement
-      prevOrientationRef.current = currentOrientation;
-      setCurrentOrientation('top');
-      updateCamera('top', modelBounds);
-      
-      // Use depth from event (baseplate thickness) or fallback to basePlate state
-      const holeDepth = depth ?? basePlate?.depth ?? 20;
-      setHolePlacementMode({ active: true, config, depth: holeDepth });
-    };
-    
-    const handleCancelHolePlacement = () => {
-      setHolePlacementMode({ active: false, config: null, depth: 20 });
-      setOrbitControlsEnabled(true);
-      // restore previous view
-      setCurrentOrientation(prevOrientationRef.current);
-      updateCamera(prevOrientationRef.current, modelBounds);
-    };
-    
-    const handleSnapEnabledChanged = (e: CustomEvent) => {
-      setHoleSnapEnabled(e.detail.enabled);
-    };
-    
-    window.addEventListener('hole-start-placement', handleStartHolePlacement as EventListener);
-    window.addEventListener('hole-cancel-placement', handleCancelHolePlacement as EventListener);
-    window.addEventListener('hole-snap-enabled-changed', handleSnapEnabledChanged as EventListener);
-    
-    return () => {
-      window.removeEventListener('hole-start-placement', handleStartHolePlacement as EventListener);
-      window.removeEventListener('hole-cancel-placement', handleCancelHolePlacement as EventListener);
-      window.removeEventListener('hole-snap-enabled-changed', handleSnapEnabledChanged as EventListener);
-    };
-  }, [currentOrientation, updateCamera, modelBounds, basePlate?.depth, basePlate?.type, selectedBasePlateSectionId]);
-
-  // Note: Section selection effects for support/clamp/label/hole placement moved to useMultiSectionSelection hook
-
-  // Handle hole creation
-  const handleHoleCreate = useCallback((hole: PlacedHole) => {
-    // For multi-section baseplates, require section selection first
-    if (basePlate?.type === 'multi-section' && !selectedBasePlateSectionId) {
-      console.warn('Cannot create hole: Please select a baseplate section first');
-      return;
-    }
-
-    // Validate hole position is within selected section for multi-section baseplates
-    if (basePlate?.type === 'multi-section' && selectedBasePlateSectionId && basePlate.sections) {
-      const section = basePlate.sections.find(s => s.id === selectedBasePlateSectionId);
-      console.log('[HolePlacement] handleHoleCreate - section:', JSON.stringify({
-        id: section?.id,
-        minX: section?.minX,
-        maxX: section?.maxX,
-        minZ: section?.minZ,
-        maxZ: section?.maxZ
-      }));
-      console.log('[HolePlacement] handleHoleCreate - all sections:', basePlate.sections.map(s => `${s.id}: minZ=${s.minZ}, maxZ=${s.maxZ}`).join(', '));
-      if (section && hole.position) {
-        // Note: hole.position is Vector2 where .x = world X, .y = world Z
-        const { x, y } = hole.position;
-        // Check if hole is within section bounds
-        if (x < section.minX || x > section.maxX || y < section.minZ || y > section.maxZ) {
-          console.warn('[HolePlacement] Hole position outside selected section bounds, skipping placement', {
-            holePos: { x, z: y },
-            sectionBounds: { minX: section.minX, maxX: section.maxX, minZ: section.minZ, maxZ: section.maxZ }
-          });
-          // Clear section selection and exit hole placement mode
-          setSelectedBasePlateSectionId(null);
-          setHolePlacementMode({ active: false, config: null, depth: 20 });
-          setOrbitControlsEnabled(true);
-          setCurrentOrientation(prevOrientationRef.current);
-          updateCamera(prevOrientationRef.current, modelBounds);
-          return;
-        }
-      }
-    }
-
-    // Add sectionId to hole if we have a multi-section baseplate
-    const holeWithSection: PlacedHole = basePlate?.type === 'multi-section' && selectedBasePlateSectionId
-      ? { ...hole, sectionId: selectedBasePlateSectionId }
-      : hole;
-
-    console.log('[HolePlacement] Hole being placed:', JSON.stringify({
-      id: holeWithSection.id,
-      position: holeWithSection.position,
-      diameter: holeWithSection.diameter,
-      sectionId: holeWithSection.sectionId
-    }));
-
-    // Emit event to AppShell
-    window.dispatchEvent(new CustomEvent('hole-placed', { detail: holeWithSection }));
-    
-    // Clear section selection after placing hole
-    setSelectedBasePlateSectionId(null);
-    
-    // Exit placement mode
-    setHolePlacementMode({ active: false, config: null, depth: 20 });
-    setOrbitControlsEnabled(true);
-    
-    // Restore previous view
-    setCurrentOrientation(prevOrientationRef.current);
-    updateCamera(prevOrientationRef.current, modelBounds);
-    
-    // Note: CSG is triggered by handleHolesUpdated when AppShell sends back the updated holes array
-  }, [modelBounds, updateCamera, basePlate, selectedBasePlateSectionId]);
-
-  // Sync holes from AppShell
-  React.useEffect(() => {
-    const handleHolesUpdated = (e: CustomEvent) => {
-      const holes = e.detail as PlacedHole[];
-      
-      setMountingHoles(prev => {
-        // Trigger CSG if hole count changed (added or deleted) and not currently editing
-        // The editing case is handled by onDeselect/onTransformEnd
-        if (holes.length !== prev.length && !editingHoleId) {
-          // Use setTimeout to ensure state update completes first
-          setTimeout(() => {
-            setHoleCSGTrigger(t => t + 1);
-          }, 0);
-        }
-        return holes;
-      });
-    };
-    
-    window.addEventListener('holes-updated', handleHolesUpdated as EventListener);
-    return () => {
-      window.removeEventListener('holes-updated', handleHolesUpdated as EventListener);
-    };
-  }, [editingHoleId]);
-
-  // Sync selected hole ID from AppShell
-  React.useEffect(() => {
-    const handleHoleSelected = (e: CustomEvent) => {
-      const holeId = e.detail as string | null;
-      setSelectedHoleId(holeId);
-    };
-    
-    window.addEventListener('hole-selected', handleHoleSelected as EventListener);
-    return () => {
-      window.removeEventListener('hole-selected', handleHoleSelected as EventListener);
-    };
-  }, []);
-
-  // Handle hole edit request (double-click or button click to show transform controls)
-  React.useEffect(() => {
-    const handleHoleEditRequest = (e: CustomEvent) => {
-      const holeId = e.detail as string;
-      setSelectedHoleId(holeId);
-      setEditingHoleId(holeId);
-    };
-    
-    window.addEventListener('hole-edit-request', handleHoleEditRequest as EventListener);
-    return () => {
-      window.removeEventListener('hole-edit-request', handleHoleEditRequest as EventListener);
-    };
-  }, []);
-
-  // Listen for hole updates from properties panel
-  React.useEffect(() => {
-    let debounceTimer: number | null = null;
-    
-    const handleHoleUpdated = (e: CustomEvent) => {
-      const updatedHole = e.detail as PlacedHole;
-      setMountingHoles(prev => prev.map(h => h.id === updatedHole.id ? updatedHole : h));
-      
-      // Debounce CSG update for property panel changes (not from transform controls)
-      // Transform controls handle their own CSG trigger on drag end
-      if (!editingHoleId) {
-        if (debounceTimer) {
-          clearTimeout(debounceTimer);
-        }
-        debounceTimer = window.setTimeout(() => {
-          setHoleCSGTrigger(prev => prev + 1);
-        }, 500); // 500ms debounce for property panel edits
-      }
-    };
-    
-    window.addEventListener('hole-updated', handleHoleUpdated as EventListener);
-    return () => {
-      window.removeEventListener('hole-updated', handleHoleUpdated as EventListener);
-      if (debounceTimer) {
-        clearTimeout(debounceTimer);
-      }
-    };
-  }, [editingHoleId]);
+  // Note: Support placement start/cancel listeners moved to useSupportHandlers hook
+  // Note: Hole placement start/cancel listeners and hole event handlers moved to useHoleHandlers hook
 
   // =============================================================================
   // HOLE CSG SYSTEM
@@ -1519,138 +1327,8 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
 
   // Note: getClampFootprintBounds, calculateOptimalSectionBounds, expandSectionForSupport 
   // are now provided by useBaseplateHandlers hook
-
-  const handleSupportCreate = useCallback((support: AnySupport) => {
-    // For multi-section baseplates, require section selection first
-    if (basePlate?.type === 'multi-section' && !selectedBasePlateSectionId) {
-      console.warn('Cannot create support: Please select a baseplate section first');
-      return;
-    }
-
-    // Add sectionId to support if we have a multi-section baseplate
-    const supportWithSection: AnySupport = basePlate?.type === 'multi-section' && selectedBasePlateSectionId
-      ? { ...support, sectionId: selectedBasePlateSectionId }
-      : support;
-
-    // Emit event with sectionId included
-    window.dispatchEvent(new CustomEvent('support-created', { detail: supportWithSection }));
-
-    // Auto-expand baseplate section if this support overhangs current footprint
-    setBasePlate(prev => {
-      if (!prev) return prev;
-      
-      const padding = prev.padding ?? 5;
-
-      // For multi-section baseplates, recalculate the selected section bounds
-      if (prev.type === 'multi-section' && prev.sections && prev.sections.length > 0 && selectedBasePlateSectionId) {
-        const sectionIndex = prev.sections.findIndex(s => s.id === selectedBasePlateSectionId);
-        if (sectionIndex === -1) return prev;
-
-        const section = prev.sections[sectionIndex];
-
-        // Get all supports currently in this section (including the new one)
-        // Filter by sectionId to only include supports that belong to this section
-        const sectionSupports = [...supports, supportWithSection].filter(s => s.sectionId === selectedBasePlateSectionId);
-
-        // Get all clamps in this section (filter by sectionId)
-        const sectionClamps = placedClamps.filter(c => c.sectionId === selectedBasePlateSectionId);
-
-        // Get all labels in this section (filter by sectionId)
-        const sectionLabels = labels.filter(l => l.sectionId === selectedBasePlateSectionId);
-
-        // Get all holes in this section (filter by sectionId)
-        const sectionHoles = mountingHoles.filter(h => h.sectionId === selectedBasePlateSectionId);
-
-        // Calculate optimal bounds based on items in this section only
-        const optimizedSection = calculateOptimalSectionBounds(
-          section, 
-          sectionSupports, 
-          sectionClamps, 
-          padding,
-          sectionLabels,
-          sectionHoles
-        );
-        
-        const updatedSections = prev.sections.map((s, i) => 
-          i === sectionIndex ? optimizedSection : s
-        );
-
-        // Dispatch event to notify AppShell of section update
-        window.dispatchEvent(new CustomEvent('baseplate-section-updated', {
-          detail: {
-            basePlateId: prev.id,
-            sectionId: optimizedSection.id,
-            newBounds: {
-              minX: optimizedSection.minX,
-              maxX: optimizedSection.maxX,
-              minZ: optimizedSection.minZ,
-              maxZ: optimizedSection.maxZ,
-            }
-          }
-        }));
-
-        return {
-          ...prev,
-          sections: updatedSections,
-        };
-      }
-      
-      // For convex-hull, no need to manually expand - the hull recalculates from supports
-      if (prev.type === 'convex-hull') {
-        // Just trigger a re-render by returning a new object reference
-        return { ...prev };
-      }
-      
-      // For fixed-size baseplates, calculate footprint and expand if needed
-      const footprint = getSupportFootprintBounds(support);
-      const { width, height } = prev;
-      if (!width || !height) return prev;
-
-      const halfW = width / 2;
-      const halfH = height / 2;
-      const margin = 10; // extra extension beyond furthest support (mm)
-
-      const needsExpandX = footprint.minX < -halfW || footprint.maxX > halfW;
-      const needsExpandZ = footprint.minZ < -halfH || footprint.maxZ > halfH;
-
-      if (!needsExpandX && !needsExpandZ) {
-        return prev;
-      }
-
-      let newHalfW = halfW;
-      let newHalfH = halfH;
-
-      if (needsExpandX) {
-        const furthestX = Math.max(Math.abs(footprint.minX), Math.abs(footprint.maxX));
-        newHalfW = Math.max(halfW, furthestX + margin);
-      }
-
-      if (needsExpandZ) {
-        const furthestZ = Math.max(Math.abs(footprint.minZ), Math.abs(footprint.maxZ));
-        newHalfH = Math.max(halfH, furthestZ + margin);
-      }
-
-      const expandedWidth = newHalfW * 2;
-      const expandedHeight = newHalfH * 2;
-
-      return {
-        ...prev,
-        width: expandedWidth,
-        height: expandedHeight,
-      };
-    });
-
-    setPlacing({ active: false, type: null, initParams: {} });
-    setOrbitControlsEnabled(true);
-    
-    // Clear selected section after support placement completes
-    setSelectedBasePlateSectionId(null);
-    
-    // restore previous view after creation
-    setCurrentOrientation(prevOrientationRef.current);
-    updateCamera(prevOrientationRef.current, modelBounds);
-    editingSupportRef.current = null;
-  }, [modelBounds, updateCamera, calculateOptimalSectionBounds, basePlate, selectedBasePlateSectionId, supports, placedClamps, labels, mountingHoles]);
+  
+  // Note: handleSupportCreate is now provided by useSupportHandlers hook
 
   // Auto-expand sections when holes are added (for multi-section baseplates)
   useEffect(() => {
@@ -1738,65 +1416,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     });
   }, [mountingHoles, basePlate, supports, placedClamps, labels, calculateOptimalSectionBounds]);
 
-  // Persist created supports in scene
-  React.useEffect(() => {
-    const onSupportCreated = (e: CustomEvent) => {
-      const s: AnySupport = e.detail;
-      setSupports(prev => {
-        const editing = editingSupportRef.current;
-        if (editing) {
-          const replaced = prev.map(p => (p.id === editing.id ? s : p));
-          editingSupportRef.current = null;
-          return replaced;
-        }
-        return [...prev, s];
-      });
-      
-      // Force bounds recalculation after support is added to state
-      if (s.sectionId) {
-        setTimeout(() => setItemBoundsUpdateTrigger(t => t + 1), 0);
-      }
-    };
-    window.addEventListener('support-created', onSupportCreated as EventListener);
-    return () => window.removeEventListener('support-created', onSupportCreated as EventListener);
-  }, []);
-
-  // Listen for support updates from properties panel
-  // Note: The reactive multi-section bounds effect will automatically recalculate section bounds
-  React.useEffect(() => {
-    const onSupportUpdated = (e: CustomEvent) => {
-      const updatedSupport = e.detail as AnySupport;
-      // Update supports state - reactive effect will handle bounds recalculation
-      setSupports(prev => prev.map(s => s.id === updatedSupport.id ? updatedSupport : s));
-    };
-
-    const onSupportDelete = (e: CustomEvent) => {
-      const supportId = e.detail as string;
-      // Update supports state - reactive effect will handle bounds recalculation
-      setSupports(prev => prev.filter(s => s.id !== supportId));
-      
-      // If we were editing this support, cancel the edit
-      if (editingSupportRef.current?.id === supportId) {
-        editingSupportRef.current = null;
-      }
-    };
-
-    const onSupportsClearAll = () => {
-      // Clear all supports - reactive effect will handle bounds recalculation
-      setSupports([]);
-      editingSupportRef.current = null;
-    };
-
-    window.addEventListener('support-updated', onSupportUpdated as EventListener);
-    window.addEventListener('support-delete', onSupportDelete as EventListener);
-    window.addEventListener('supports-clear-all', onSupportsClearAll);
-
-    return () => {
-      window.removeEventListener('support-updated', onSupportUpdated as EventListener);
-      window.removeEventListener('support-delete', onSupportDelete as EventListener);
-      window.removeEventListener('supports-clear-all', onSupportsClearAll);
-    };
-  }, []);
+  // Note: Support created/updated/delete event listeners moved to useSupportHandlers hook
 
   // Handle auto-place supports event
   React.useEffect(() => {
