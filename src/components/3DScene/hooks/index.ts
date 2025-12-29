@@ -43,3 +43,9 @@ export type { LiveTransformData, UseModelTransformProps, UseModelTransformReturn
 
 export { useBaseplateHandlers } from './useBaseplateHandlers';
 export type { UseBaseplateHandlersProps, UseBaseplateHandlersReturn } from './useBaseplateHandlers';
+
+export { useBaseplateEffects } from './useBaseplateEffects';
+export type { UseBaseplateEffectsParams, UseBaseplateEffectsReturn } from './useBaseplateEffects';
+
+export { useMultiSectionSelection } from './useMultiSectionSelection';
+export type { UseMultiSectionSelectionParams, UseMultiSectionSelectionReturn } from './useMultiSectionSelection';

@@ -64,6 +64,8 @@ import {
   useCameraControls,
   useModelTransform,
   useBaseplateHandlers,
+  useBaseplateEffects,
+  useMultiSectionSelection,
   // Container
   Scene3DProvider,
   useScene3DContext,
@@ -324,6 +326,60 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     getSupportFootprintBounds,
   });
   
+  // Baseplate effects from hook (baseTopY calculation, part count changes)
+  useBaseplateEffects({
+    basePlate,
+    setBasePlate,
+    setBaseTopY,
+    basePlateMeshRef,
+    multiSectionBasePlateGroupRef,
+    importedParts,
+    modelMeshRefs,
+  });
+  
+  // Multi-section selection coordination from hook
+  useMultiSectionSelection({
+    basePlate,
+    selectedBasePlateSectionId,
+    setSelectedBasePlateSectionId,
+    waitingForSectionSelection,
+    setWaitingForSectionSelection,
+    placing,
+    setPlacing,
+    waitingForClampSectionSelection,
+    setWaitingForClampSectionSelection,
+    clampPlacementMode,
+    setClampPlacementMode,
+    partSilhouetteRef,
+    DEBUG_SHOW_CLAMP_SILHOUETTE,
+    setDebugClampSilhouette,
+    waitingForLabelSectionSelection,
+    setWaitingForLabelSectionSelection,
+    pendingLabelConfig,
+    setPendingLabelConfig,
+    waitingForHoleSectionSelection,
+    setWaitingForHoleSectionSelection,
+    pendingHoleConfig,
+    setPendingHoleConfig,
+    setHolePlacementMode,
+    setOrbitControlsEnabled,
+    currentOrientation,
+    setCurrentOrientation,
+    prevOrientationRef,
+    updateCamera,
+    modelBounds,
+    importedParts,
+    modelMeshRefs,
+    baseTopY,
+    onPartSelected,
+    onSupportSelect,
+    setSelectedClampId,
+    gl,
+    camera,
+    scene,
+    raycasterRef,
+  });
+  
   // Combined state for all drag operations
   const [isDraggingAnyItem, setIsDraggingAnyItem] = useState(false);
   
@@ -424,44 +480,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     csgEngineRef.current = new CSGEngine();
   }
 
-  // Ensure supports use the baseplate TOP surface, not bottom: compute baseTopY from world bbox
-  // When baseplate is not visible, use the configured depth value as fallback
-  React.useEffect(() => {
-    const updateTopY = () => {
-      const mesh = basePlateMeshRef.current;
-      const multiSectionGroup = multiSectionBasePlateGroupRef.current;
-      // Fallback to basePlate.depth when mesh is not visible
-      const fallbackTopY = basePlate?.depth ?? 5;
-      
-      // For multi-section baseplates, use the group
-      if (multiSectionGroup && basePlate?.type === 'multi-section') {
-        multiSectionGroup.updateMatrixWorld(true);
-        const box = new THREE.Box3().setFromObject(multiSectionGroup);
-        if (!box.isEmpty()) {
-          const newTopY = box.max.y;
-          setBaseTopY(prev => Math.abs(prev - newTopY) < 0.001 ? prev : newTopY);
-          return;
-        }
-      }
-      
-      if (!mesh) { 
-        setBaseTopY(prev => Math.abs(prev - fallbackTopY) < 0.001 ? prev : fallbackTopY); 
-        return; 
-      }
-      mesh.updateMatrixWorld(true);
-      const box = new THREE.Box3().setFromObject(mesh);
-      if (box.isEmpty()) { 
-        setBaseTopY(prev => Math.abs(prev - fallbackTopY) < 0.001 ? prev : fallbackTopY); 
-        return; 
-      }
-      const newTopY = box.max.y;
-      // Only update if the value actually changed (with small tolerance)
-      setBaseTopY(prev => Math.abs(prev - newTopY) < 0.001 ? prev : newTopY);
-    };
-    updateTopY();
-    const id = setInterval(updateTopY, 250);
-    return () => clearInterval(id);
-  }, [basePlate?.depth, basePlate?.type]);
+  // Note: baseTopY calculation effect moved to useBaseplateEffects hook
 
   // Supports stay fixed in world space - they don't move when model moves
   // The baseplate will expand to include both the model and the supports
@@ -578,71 +597,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     }
   }, [importedParts.length]);
 
-  // Trigger baseplate recalculation when parts are added/removed
-  // This forces a re-render of the baseplate with updated geometries
-  // Also lifts parts above the baseplate after recalculation
-  const prevPartCountRef = useRef(importedParts.length);
-  useEffect(() => {
-    const prevCount = prevPartCountRef.current;
-    const currentCount = importedParts.length;
-    prevPartCountRef.current = currentCount;
-    
-    // Only trigger if we have a baseplate and parts were added
-    if (basePlate && currentCount > prevCount) {
-      // Delay to ensure new mesh refs are populated and baseplate is updated
-      const timeoutId = setTimeout(() => {
-        // Force baseplate to recalculate for convex-hull type
-        if (basePlate.type === 'convex-hull') {
-          setBasePlate(prev => prev ? { ...prev } : null);
-        }
-        
-        // After another short delay, lift any parts that collide with the baseplate
-        setTimeout(() => {
-          const baseplateMesh = basePlateMeshRef.current;
-          if (!baseplateMesh) return;
-          
-          baseplateMesh.updateMatrixWorld(true);
-          const baseplateBox = new THREE.Box3().setFromObject(baseplateMesh);
-          const baseplateTopY = baseplateBox.max.y;
-          
-          // Check each part and lift if needed
-          importedParts.forEach(part => {
-            const ref = modelMeshRefs.current.get(part.id);
-            if (ref?.current) {
-              ref.current.updateMatrixWorld(true);
-              const partBox = new THREE.Box3().setFromObject(ref.current);
-              const partBottomY = partBox.min.y;
-              
-              // If part's bottom is below baseplate top, lift it
-              if (partBottomY < baseplateTopY) {
-                const offsetY = baseplateTopY - partBottomY;
-                ref.current.position.y += offsetY;
-                ref.current.updateMatrixWorld(true);
-                
-                // Emit transform update
-                const tempVec = new THREE.Vector3();
-                ref.current.getWorldPosition(tempVec);
-                window.dispatchEvent(new CustomEvent('model-transform-updated', {
-                  detail: {
-                    position: tempVec.clone(),
-                    rotation: ref.current.rotation.clone(),
-                    partId: part.id,
-                  },
-                }));
-              }
-            }
-          });
-        }, 100);
-      }, 200);
-      return () => clearTimeout(timeoutId);
-    } else if (basePlate?.type === 'convex-hull' && prevCount !== currentCount) {
-      // Parts were removed - just recalculate baseplate
-      const timeoutId = setTimeout(() => {
-        setBasePlate(prev => prev ? { ...prev } : null);
-      }, 200);
-      return () => clearTimeout(timeoutId);
-    }
-  }, [importedParts.length, basePlate]);
+  // Note: Part count change effect (baseplate recalculation + part lifting) moved to useBaseplateEffects hook
 
   // Cavity context request/dispatch
   React.useEffect(() => {
@@ -1222,197 +1177,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     };
   }, [currentOrientation, updateCamera, modelBounds, basePlate?.depth, basePlate?.type, selectedBasePlateSectionId]);
 
-  // DOM-level click handler for section selection during support placement
-  // This allows clicking through parts/supports/clamps to select baseplate sections
-  useEffect(() => {
-    if (!waitingForSectionSelection) return;
-
-    const handleCanvasClick = (event: MouseEvent) => {
-      if (!basePlate?.type === 'multi-section' || !basePlate.sections) return;
-
-      const rect = gl.domElement.getBoundingClientRect();
-      const mouse = new THREE.Vector2(
-        ((event.clientX - rect.left) / rect.width) * 2 - 1,
-        -((event.clientY - rect.top) / rect.height) * 2 + 1
-      );
-
-      raycasterRef.current.setFromCamera(mouse, camera);
-
-      // Get all baseplate section meshes by traversing the scene
-      const baseplateObjects: THREE.Object3D[] = [];
-      scene.traverse((obj) => {
-        if (obj.userData.isBaseplateSection) {
-          baseplateObjects.push(obj);
-        }
-      });
-
-      if (baseplateObjects.length > 0) {
-        // Raycast only against baseplate sections (ignoring parts/supports/clamps)
-        const baseplateIntersects = raycasterRef.current.intersectObjects(baseplateObjects, false);
-        if (baseplateIntersects.length > 0) {
-          const sectionMesh = baseplateIntersects[0].object;
-          const sectionId = sectionMesh.userData.sectionId;
-          if (sectionId) {
-            setSelectedBasePlateSectionId(sectionId);
-            window.dispatchEvent(new CustomEvent('baseplate-section-selected', {
-              detail: { sectionId }
-            }));
-          }
-        }
-      }
-    };
-
-    gl.domElement.addEventListener('click', handleCanvasClick);
-    return () => gl.domElement.removeEventListener('click', handleCanvasClick);
-  }, [waitingForSectionSelection, basePlate, gl, camera, scene]);
-
-  // Handle section selection when waiting for it during support placement
-  useEffect(() => {
-    if (waitingForSectionSelection && selectedBasePlateSectionId && placing.type) {
-      // Section selected, now start support placement
-      setWaitingForSectionSelection(false);
-      setOrbitControlsEnabled(false);
-      setPlacing({ active: true, type: placing.type, initParams: placing.initParams });
-    }
-  }, [waitingForSectionSelection, selectedBasePlateSectionId, placing.type, placing.initParams]);
-
-  // Handle ESC key to cancel section selection
-  useEffect(() => {
-    if (!waitingForSectionSelection) return;
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        setWaitingForSectionSelection(false);
-        setPlacing({ active: false, type: null, initParams: {} });
-        setOrbitControlsEnabled(true);
-        // Restore previous view
-        setCurrentOrientation(prevOrientationRef.current);
-        updateCamera(prevOrientationRef.current, modelBounds);
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [waitingForSectionSelection, updateCamera, modelBounds]);
-
-  // Handle section selection when waiting for it during clamp placement
-  useEffect(() => {
-    if (waitingForClampSectionSelection && selectedBasePlateSectionId && clampPlacementMode.clampModelId) {
-      console.log('[ClampPlacement] Section selected, starting placement');
-      setWaitingForClampSectionSelection(false);
-      
-      const { clampModelId, clampCategory } = clampPlacementMode;
-      
-      // Compute part silhouette for placement
-      const meshes = importedParts
-        .map(p => modelMeshRefs.current.get(p.id)?.current)
-        .filter((m): m is THREE.Mesh => m !== null);
-      
-      if (meshes.length > 0) {
-        import('@/features/clamps/utils/clampPlacement').then(({ computePartSilhouetteForClamps }) => {
-          const silhouette = computePartSilhouetteForClamps(meshes, baseTopY);
-          partSilhouetteRef.current = silhouette;
-          
-          if (DEBUG_SHOW_CLAMP_SILHOUETTE) {
-            setDebugClampSilhouette(silhouette);
-          }
-        });
-      }
-      
-      setClampPlacementMode({
-        active: true,
-        clampModelId,
-        clampCategory
-      });
-      
-      // Deselect any currently selected item
-      onPartSelected(null);
-      onSupportSelect?.(null);
-      setSelectedClampId(null);
-    }
-  }, [waitingForClampSectionSelection, selectedBasePlateSectionId, clampPlacementMode, importedParts, baseTopY, onPartSelected, onSupportSelect]);
-
-  // Handle ESC key to cancel clamp section selection
-  useEffect(() => {
-    if (!waitingForClampSectionSelection) return;
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        setWaitingForClampSectionSelection(false);
-        setClampPlacementMode({ active: false, clampModelId: null, clampCategory: null });
-        partSilhouetteRef.current = null;
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [waitingForClampSectionSelection]);
-
-  // Handle section selection when waiting for it during label placement
-  useEffect(() => {
-    if (waitingForLabelSectionSelection && selectedBasePlateSectionId && pendingLabelConfig) {
-      setWaitingForLabelSectionSelection(false);
-      
-      // Add section to label and dispatch
-      const labelWithSection = { ...pendingLabelConfig, sectionId: selectedBasePlateSectionId };
-      setPendingLabelConfig(null);
-      
-      // Dispatch the label-add event again with section
-      window.dispatchEvent(new CustomEvent('label-add', { detail: labelWithSection }));
-    }
-  }, [waitingForLabelSectionSelection, selectedBasePlateSectionId, pendingLabelConfig]);
-
-  // Complete hole placement after section selected
-  useEffect(() => {
-    if (waitingForHoleSectionSelection && selectedBasePlateSectionId && pendingHoleConfig) {
-      console.log('[HolePlacement] Section selected, starting hole placement');
-      
-      // Log section state at this point
-      if (basePlate?.type === 'multi-section' && basePlate.sections) {
-        const selectedSection = basePlate.sections.find(s => s.id === selectedBasePlateSectionId);
-        console.log('[HolePlacement] Selected section:', JSON.stringify({
-          id: selectedSection?.id,
-          minX: selectedSection?.minX,
-          maxX: selectedSection?.maxX,
-          minZ: selectedSection?.minZ,
-          maxZ: selectedSection?.maxZ
-        }));
-      }
-      setWaitingForHoleSectionSelection(false);
-      
-      const { config, depth } = pendingHoleConfig;
-      setPendingHoleConfig(null);
-      
-      // Disable orbit controls during placement
-      setOrbitControlsEnabled(false);
-      
-      // Switch to top view for placement
-      prevOrientationRef.current = currentOrientation;
-      setCurrentOrientation('top');
-      updateCamera('top', modelBounds);
-      
-      // Use depth from event (baseplate thickness) or fallback to basePlate state
-      const holeDepth = depth ?? basePlate?.depth ?? 20;
-      setHolePlacementMode({ active: true, config, depth: holeDepth });
-    }
-  }, [waitingForHoleSectionSelection, selectedBasePlateSectionId, pendingHoleConfig, currentOrientation, updateCamera, modelBounds, basePlate]);
-
-  // Handle ESC key to cancel waiting for section selection
-  useEffect(() => {
-    if (!waitingForLabelSectionSelection && !waitingForHoleSectionSelection) return;
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        setWaitingForLabelSectionSelection(false);
-        setPendingLabelConfig(null);
-        setWaitingForHoleSectionSelection(false);
-        setPendingHoleConfig(null);
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [waitingForLabelSectionSelection, waitingForHoleSectionSelection]);
+  // Note: Section selection effects for support/clamp/label/hole placement moved to useMultiSectionSelection hook
 
   // Handle hole creation
   const handleHoleCreate = useCallback((hole: PlacedHole) => {
