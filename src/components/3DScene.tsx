@@ -27,6 +27,38 @@ import { LabelMesh, LabelTransformControls, LabelConfig } from '@/features/label
 import { ClampMesh, ClampTransformControls, ClampWithSupport, PlacedClamp, ClampModel, getClampById } from '@/features/clamps';
 import { HoleMesh, HolePlacement, HoleTransformControls, PlacedHole, HoleConfig, createMergedHolesGeometry } from '@/features/holes';
 
+// ============================================================================
+// Extracted 3DScene Modules (available for progressive migration)
+// These exports provide modular alternatives to inline code below.
+// See: src/components/3DScene/index.ts for full API
+// ============================================================================
+import {
+  // Utilities
+  computeDominantUpQuaternion as extractedComputeDominantUpQuaternion,
+  getActualMinYFromMesh as extractedGetActualMinYFromMesh,
+  getModelColor as extractedGetModelColor,
+  MODEL_COLOR_PALETTE as extractedModelColorPalette,
+  buildClampSupportGeometryAtOrigin as extractedBuildClampSupportGeometryAtOrigin,
+  buildLabelGeometry as extractedBuildLabelGeometry,
+  calculateGridConfig as extractedCalculateGridConfig,
+  // Renderers
+  ScalableGrid as ExtractedScalableGrid,
+  DebugPerimeterLine as ExtractedDebugPerimeterLine,
+  DebugSilhouetteLine as ExtractedDebugSilhouetteLine,
+  FixtureComponent as ExtractedFixtureComponent,
+  // State Hooks (for future use)
+  useSupportState,
+  useClampState,
+  useLabelState,
+  useHoleState,
+  useBaseplateState,
+  useSceneState,
+  // Container
+  Scene3DProvider,
+  useScene3DContext,
+} from './3DScene';
+import type { BoundsSummary as ExtractedBoundsSummary } from './3DScene';
+
 /** Target triangle count for offset mesh decimation */
 const OFFSET_MESH_DECIMATION_TARGET = 50_000;
 
