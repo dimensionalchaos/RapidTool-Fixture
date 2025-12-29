@@ -2,8 +2,8 @@
  * useLabelState - Hook for managing label placement and state
  * Extracted from 3DScene.tsx for modularity
  */
-import { useState, useRef, useMemo, useEffect } from 'react';
-import type { LabelConfig } from '../../../features/labels/types';
+import { useState, useRef, useEffect } from 'react';
+import type { LabelConfig } from '@/features/labels';
 
 export interface UseLabelStateReturn {
   // State

@@ -4,7 +4,7 @@
  */
 import { useState, useRef } from 'react';
 import * as THREE from 'three';
-import type { PlacedClamp } from '../../../features/clamps/types';
+import type { PlacedClamp } from '@/features/clamps';
 
 export interface ClampPlacementModeState {
   active: boolean;

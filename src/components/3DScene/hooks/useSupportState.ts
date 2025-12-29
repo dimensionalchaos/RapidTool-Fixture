@@ -2,10 +2,10 @@
  * useSupportState - Hook for managing support placement and state
  * Extracted from 3DScene.tsx for modularity
  */
-import { useState, useRef, useMemo, useCallback } from 'react';
+import { useState, useRef, useMemo } from 'react';
 import * as THREE from 'three';
-import type { AnySupport, SupportType } from '../../../features/supports/types';
-import { getSupportFootprintPoints } from '../../../features/supports/utils/supportGeometry';
+import type { AnySupport, SupportType } from '@/features/supports';
+import { getSupportFootprintPoints } from '@/features/supports';
 
 export interface SupportPlacingState {
   active: boolean;

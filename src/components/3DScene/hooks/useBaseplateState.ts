@@ -3,7 +3,7 @@
  * Extracted from 3DScene.tsx for modularity
  */
 import { useState, useRef } from 'react';
-import type { BasePlateConfig, BasePlateSection } from '../../BasePlate/types';
+import type { BasePlateConfig, BasePlateSection } from '@/features/baseplate';
 
 export interface UseBaseplateStateReturn {
   // State

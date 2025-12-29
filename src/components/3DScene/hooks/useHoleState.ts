@@ -4,7 +4,7 @@
  */
 import { useState, useRef } from 'react';
 import * as THREE from 'three';
-import type { PlacedHole, HoleConfig } from '../../../features/holes/types';
+import type { PlacedHole, HoleConfig } from '@/features/holes';
 
 export interface HolePlacementModeState {
   active: boolean;
