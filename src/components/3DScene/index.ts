@@ -16,3 +16,12 @@ export { buildClampSupportGeometryAtOrigin, buildLabelGeometry } from './utils/c
 
 // Renderers
 export * from './renderers';
+
+// Container and Context
+export {
+  useScene3DState,
+  Scene3DContext,
+  useScene3DContext,
+  Scene3DProvider,
+} from './Scene3DContainer';
+export type { Scene3DState } from './Scene3DContainer';
