@@ -15,7 +15,7 @@
 
 import { useEffect, useCallback } from 'react';
 import * as THREE from 'three';
-import type { BasePlateConfig, BasePlateSection } from '@/components/BasePlate/types';
+import type { BasePlateConfig, BasePlateSection } from '@/features/baseplate/types';
 import type { SupportType, AnySupport } from '@/features/supports/types';
 
 // Placement state type (from useSupportState)

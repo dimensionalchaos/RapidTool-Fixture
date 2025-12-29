@@ -1,22 +1,23 @@
 import { useCallback, useEffect, MutableRefObject } from 'react';
 import type { AnySupport, SupportType, FootprintBounds } from '@/features/supports';
 import { getSupportFootprintBounds } from '@/features/supports';
-import type { PlacedClamp } from '../../ClampCreation';
-import type { PlacedLabel } from '../../Labels/types';
-import type { PlacedHole, BasePlate, BasePlateSection } from '../../BasePlate/types';
+import type { PlacedClamp } from '@/features/clamps';
+import type { LabelConfig } from '@/features/labels';
+import type { PlacedHole } from '@/features/holes';
+import type { BasePlateConfig, BasePlateSection } from '@/features/baseplate';
 import type { ViewOrientation } from '../types';
 import type * as THREE from 'three';
 
 export interface UseSupportHandlersParams {
   // State
-  basePlate: BasePlate | null;
-  setBasePlate: React.Dispatch<React.SetStateAction<BasePlate | null>>;
+  basePlate: BasePlateConfig | null;
+  setBasePlate: React.Dispatch<React.SetStateAction<BasePlateConfig | null>>;
   selectedBasePlateSectionId: string | null;
   setSelectedBasePlateSectionId: React.Dispatch<React.SetStateAction<string | null>>;
   supports: AnySupport[];
   setSupports: React.Dispatch<React.SetStateAction<AnySupport[]>>;
   placedClamps: PlacedClamp[];
-  labels: PlacedLabel[];
+  labels: LabelConfig[];
   mountingHoles: PlacedHole[];
   
   // Placement state
@@ -44,7 +45,7 @@ export interface UseSupportHandlersParams {
     sectionSupports: AnySupport[],
     sectionClamps: PlacedClamp[],
     padding: number,
-    sectionLabels?: PlacedLabel[],
+    sectionLabels?: LabelConfig[],
     sectionHoles?: PlacedHole[]
   ) => BasePlateSection;
   

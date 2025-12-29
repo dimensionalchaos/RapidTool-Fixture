@@ -14,8 +14,8 @@ import * as THREE from 'three';
 import type { ProcessedFile } from '@/modules/FileImport';
 import type { AnySupport } from '../types';
 import type { PlacedClamp, ClampSupportInfo, LoadedClampData } from './useClampState';
-import type { Label } from '@/components/Labels/types';
-import type { PlacedHole } from '@/components/Supports/types';
+import type { LabelConfig } from '@/features/labels/types';
+import type { PlacedHole } from '@/features/holes/types';
 import { buildClampSupportGeometryAtOrigin, buildLabelGeometry } from '../utils/csgUtils';
 import { buildFullSupportGeometry } from '@/features/supports';
 import { createMergedHolesGeometry } from '@/features/holes';
@@ -39,7 +39,7 @@ export interface UseCavityOperationsParams {
   supports: AnySupport[];
   placedClamps: PlacedClamp[];
   clampSupportInfos: Map<string, ClampSupportInfo>;
-  labels: Label[];
+  labels: LabelConfig[];
   mountingHoles: PlacedHole[];
   basePlate: any;
   baseTopY: number;
@@ -50,7 +50,7 @@ export interface UseCavityOperationsParams {
   modelMeshRefs: React.MutableRefObject<Map<string, React.RefObject<THREE.Mesh | null>>>;
   multiSectionBasePlateGroupRef: React.RefObject<THREE.Group | null>;
   loadedClampDataRef: React.MutableRefObject<Map<string, LoadedClampData>>;
-  labelsRef: React.MutableRefObject<Label[]>;
+  labelsRef: React.MutableRefObject<LabelConfig[]>;
 }
 
 export interface UseCavityOperationsReturn {

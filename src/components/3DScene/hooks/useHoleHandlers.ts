@@ -1,11 +1,12 @@
 import { useCallback, useEffect, MutableRefObject } from 'react';
-import type { PlacedHole, HoleConfig, BasePlate } from '../../BasePlate/types';
+import type { PlacedHole, HoleConfig } from '@/features/holes';
+import type { BasePlateConfig } from '@/features/baseplate';
 import type { ViewOrientation } from '../types';
 import type * as THREE from 'three';
 
 export interface UseHoleHandlersParams {
   // State
-  basePlate: BasePlate | null;
+  basePlate: BasePlateConfig | null;
   selectedBasePlateSectionId: string | null;
   setSelectedBasePlateSectionId: React.Dispatch<React.SetStateAction<string | null>>;
   mountingHoles: PlacedHole[];

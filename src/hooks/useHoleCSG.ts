@@ -10,8 +10,8 @@
 
 import { useState, useRef, useCallback, useEffect } from 'react';
 import * as THREE from 'three';
-import type { PlacedHole } from '../components/MountingHoles';
-import { createMergedHolesGeometry } from '../components/MountingHoles';
+import type { PlacedHole } from '@/features/holes';
+import { createMergedHolesGeometry } from '@/features/holes';
 import { performHoleCSGInWorker } from '../lib/workers';
 
 /** Configuration for the hook */

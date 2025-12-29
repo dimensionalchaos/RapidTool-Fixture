@@ -11,8 +11,8 @@
 
 import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
-import type { ProcessedFile } from '@/types';
-import type { BasePlateConfig } from '@/components/BasePlate/types';
+import type { ProcessedFile } from '@/modules/FileImport';
+import type { BasePlateConfig } from '@/features/baseplate/types';
 
 interface UseBaseplateEffectsParams {
   /** Current baseplate configuration */

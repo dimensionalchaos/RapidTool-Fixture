@@ -3,14 +3,15 @@ import * as THREE from 'three';
 import type { ThreeEvent } from '@react-three/fiber';
 import type { PlacedClamp, ClampPlacementModeState, ClampSupportInfo, LoadedClampData } from './useClampState';
 import type { AnySupport } from '@/features/supports';
-import type { PlacedLabel } from '../../Labels/types';
-import type { PlacedHole, BasePlate, BasePlateSection } from '../../BasePlate/types';
+import type { LabelConfig } from '@/features/labels';
+import type { PlacedHole } from '@/features/holes';
+import type { BasePlateConfig, BasePlateSection } from '@/features/baseplate';
 import type { ProcessedFile } from '@/modules/FileImport/types';
 
 export interface UseClampHandlersParams {
   // State
-  basePlate: BasePlate | null;
-  setBasePlate: React.Dispatch<React.SetStateAction<BasePlate | null>>;
+  basePlate: BasePlateConfig | null;
+  setBasePlate: React.Dispatch<React.SetStateAction<BasePlateConfig | null>>;
   selectedBasePlateSectionId: string | null;
   setSelectedBasePlateSectionId: React.Dispatch<React.SetStateAction<string | null>>;
   
@@ -31,7 +32,7 @@ export interface UseClampHandlersParams {
   
   // Other item state
   supports: AnySupport[];
-  labels: PlacedLabel[];
+  labels: LabelConfig[];
   mountingHoles: PlacedHole[];
   
   // Scene refs
@@ -51,7 +52,7 @@ export interface UseClampHandlersParams {
     sectionSupports: AnySupport[],
     sectionClamps: PlacedClamp[],
     padding: number,
-    sectionLabels?: PlacedLabel[],
+    sectionLabels?: LabelConfig[],
     sectionHoles?: PlacedHole[]
   ) => BasePlateSection;
   

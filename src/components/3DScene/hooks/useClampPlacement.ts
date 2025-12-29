@@ -10,10 +10,12 @@
 import { useEffect, useCallback } from 'react';
 import * as THREE from 'three';
 import type { ThreeEvent } from '@react-three/fiber';
-import type { BasePlateConfig, BasePlateSection } from '@/components/BasePlate/types';
-import type { ProcessedFile } from '@/types';
-import type { AnySupport, PlacedClamp, ClampSupportInfo, PlacedHole } from '@/types';
-import type { LabelConfig } from '@/components/Labels/types';
+import type { BasePlateConfig, BasePlateSection } from '@/features/baseplate/types';
+import type { ProcessedFile } from '@/modules/FileImport';
+import type { AnySupport } from '@/features/supports/types';
+import type { PlacedClamp, ClampSupportInfo } from '@/features/clamps/types';
+import type { PlacedHole } from '@/features/holes/types';
+import type { LabelConfig } from '@/features/labels/types';
 import type { ClampPlacementModeState, ClampDebugPointsState } from './useClampState';
 
 interface UseClampPlacementParams {

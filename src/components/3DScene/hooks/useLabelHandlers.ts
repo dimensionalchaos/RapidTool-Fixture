@@ -9,9 +9,10 @@
 
 import { useEffect } from 'react';
 import * as THREE from 'three';
-import type { BasePlateConfig, BasePlateSection } from '@/components/BasePlate/types';
-import type { LabelConfig } from '@/components/Labels/types';
-import type { AnySupport, PlacedClamp, ClampSupportInfo } from '@/types';
+import type { BasePlateConfig, BasePlateSection } from '@/features/baseplate/types';
+import type { LabelConfig } from '@/features/labels/types';
+import type { AnySupport } from '@/features/supports/types';
+import type { PlacedClamp, ClampSupportInfo } from '@/features/clamps/types';
 import type { BoundsSummary } from '../types';
 import { getSupportFootprintPoints } from '@/features/supports';
 
