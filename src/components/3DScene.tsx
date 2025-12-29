@@ -52,6 +52,7 @@ import {
   FixtureComponent as ExtractedFixtureComponent,
   LabelsRenderer,
   SupportsRenderer,
+  SceneLighting,
   // State Hooks (for future use)
   useSupportState,
   useClampState,
@@ -5369,14 +5370,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   return (
     <>
       {/* Lighting */}
-      {/* Scene Lighting - using direct lights instead of HDR environment to avoid memory issues */}
-      <ambientLight intensity={0.5} />
-      <directionalLight position={[10, 10, 5]} intensity={1.0} castShadow />
-      <directionalLight position={[-10, -10, -5]} intensity={0.5} />
-      <directionalLight position={[5, 15, -5]} intensity={0.6} />
-      <pointLight position={[0, 10, 0]} intensity={0.4} />
-      <pointLight position={[0, -10, 0]} intensity={0.3} />
-      <hemisphereLight args={['#ffffff', '#444444', 0.6]} />
+      <SceneLighting />
 
       {/* Scalable grid - sized based on combined model bounds (includes world positions) */}
       <ScalableGrid modelBounds={modelBounds} isDarkMode={isDarkMode} />

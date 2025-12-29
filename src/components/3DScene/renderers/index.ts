@@ -23,3 +23,5 @@ export type { LabelsRendererProps } from './LabelsRenderer';
 
 export { SupportsRenderer } from './SupportsRenderer';
 export type { SupportsRendererProps } from './SupportsRenderer';
+
+export { SceneLighting } from './SceneLighting';
