@@ -4,11 +4,17 @@
 
 This document outlines the incremental approach to decompose `3DScene.tsx` from ~6163 lines to a maintainable ~500-800 lines through systematic extraction of handlers and effects into dedicated hooks and modules.
 
-**Current State (Dec 29, 2025):**
-- 3DScene.tsx: ~6163 lines
+**Current State (Jan 1, 2025):**
+- 3DScene.tsx: ~5982 lines (reduced from ~6163)
 - State hooks wired: ✅ (useSupportState, useClampState, useLabelState, useHoleState, useBaseplateState)
+- **NEW: usePartManagement** ✅ WIRED - Part mesh refs, bounds, colors
+- **NEW: useModelTransform** ✅ WIRED - Transform state, live transform, pivot control
+- **NEW: useCameraControls** 📝 CREATED (not wired - complex deps on useThree)
 - Renderers extracted: ✅ (SupportsRenderer, LabelsRenderer, ModelMesh, ScalableGrid, etc.)
 - Utilities extracted: ✅ (geometryUtils, colorUtils, csgUtils)
+
+**Progress:**
+- ~180 lines removed through usePartManagement and useModelTransform hooks
 
 **Target State:**
 - 3DScene.tsx: ~500-800 lines (orchestration only)
@@ -29,15 +35,17 @@ Each extraction creates a hook that encapsulates:
 
 ---
 
-## Phase 5.6: File Import & Positioning System
+## Phase 5.6: File Import & Positioning System ✅ COMPLETE
 
 **Target:** Extract all part import, positioning, and bounds calculation logic
 
-### 5.6.1: Create `usePartManagement` Hook
+### 5.6.1: Create `usePartManagement` Hook ✅ DONE
 
 **File:** `src/components/3DScene/hooks/usePartManagement.ts`
+**Status:** ✅ Created and wired into 3DScene.tsx
+**Commit:** Phase 5.6.1
 
-**Extracts from 3DScene.tsx (lines ~164-310):**
+**Extracted:**
 - `modelMeshRefs` - Map<string, RefObject<Mesh>>
 - `partInitialOffsetsRef` - Map<string, Vector3>
 - `modelDimensions` state
@@ -46,58 +54,48 @@ Each extraction creates a hook that encapsulates:
 - `partBounds` state
 - `getPartMeshRef()` callback
 - `recalculateCombinedBounds()` callback
-- Effects for bounds calculation (lines 262-304)
-- Effect for reporting colors (lines 306-312)
+- Effects for bounds calculation
+- Effect for reporting colors
 
-**Dependencies:**
-- `importedParts: ProcessedFile[]`
-- `onModelColorAssigned` callback
-
-**Returns:**
-```typescript
-interface UsePartManagementReturn {
-  // Refs
-  modelMeshRefs: RefObject<Map<string, RefObject<THREE.Mesh>>>;
-  partInitialOffsetsRef: RefObject<Map<string, THREE.Vector3>>;
-  
-  // State
-  modelDimensions: { x?: number; y?: number; z?: number } | undefined;
-  setModelDimensions: Dispatch<...>;
-  modelColors: Map<string, string>;
-  setModelColors: Dispatch<...>;
-  modelBounds: BoundsSummary | null;
-  partBounds: Map<string, BoundsSummary>;
-  setPartBounds: Dispatch<...>;
-  
-  // Callbacks
-  getPartMeshRef: (partId: string) => RefObject<THREE.Mesh>;
-  recalculateCombinedBounds: () => void;
-}
-```
-
-**Lines to remove from 3DScene.tsx:** ~150 lines
+**Lines removed:** ~100+ lines
 
 ---
 
-### 5.6.2: Create `useCameraControls` Hook
+### 5.6.2: Create `useModelTransform` Hook ✅ DONE
+
+**File:** `src/components/3DScene/hooks/useModelTransform.ts`
+**Status:** ✅ Created and wired into 3DScene.tsx
+**Commit:** Phase 5.6.2
+
+**Extracted:**
+- `modelTransform` state
+- `liveTransform` state
+- `pivotClosingRef` ref
+- `handleLiveTransformChange()` callback
+- `livePositionDelta` computed value
+- Effect for emitting initial transform
+
+**Lines removed:** ~70+ lines
+
+---
+
+### 5.6.3: Create `useCameraControls` Hook 📝 DEFERRED
 
 **File:** `src/components/3DScene/hooks/useCameraControls.ts`
+**Status:** 📝 Created but NOT wired (deferred - complex useThree deps)
 
-**Extracts from 3DScene.tsx (lines ~639-750):**
-- `currentOrientation` state
-- `prevOrientationRef` ref
-- `shouldReframeCameraRef` ref
-- `lastOrientationRef` ref
-- `updateCamera()` callback (lines 639-710)
-- Effects for camera updates (lines 714-750)
-- Effects for framing on part import
+**Note:** This hook requires camera, size, controlsRef from useThree() context.
+The current inline implementation works well. Wiring would require significant
+refactoring to pass dependencies properly without breaking the render flow.
 
-**Dependencies:**
-- `camera` from useThree()
-- `size` from useThree()
-- `modelBounds: BoundsSummary | null`
+**To wire in future:**
+- Pass `camera`, `size`, `controlsRef` as props
+- Remove inline `updateCamera` function
+- Move effects from lines ~530-620 to hook
 
-**Returns:**
+---
+
+### 5.6.4: Create
 ```typescript
 interface UseCameraControlsReturn {
   currentOrientation: ViewOrientation;
