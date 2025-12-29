@@ -303,8 +303,34 @@ git checkout -b refactor/phase-N-name  # Start fresh
 | 2 | ✅ Complete | Dec 29, 2025 | Dec 29, 2025 | Commit `ebfd88d` |
 | 3 | ✅ Complete | Dec 29, 2025 | Dec 29, 2025 | Commit `24e501a` |
 | 4 | ✅ Complete | Dec 29, 2025 | Dec 30, 2025 | Commits `4abeb1e`, `842bbb2`, `91e80c7` |
-| 5 | 🔄 In Progress | Dec 30, 2025 | - | Granular plan created, imports added (9b12540) |
+| 5 | 🔄 In Progress | Dec 30, 2025 | - | State hooks wired, incremental plan created |
 | 6 | ⏳ Not Started | - | - | - |
+
+### Phase 5 Incremental Breakdown
+
+**See:** [`docs/refactoring/directives/PHASE_5_INCREMENTAL_PLAN.md`](directives/PHASE_5_INCREMENTAL_PLAN.md)
+
+| Sub-Phase | Hook | Status | Lines Saved |
+|-----------|------|--------|-------------|
+| 5.6.1 | usePartManagement | ⏳ | ~150 |
+| 5.6.2 | useCameraControls | ⏳ | ~110 |
+| 5.6.3 | useModelTransform | ⏳ | ~110 |
+| 5.7.1 | useBaseplateEffects | ⏳ | ~90 |
+| 5.7.2 | useMultiSectionBaseplate | ⏳ | ~300 |
+| 5.7.3 | useBaseplateExpansion | ⏳ | ~200 |
+| 5.8.1 | useSupportHandlers | ⏳ | ~350 |
+| 5.9.1 | useClampHandlers | ⏳ | ~600 |
+| 5.9.2 | useClampHullPoints | ⏳ | ~40 |
+| 5.10.1 | useHoleHandlers | ⏳ | ~350 |
+| 5.10.2 | useHoleCSG | ⏳ | ~180 |
+| 5.10.3 | useHoleHullPoints | ⏳ | ~40 |
+| 5.11.1 | useLabelHandlers | ⏳ | ~250 |
+| 5.12.1 | useCavityOperations | ⏳ | ~300 |
+| 5.12.2 | useOffsetMesh | ⏳ | ~400 |
+| 5.12.3 | useMergedFixture | ⏳ | ~800 |
+| 5.13.1 | useSceneEventHandlers | ⏳ | ~100 |
+
+**Total Target:** ~4,370 lines → Final 3DScene.tsx: ~500-800 lines
 
 ### Directive Checklist
 
@@ -336,17 +362,34 @@ git checkout -b refactor/phase-N-name  # Start fresh
 - [x] 15-extract-scene-renderers (Commit `d295736`)
 - [x] 16-extract-state-hooks (Commit `d295736`)
 - [x] 17-add-imports-to-3DScene (Commit `9b12540`)
-- [ ] 5.5: Verify hook signatures match
-- [ ] 5.6: Wire utility functions
-- [ ] 5.7: Wire renderer components
-- [ ] 5.8.1: Wire useBaseplateState
-- [ ] 5.8.2: Wire useHoleState
-- [ ] 5.8.3: Wire useLabelState
-- [ ] 5.8.4: Wire useSupportState
-- [ ] 5.8.5: Wire useClampState
-- [ ] 5.8.6: Wire useSceneState
+- [x] 5.5: Wire state hooks (useSupportState, useClampState, useLabelState, useHoleState, useBaseplateState)
+- [ ] **5.6: File Import & Positioning System** ← NEXT
+  - [ ] 5.6.1: usePartManagement hook
+  - [ ] 5.6.2: useCameraControls hook
+  - [ ] 5.6.3: useModelTransform hook
+- [ ] **5.7: Baseplate System (All Types)**
+  - [ ] 5.7.1: useBaseplateEffects hook
+  - [ ] 5.7.2: useMultiSectionBaseplate hook
+  - [ ] 5.7.3: useBaseplateExpansion hook
+- [ ] **5.8: Supports System**
+  - [ ] 5.8.1: useSupportHandlers hook
+- [ ] **5.9: Clamps System**
+  - [ ] 5.9.1: useClampHandlers hook
+  - [ ] 5.9.2: useClampHullPoints hook
+- [ ] **5.10: Holes System**
+  - [ ] 5.10.1: useHoleHandlers hook
+  - [ ] 5.10.2: useHoleCSG hook
+  - [ ] 5.10.3: useHoleHullPoints hook
+- [ ] **5.11: Labels System**
+  - [ ] 5.11.1: useLabelHandlers hook
+- [ ] **5.12: Cavity/CSG System**
+  - [ ] 5.12.1: useCavityOperations hook
+  - [ ] 5.12.2: useOffsetMesh hook
+  - [ ] 5.12.3: useMergedFixture hook
+- [ ] **5.13: Miscellaneous**
+  - [ ] 5.13.1: useSceneEventHandlers hook
 
-**See:** `docs/refactoring/directives/PHASE_5_GRANULAR_PLAN.md`
+**See:** `docs/refactoring/directives/PHASE_5_INCREMENTAL_PLAN.md`
 
 **Phase 6:** ⏳ Planned
 - [ ] 16-extract-cad-core-package (TBD)

@@ -2,7 +2,7 @@
  * useLabelState - Hook for managing label placement and state
  * Extracted from 3DScene.tsx for modularity
  */
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import type { LabelConfig } from '@/features/labels';
 
 export interface UseLabelStateReturn {
@@ -75,10 +75,11 @@ export function useLabelState(): UseLabelStateReturn {
       const halfWidth = (textWidth / 2) + LABEL_MARGIN;
       const halfDepth = (textHeight / 2) + LABEL_MARGIN;
       
-      // Apply rotation if present
-      const rotation = label.rotation || 0;
-      const cos = Math.cos(rotation * Math.PI / 180);
-      const sin = Math.sin(rotation * Math.PI / 180);
+      // Get rotation angle - label.rotation can be a number or an object
+      const rot = label.rotation;
+      const rotationAngle = typeof rot === 'object' ? ((rot as any).z || 0) : (typeof rot === 'number' ? rot : 0);
+      const cos = Math.cos(rotationAngle);
+      const sin = Math.sin(rotationAngle);
       
       // Four corners before rotation
       const corners = [

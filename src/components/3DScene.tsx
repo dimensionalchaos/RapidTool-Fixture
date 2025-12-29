@@ -137,21 +137,34 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   const [placedComponents, setPlacedComponents] = useState<Array<{ component: unknown; position: THREE.Vector3; id: string }>>([]);
   const [selectedComponent, setSelectedComponent] = useState<unknown>(null);
   
-  // Baseplate configuration state
-  const [basePlate, setBasePlate] = useState<BasePlateConfig | null>(null);
-  
-  // Multi-section baseplate drawing state
-  const [isMultiSectionDrawingMode, setIsMultiSectionDrawingMode] = useState(false);
-  const [drawnSections, setDrawnSections] = useState<BasePlateSection[]>([]);
-  const [multiSectionPadding, setMultiSectionPadding] = useState(0);
+  // Baseplate state from hook
+  const {
+    basePlate,
+    setBasePlate,
+    isMultiSectionDrawingMode,
+    setIsMultiSectionDrawingMode,
+    drawnSections,
+    setDrawnSections,
+    multiSectionPadding,
+    setMultiSectionPadding,
+    baseTopY,
+    setBaseTopY,
+    selectedBasePlateSectionId,
+    setSelectedBasePlateSectionId,
+    editingBasePlateSectionId,
+    setEditingBasePlateSectionId,
+    waitingForSectionSelection,
+    setWaitingForSectionSelection,
+    basePlateMeshRef,
+    isDraggingBasePlateSectionRef,
+    isMultiSectionBaseplate,
+  } = useBaseplateState();
   
   // Store refs for each model mesh by part ID
   const modelMeshRefs = useRef<Map<string, React.RefObject<THREE.Mesh>>>(new Map());
   // Store initial offsets for each part (persists across renders to prevent position reset)
   const partInitialOffsetsRef = useRef<Map<string, THREE.Vector3>>(new Map());
-  const basePlateMeshRef = useRef<THREE.Mesh>(null);
   const multiSectionBasePlateGroupRef = useRef<THREE.Group>(null);
-  const [baseTopY, setBaseTopY] = useState<number>(0);
   const [modelDimensions, setModelDimensions] = useState<{ x?: number; y?: number; z?: number } | undefined>();
   const [orbitControlsEnabled, setOrbitControlsEnabled] = useState(true);
   const [modelColors, setModelColors] = useState<Map<string, string>>(new Map());
@@ -298,109 +311,111 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     }
   }, [modelColors, onModelColorAssigned]);
   
-  // Support placement state
-  const [placing, setPlacing] = useState<{ active: boolean; type: SupportType | null; initParams?: Record<string, number> }>({ active: false, type: null });
-  const [supports, setSupports] = useState<AnySupport[]>([]);
-  const [supportsTrimPreview, setSupportsTrimPreview] = useState<THREE.Mesh[]>([]);
-  const [supportsTrimProcessing, setSupportsTrimProcessing] = useState(false);
+  // ========================================================================
+  // State Hooks - Modular state management for different features
+  // ========================================================================
   
-  // Labels state
-  const [labels, setLabels] = useState<LabelConfig[]>([]);
-  const [selectedLabelId, setSelectedLabelId] = useState<string | null>(null);
-  const labelsRef = useRef<LabelConfig[]>([]); // Ref to track latest labels for async operations
+  // Support state from hook
+  const {
+    placing,
+    setPlacing,
+    supports,
+    setSupports,
+    supportsTrimPreview,
+    setSupportsTrimPreview,
+    supportsTrimProcessing,
+    setSupportsTrimProcessing,
+    supportSnapEnabled,
+    setSupportSnapEnabled,
+    modifiedSupportGeometries,
+    setModifiedSupportGeometries,
+    cavitySubtractionProcessing,
+    setCavitySubtractionProcessing,
+    isDraggingSupportRef,
+    editingSupportRef,
+    supportHullPoints,
+  } = useSupportState();
+  
+  // Labels state from hook
+  const {
+    labels,
+    setLabels,
+    selectedLabelId,
+    setSelectedLabelId,
+    waitingForLabelSectionSelection,
+    setWaitingForLabelSectionSelection,
+    pendingLabelConfig,
+    setPendingLabelConfig,
+    labelsRef,
+    isDraggingLabelRef,
+    labelHullPoints,
+  } = useLabelState();
   
   // Force bounds recalc when any item (support, clamp, label) is first added
   const [itemBoundsUpdateTrigger, setItemBoundsUpdateTrigger] = useState(0);
   
-  // Keep labelsRef in sync with labels state
-  useEffect(() => {
-    labelsRef.current = labels;
-  }, [labels]);
+  // Clamps state from hook
+  const {
+    placedClamps,
+    setPlacedClamps,
+    selectedClampId,
+    setSelectedClampId,
+    showClampDebug,
+    setShowClampDebug,
+    clampMinOffsets,
+    setClampMinOffsets,
+    clampSupportInfos,
+    setClampSupportInfos,
+    clampDebugPoints,
+    setClampDebugPoints,
+    clampPlacementMode,
+    setClampPlacementMode,
+    debugPerimeter,
+    setDebugPerimeter,
+    debugClampSilhouette,
+    setDebugClampSilhouette,
+    waitingForClampSectionSelection,
+    setWaitingForClampSectionSelection,
+    isDraggingClampRef,
+    loadedClampDataRef,
+    clampDebugPointsRef,
+    partSilhouetteRef,
+    DEBUG_SHOW_PERIMETER,
+    DEBUG_SHOW_CLAMP_SILHOUETTE,
+  } = useClampState();
   
-  // Clamps state
-  const [placedClamps, setPlacedClamps] = useState<PlacedClamp[]>([]);
-  const [selectedClampId, setSelectedClampId] = useState<string | null>(null);
-  const [showClampDebug, setShowClampDebug] = useState(false); // Debug geometries disabled
-  // Track minimum placement offsets for each clamp (from clamp-data-loaded events)
-  const [clampMinOffsets, setClampMinOffsets] = useState<Map<string, number>>(new Map());
-  // Track clamp support info for each clamp (for baseplate bounds calculation and collision)
-  const [clampSupportInfos, setClampSupportInfos] = useState<Map<string, { 
-    polygon: Array<[number, number]>; 
-    localCenter: { x: number; y: number };
-    fixturePointY?: number;
-    mountSurfaceLocalY?: number;
-  }>>(new Map());
-  // Track loaded clamp data for CSG operations (fixture cutouts and support geometry)
-  const loadedClampDataRef = useRef<Map<string, {
-    fixtureCutoutsGeometry: THREE.BufferGeometry | null;
-    fixturePointTopCenter: THREE.Vector3;
-    supportInfo: { polygon: Array<[number, number]>; mountSurfaceLocalY: number; fixturePointY: number; } | null;
-  }>>(new Map());
+  // Hole state from hook
+  const {
+    mountingHoles,
+    setMountingHoles,
+    selectedHoleId,
+    setSelectedHoleId,
+    editingHoleId,
+    setEditingHoleId,
+    isDraggingHole,
+    setIsDraggingHole,
+    holePlacementMode,
+    setHolePlacementMode,
+    holeSnapEnabled,
+    setHoleSnapEnabled,
+    baseplateWithHoles,
+    setBaseplateWithHoles,
+    holeCSGProcessing,
+    setHoleCSGProcessing,
+    holeCSGTrigger,
+    setHoleCSGTrigger,
+    waitingForHoleSectionSelection,
+    setWaitingForHoleSectionSelection,
+    pendingHoleConfig,
+    setPendingHoleConfig,
+    isDraggingHoleRef,
+    mountingHolesRef,
+    originalBaseplateGeoRef,
+    triggerHoleCSGUpdate,
+  } = useHoleState();
   
-  // Debug: clamp placement debug points (closest boundary point, fixture point, support center)
-  const [clampDebugPoints, setClampDebugPoints] = useState<{
-    closestBoundaryPoint: { x: number; y: number; z: number };
-    fixturePoint: { x: number; y: number; z: number };
-    estimatedSupportCenter: { x: number; y: number; z: number };
-    silhouette?: Array<{ x: number; z: number }>; // For red outline
-  } | null>(null);
-  // Ref to store debug points AND silhouette immediately (avoid async state issues)
-  const clampDebugPointsRef = useRef<{
-    closestBoundaryPoint: { x: number; y: number; z: number };
-    fixturePoint: { x: number; y: number; z: number };
-    estimatedSupportCenter: { x: number; y: number; z: number };
-    silhouette: Array<{ x: number; z: number }>; // Store silhouette for 2D collision
-  } | null>(null);
-  
-  // Clamp placement mode state
-  const [clampPlacementMode, setClampPlacementMode] = useState<{
-    active: boolean;
-    clampModelId: string | null;
-    clampCategory: string | null;
-  }>({ active: false, clampModelId: null, clampCategory: null });
-  // Cache for part silhouettes (computed once per placement session)
-  const partSilhouetteRef = useRef<Array<{ x: number; z: number }> | null>(null);
-  
-  // Debug: perimeter visualization from auto-placement (disabled by default)
-  // Set DEBUG_SHOW_PERIMETER to true to enable red boundary line visualization
-  const DEBUG_SHOW_PERIMETER = false;
-  const [debugPerimeter, setDebugPerimeter] = useState<Array<{ x: number; z: number }> | null>(null);
-  
-  // Debug: clamp silhouette visualization (for debugging clamp placement calculations)
-  // Set DEBUG_SHOW_CLAMP_SILHOUETTE to true to enable cyan silhouette outline on baseplate
-  const DEBUG_SHOW_CLAMP_SILHOUETTE = false;
-  const [debugClampSilhouette, setDebugClampSilhouette] = useState<Array<{ x: number; z: number }> | null>(null);
-  
-  // Mounting holes state
-  const [mountingHoles, setMountingHoles] = useState<PlacedHole[]>([]);
-  const [selectedHoleId, setSelectedHoleId] = useState<string | null>(null);
-  const [editingHoleId, setEditingHoleId] = useState<string | null>(null);
-  const isDraggingHoleRef = useRef(false); // Track if hole gizmo is being dragged
-  const [isDraggingHole, setIsDraggingHole] = useState(false); // State version for multi-section baseplate
-  const isDraggingSupportRef = useRef(false); // Track if support gizmo is being dragged (for CSG debounce)
-  const isDraggingLabelRef = useRef(false); // Track if label gizmo is being dragged (for CSG debounce)
-  const isDraggingClampRef = useRef(false); // Track if clamp gizmo is being dragged (for CSG debounce)
-  const [isDraggingAnyItem, setIsDraggingAnyItem] = useState(false); // Combined state for all drag operations
-  const [holePlacementMode, setHolePlacementMode] = useState<{
-    active: boolean;
-    config: HoleConfig | null;
-    depth: number;
-  }>({ active: false, config: null, depth: 20 });
-  const [holeSnapEnabled, setHoleSnapEnabled] = useState(true); // Snap to alignment enabled by default
-  
-  // Multi-section baseplate selection state (for feature placement)
-  const [selectedBasePlateSectionId, setSelectedBasePlateSectionId] = useState<string | null>(null);
-  const [editingBasePlateSectionId, setEditingBasePlateSectionId] = useState<string | null>(null);
-  const isDraggingBasePlateSectionRef = useRef(false); // Track if section gizmo is being dragged
-  const [waitingForSectionSelection, setWaitingForSectionSelection] = useState(false); // Track if user needs to select section first
-  const [waitingForClampSectionSelection, setWaitingForClampSectionSelection] = useState(false); // Track if waiting for section during clamp placement
-  const [waitingForLabelSectionSelection, setWaitingForLabelSectionSelection] = useState(false); // Track if waiting for section during label placement
-  const [waitingForHoleSectionSelection, setWaitingForHoleSectionSelection] = useState(false); // Track if waiting for section during hole placement
-  const [pendingLabelConfig, setPendingLabelConfig] = useState<LabelConfig | null>(null); // Store label config while waiting for section
-  const [pendingHoleConfig, setPendingHoleConfig] = useState<{ config: HoleConfig; depth: number } | null>(null); // Store hole config while waiting for section
-  
-  // Support snap alignment state
-  const [supportSnapEnabled, setSupportSnapEnabled] = useState(true); // Snap to alignment enabled by default
+  // Combined state for all drag operations
+  const [isDraggingAnyItem, setIsDraggingAnyItem] = useState(false);
   
   // Cavity operations preview (for CSG operations)
   const [cavityPreview, setCavityPreview] = useState<THREE.Mesh | null>(null);
@@ -411,29 +426,8 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   const [offsetMeshProcessing, setOffsetMeshProcessing] = useState(false);
   const [showOffsetPreview, setShowOffsetPreview] = useState(true); // Controls visibility of the offset mesh preview
   
-  // Modified support geometries (after cavity subtraction)
-  // Map from support ID to modified BufferGeometry
-  const [modifiedSupportGeometries, setModifiedSupportGeometries] = useState<Map<string, THREE.BufferGeometry>>(new Map());
-  const [cavitySubtractionProcessing, setCavitySubtractionProcessing] = useState(false);
-  
   // Merged fixture mesh (baseplate + cut supports combined via CSG union)
   const [mergedFixtureMesh, setMergedFixtureMesh] = useState<THREE.Mesh | null>(null);
-  
-  // Modified baseplate geometry with holes cut out (for immediate visual feedback)
-  const [baseplateWithHoles, setBaseplateWithHoles] = useState<THREE.BufferGeometry | null>(null);
-  const [holeCSGProcessing, setHoleCSGProcessing] = useState(false);
-  // Flag to trigger CSG update (only when hole editing ends or hole is placed)
-  const [holeCSGTrigger, setHoleCSGTrigger] = useState(0);
-  // Cache original baseplate geometry for CSG operations
-  // This is needed because when baseplateWithHoles exists, the original BasePlate is hidden
-  // and basePlateMeshRef points to the CSG result mesh, not the original
-  const originalBaseplateGeoRef = useRef<THREE.BufferGeometry | null>(null);
-  // Ref to track latest mountingHoles for CSG effect (avoids stale closure)
-  const mountingHolesRef = useRef(mountingHoles);
-  mountingHolesRef.current = mountingHoles;
-  
-  // Support editing ref (kept for cleanup in event handlers)
-  const editingSupportRef = useRef<AnySupport | null>(null);
   
   // Live transform state - when pivot controls are active, this tracks the model's live position/bounds
   const [liveTransform, setLiveTransform] = useState<{
@@ -444,114 +438,6 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   
   // Track whether we're in the process of closing (to ignore spurious transforms)
   const pivotClosingRef = useRef(false);
-
-  // Supports stay fixed - no live position tracking needed
-  // Calculate all support footprint points for convex hull calculation
-  // Use a ref to cache the previous result and avoid recreating the array
-  const prevSupportHullPointsRef = useRef<Array<{x: number; z: number}>>([]);
-  const supportHullPoints = useMemo(() => {
-    const points: Array<{x: number; z: number}> = [];
-    for (const support of supports) {
-      const footprintPoints = getSupportFootprintPoints(support);
-      points.push(...footprintPoints);
-    }
-    
-    // Check if points are the same as before to avoid unnecessary updates
-    const prev = prevSupportHullPointsRef.current;
-    if (prev.length === points.length) {
-      let same = true;
-      for (let i = 0; i < points.length && same; i++) {
-        if (Math.abs(prev[i].x - points[i].x) > 0.001 || Math.abs(prev[i].z - points[i].z) > 0.001) {
-          same = false;
-        }
-      }
-      if (same) return prev; // Return the cached array to avoid triggering downstream updates
-    }
-    
-    prevSupportHullPointsRef.current = points;
-    return points;
-  }, [supports]);
-
-  // Calculate label footprint points for baseplate expansion
-  // Labels need the baseplate to extend underneath them
-  const prevLabelHullPointsRef = useRef<Array<{x: number; z: number}>>([]);
-  const labelHullPoints = useMemo(() => {
-    const points: Array<{x: number; z: number}> = [];
-    // Add margin to label footprint (same as FILLET_RADIUS used for supports)
-    const LABEL_MARGIN = 2.0;
-    
-    for (const label of labels) {
-      // Use actual computed bounds from rendered geometry if available,
-      // otherwise fall back to estimates
-      let textWidth: number;
-      let textHeight: number;
-      
-      if (label.computedWidth !== undefined && label.computedHeight !== undefined) {
-        // Use actual computed dimensions from LabelMesh
-        textWidth = label.computedWidth;
-        textHeight = label.computedHeight;
-      } else {
-        // Fall back to estimates until geometry is rendered
-        const charWidthFactor = 0.65;
-        textWidth = label.text.length * label.fontSize * charWidthFactor;
-        textHeight = label.fontSize * 0.8;
-      }
-      
-      const pos = label.position;
-      // Add margin to match support fillet margin for consistent baseplate extension
-      
-      // Get label's rotation around Y axis (which is Z rotation when label is flat)
-      // Label lies flat with X rotation of -PI/2, so its "spin" is stored in rotation.z
-      const rot = label.rotation;
-      const rotationAngle = typeof rot === 'object' ? ((rot as any).z || 0) : 0;
-      
-      // Label lies flat with rotation.x = -PI/2, which flips the Y axis:
-      // - Text width runs along world X
-      // - Text height (font size) runs along world -Z (inverted)
-      // Add LABEL_MARGIN to dimensions (same as supports use FILLET_RADIUS)
-      const halfW = textWidth / 2 + LABEL_MARGIN;
-      const halfH = textHeight / 2 + LABEL_MARGIN;
-      
-      // Define corner points in the world XZ plane (accounting for the Y flip)
-      // In local label space: +localY (font height "up") maps to world -Z
-      const localCorners = [
-        { x: -halfW, z:  halfH },  // local bottom-left  → world: -X, +Z (front-left)
-        { x:  halfW, z:  halfH },  // local bottom-right → world: +X, +Z (front-right)  
-        { x:  halfW, z: -halfH },  // local top-right    → world: +X, -Z (back-right)
-        { x: -halfW, z: -halfH }   // local top-left     → world: -X, -Z (back-left)
-      ];
-      
-      // Rotate corners and translate to world position
-      // Use same rotation formula as supports (Three.js Y-rotation)
-      const cos = Math.cos(rotationAngle);
-      const sin = Math.sin(rotationAngle);
-      for (const corner of localCorners) {
-        // Three.js Y-rotation: x' = x*cos + z*sin, z' = -x*sin + z*cos
-        const rx = corner.x * cos + corner.z * sin;
-        const rz = -corner.x * sin + corner.z * cos;
-        // Translate to world position
-        points.push({
-          x: (pos as any).x + rx,
-          z: (pos as any).z + rz
-        });
-      }
-    }
-    
-    // Check if points are the same as before
-    const prev = prevLabelHullPointsRef.current;
-    if (prev.length === points.length) {
-      let same = true;
-      for (let i = 0; i < points.length && same; i++) {
-        if (Math.abs(prev[i].x - points[i].x) > 0.001 || Math.abs(prev[i].z - points[i].z) > 0.001) {
-          same = false;
-        }
-      }
-      if (same) return prev;
-    }
-    
-    prevLabelHullPointsRef.current = points;
-    return points;
-  }, [labels]);
 
   // Calculate clamp support footprint points for convex hull calculation
   const prevClampSupportHullPointsRef = useRef<Array<{x: number; z: number}>>([]);
