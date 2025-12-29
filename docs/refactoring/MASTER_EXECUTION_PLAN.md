@@ -304,7 +304,7 @@ git checkout -b refactor/phase-N-name  # Start fresh
 | 3 | ✅ Complete | Dec 29, 2025 | Dec 29, 2025 | Commit `24e501a` |
 | 4 | ✅ Complete | Dec 29, 2025 | Dec 30, 2025 | Commits `4abeb1e`, `842bbb2`, `91e80c7` |
 | 5 | ✅ Complete | Dec 30, 2025 | Dec 29, 2025 | 22 hooks extracted, 62% reduction (6163→2339 lines) |
-| 6 | ✅ 6.1-6.2 Complete | Dec 29, 2025 | Dec 29, 2025 | Monorepo structure + cad-core package |
+| 6 | ✅ 6.1-6.3 Complete | Dec 29, 2025 | Dec 29, 2025 | Monorepo structure + cad-core + cad-ui packages |
 
 ### Phase 5 Completion Summary ✅
 
@@ -393,14 +393,17 @@ git checkout -b refactor/phase-N-name  # Start fresh
 
 **Result:** 3DScene.tsx reduced from 6,163 to 2,339 lines (62% reduction)
 
-**Phase 6:** ✅ Phase 6.1-6.2 Complete (Package Extraction)
+**Phase 6:** ✅ Phase 6.1-6.3 Complete (Package Extraction)
 - [x] 6.1: Setup monorepo structure (`packages/cad-core`, `packages/cad-ui`)
 - [x] 6.2: Extract @rapidtool/cad-core package
   - [x] Transform system → `packages/cad-core/src/transform/`
   - [x] CSG Engine → `packages/cad-core/src/csg/`
   - [x] Transform utilities → `packages/cad-core/src/utils/`
   - [x] CAD operations → `packages/cad-core/src/cad/`
-- [ ] 6.3: Extract @rapidtool/cad-ui package (placeholder created)
+- [x] 6.3: Extract @rapidtool/cad-ui package
+  - [x] ViewCube component → `packages/cad-ui/src/viewport/`
+  - [x] ScalableGrid component → `packages/cad-ui/src/viewport/`
+  - [x] Viewport types (BoundsSummary, ViewOrientation, GridConfig)
 - [ ] 6.4: Update app imports to use @rapidtool/cad-core
 - [x] 6.5: Documentation (README.md for both packages)
 
