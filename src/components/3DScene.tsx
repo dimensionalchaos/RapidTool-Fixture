@@ -337,48 +337,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     modelMeshRefs,
   });
   
-  // Multi-section selection coordination from hook
-  useMultiSectionSelection({
-    basePlate,
-    selectedBasePlateSectionId,
-    setSelectedBasePlateSectionId,
-    waitingForSectionSelection,
-    setWaitingForSectionSelection,
-    placing,
-    setPlacing,
-    waitingForClampSectionSelection,
-    setWaitingForClampSectionSelection,
-    clampPlacementMode,
-    setClampPlacementMode,
-    partSilhouetteRef,
-    DEBUG_SHOW_CLAMP_SILHOUETTE,
-    setDebugClampSilhouette,
-    waitingForLabelSectionSelection,
-    setWaitingForLabelSectionSelection,
-    pendingLabelConfig,
-    setPendingLabelConfig,
-    waitingForHoleSectionSelection,
-    setWaitingForHoleSectionSelection,
-    pendingHoleConfig,
-    setPendingHoleConfig,
-    setHolePlacementMode,
-    setOrbitControlsEnabled,
-    currentOrientation,
-    setCurrentOrientation,
-    prevOrientationRef,
-    updateCamera,
-    modelBounds,
-    importedParts,
-    modelMeshRefs,
-    baseTopY,
-    onPartSelected,
-    onSupportSelect,
-    setSelectedClampId,
-    gl,
-    camera,
-    scene,
-    raycasterRef,
-  });
+  // Note: useMultiSectionSelection hook is called after updateCamera is defined (below)
   
   // Combined state for all drag operations
   const [isDraggingAnyItem, setIsDraggingAnyItem] = useState(false);
@@ -557,6 +516,50 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       c.update();
     }
   }, [camera, size.width, size.height]);
+
+  // Multi-section selection coordination from hook
+  // NOTE: Must be called after updateCamera is defined
+  useMultiSectionSelection({
+    basePlate,
+    selectedBasePlateSectionId,
+    setSelectedBasePlateSectionId,
+    waitingForSectionSelection,
+    setWaitingForSectionSelection,
+    placing,
+    setPlacing,
+    waitingForClampSectionSelection,
+    setWaitingForClampSectionSelection,
+    clampPlacementMode,
+    setClampPlacementMode,
+    partSilhouetteRef,
+    DEBUG_SHOW_CLAMP_SILHOUETTE,
+    setDebugClampSilhouette,
+    waitingForLabelSectionSelection,
+    setWaitingForLabelSectionSelection,
+    pendingLabelConfig,
+    setPendingLabelConfig,
+    waitingForHoleSectionSelection,
+    setWaitingForHoleSectionSelection,
+    pendingHoleConfig,
+    setPendingHoleConfig,
+    setHolePlacementMode,
+    setOrbitControlsEnabled,
+    currentOrientation,
+    setCurrentOrientation,
+    prevOrientationRef,
+    updateCamera,
+    modelBounds,
+    importedParts,
+    modelMeshRefs,
+    baseTopY,
+    onPartSelected,
+    onSupportSelect,
+    setSelectedClampId,
+    gl,
+    camera,
+    scene,
+    raycasterRef,
+  });
 
   // Track previous orientation to detect explicit orientation changes
   const lastOrientationRef = useRef<ViewOrientation>(currentOrientation);
