@@ -53,13 +53,16 @@ import {
   LabelsRenderer,
   SupportsRenderer,
   SceneLighting,
-  // State Hooks (for future use)
+  // State Hooks
   useSupportState,
   useClampState,
   useLabelState,
   useHoleState,
   useBaseplateState,
   useSceneState,
+  usePartManagement,
+  useCameraControls,
+  useModelTransform,
   // Container
   Scene3DProvider,
   useScene3DContext,
@@ -160,157 +163,45 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     isMultiSectionBaseplate,
   } = useBaseplateState();
   
-  // Store refs for each model mesh by part ID
-  const modelMeshRefs = useRef<Map<string, React.RefObject<THREE.Mesh>>>(new Map());
-  // Store initial offsets for each part (persists across renders to prevent position reset)
-  const partInitialOffsetsRef = useRef<Map<string, THREE.Vector3>>(new Map());
-  const multiSectionBasePlateGroupRef = useRef<THREE.Group>(null);
-  const [modelDimensions, setModelDimensions] = useState<{ x?: number; y?: number; z?: number } | undefined>();
+  // Part management state from hook
+  const {
+    modelMeshRefs,
+    partInitialOffsetsRef,
+    modelDimensions,
+    setModelDimensions,
+    modelColors,
+    setModelColors,
+    modelBounds,
+    setModelBounds,
+    partBounds,
+    setPartBounds,
+    getPartMeshRef,
+    recalculateCombinedBounds,
+    firstPart,
+  } = usePartManagement({
+    importedParts,
+    onModelColorAssigned,
+  });
+  
+  // Camera state (will be extracted to useCameraControls in next phase)
   const [orbitControlsEnabled, setOrbitControlsEnabled] = useState(true);
-  const [modelColors, setModelColors] = useState<Map<string, string>>(new Map());
-  const [modelBounds, setModelBounds] = useState<BoundsSummary | null>(null);
-  // Store bounds for each part for combined bounding box calculation
-  const [partBounds, setPartBounds] = useState<Map<string, BoundsSummary>>(new Map());
   const [currentOrientation, setCurrentOrientation] = useState<ViewOrientation>('iso');
   const prevOrientationRef = useRef<ViewOrientation>('iso');
-  // Track whether to update camera on next bounds change (only for first part or explicit reframe)
   const shouldReframeCameraRef = useRef<boolean>(true);
-
-  // Local state to track the selected part's transform (for property panel sync and grid positioning)
+  
+  // Model transform state (will be extracted to useModelTransform in next phase)
   const [modelTransform, setModelTransform] = useState({
     position: new THREE.Vector3(),
     rotation: new THREE.Euler(),
     scale: new THREE.Vector3(1, 1, 1),
   });
-
-  // Get or create a ref for a part
-  const getPartMeshRef = useCallback((partId: string) => {
-    if (!modelMeshRefs.current.has(partId)) {
-      modelMeshRefs.current.set(partId, React.createRef<THREE.Mesh>());
-    }
-    return modelMeshRefs.current.get(partId)!;
-  }, []);
+  
+  // Multi-section baseplate group ref (not part of usePartManagement as it's baseplate-specific)
+  const multiSectionBasePlateGroupRef = useRef<THREE.Group>(null);
 
   // Get the currently selected part's mesh ref
   const selectedPartMeshRef = selectedPartId ? getPartMeshRef(selectedPartId) : null;
 
-  // Get the first part (for backward compatibility with single-file operations)
-  const firstPart = importedParts.length > 0 ? importedParts[0] : null;
-
-  // Function to recalculate combined bounds from all mesh world positions
-  const recalculateCombinedBounds = useCallback(() => {
-    if (importedParts.length === 0) {
-      setModelBounds(null);
-      return;
-    }
-
-    const combinedBox = new THREE.Box3();
-    let hasValidBounds = false;
-    let firstUnitsScale = 1;
-
-    // Calculate bounds from actual mesh world positions
-    importedParts.forEach((part, index) => {
-      const meshRef = modelMeshRefs.current.get(part.id);
-      const mesh = meshRef?.current;
-      if (mesh) {
-        mesh.updateMatrixWorld(true);
-        const box = new THREE.Box3().setFromObject(mesh);
-        if (!box.isEmpty()) {
-          combinedBox.union(box);
-          hasValidBounds = true;
-          if (index === 0) {
-            firstUnitsScale = partBounds.get(part.id)?.unitsScale ?? 1;
-          }
-        }
-      }
-    });
-
-    if (!hasValidBounds || combinedBox.isEmpty()) {
-      // Fall back to stored partBounds if meshes not ready
-      if (partBounds.size === 0) {
-        setModelBounds(null);
-        return;
-      }
-      partBounds.forEach((bounds) => {
-        combinedBox.expandByPoint(bounds.min);
-        combinedBox.expandByPoint(bounds.max);
-      });
-      const firstPartBounds = Array.from(partBounds.values())[0];
-      firstUnitsScale = firstPartBounds?.unitsScale ?? 1;
-    }
-
-    if (combinedBox.isEmpty()) {
-      setModelBounds(null);
-      return;
-    }
-
-    const center = combinedBox.getCenter(new THREE.Vector3());
-    const combinedSize = combinedBox.getSize(new THREE.Vector3());
-    const sphere = combinedBox.getBoundingSphere(new THREE.Sphere());
-
-    setModelBounds({
-      min: combinedBox.min.clone(),
-      max: combinedBox.max.clone(),
-      center,
-      size: combinedSize,
-      radius: sphere.radius,
-      unitsScale: firstUnitsScale,
-    });
-  }, [importedParts, partBounds]);
-
-  // Calculate combined bounds from all parts (initial load and partBounds changes)
-  useEffect(() => {
-    recalculateCombinedBounds();
-  }, [partBounds, recalculateCombinedBounds]);
-
-  // Recalculate bounds when any part is transformed
-  useEffect(() => {
-    const handleTransformUpdated = () => {
-      // Debounce slightly to batch rapid updates
-      recalculateCombinedBounds();
-    };
-
-    window.addEventListener('model-transform-updated', handleTransformUpdated as EventListener);
-    return () => window.removeEventListener('model-transform-updated', handleTransformUpdated as EventListener);
-  }, [recalculateCombinedBounds]);
-
-  // Clean up stale partBounds entries when parts are removed
-  useEffect(() => {
-    const currentPartIds = new Set(importedParts.map(p => p.id));
-    setPartBounds(prev => {
-      const newMap = new Map(prev);
-      let changed = false;
-      for (const [partId] of newMap) {
-        if (!currentPartIds.has(partId)) {
-          newMap.delete(partId);
-          changed = true;
-        }
-      }
-      return changed ? newMap : prev;
-    });
-    
-    // Also clean up mesh refs and initial offsets
-    for (const [partId] of modelMeshRefs.current) {
-      if (!currentPartIds.has(partId)) {
-        modelMeshRefs.current.delete(partId);
-      }
-    }
-    for (const [partId] of partInitialOffsetsRef.current) {
-      if (!currentPartIds.has(partId)) {
-        partInitialOffsetsRef.current.delete(partId);
-      }
-    }
-  }, [importedParts]);
-
-  // Report model colors to parent when they change
-  useEffect(() => {
-    if (onModelColorAssigned) {
-      modelColors.forEach((color, modelId) => {
-        onModelColorAssigned(modelId, color);
-      });
-    }
-  }, [modelColors, onModelColorAssigned]);
-  
   // ========================================================================
   // State Hooks - Modular state management for different features
   // ========================================================================

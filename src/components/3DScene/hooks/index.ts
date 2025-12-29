@@ -31,3 +31,12 @@ export type {
   LiveTransformState, 
   UseSceneStateReturn 
 } from './useSceneState';
+
+export { usePartManagement } from './usePartManagement';
+export type { UsePartManagementProps, UsePartManagementReturn } from './usePartManagement';
+
+export { useCameraControls } from './useCameraControls';
+export type { ViewOrientation as CameraViewOrientation, UseCameraControlsProps, UseCameraControlsReturn } from './useCameraControls';
+
+export { useModelTransform } from './useModelTransform';
+export type { LiveTransformData, UseModelTransformProps, UseModelTransformReturn } from './useModelTransform';
