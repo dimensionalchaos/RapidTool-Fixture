@@ -58,3 +58,6 @@ export type { UseHoleHandlersParams } from './useHoleHandlers';
 
 export { useClampHandlers } from './useClampHandlers';
 export type { UseClampHandlersParams } from './useClampHandlers';
+
+export { useLabelHandlers } from './useLabelHandlers';
+export type { UseLabelHandlersParams } from './useLabelHandlers';
