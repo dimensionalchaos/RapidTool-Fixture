@@ -189,11 +189,19 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   const prevOrientationRef = useRef<ViewOrientation>('iso');
   const shouldReframeCameraRef = useRef<boolean>(true);
   
-  // Model transform state (will be extracted to useModelTransform in next phase)
-  const [modelTransform, setModelTransform] = useState({
-    position: new THREE.Vector3(),
-    rotation: new THREE.Euler(),
-    scale: new THREE.Vector3(1, 1, 1),
+  // Model transform state from hook
+  const {
+    modelTransform,
+    setModelTransform,
+    liveTransform,
+    setLiveTransform,
+    pivotClosingRef,
+    handleLiveTransformChange,
+    livePositionDelta,
+  } = useModelTransform({
+    selectedPartId,
+    basePlate,
+    modelMeshRefs,
   });
   
   // Multi-section baseplate group ref (not part of usePartManagement as it's baseplate-specific)
@@ -319,16 +327,6 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   
   // Merged fixture mesh (baseplate + cut supports combined via CSG union)
   const [mergedFixtureMesh, setMergedFixtureMesh] = useState<THREE.Mesh | null>(null);
-  
-  // Live transform state - when pivot controls are active, this tracks the model's live position/bounds
-  const [liveTransform, setLiveTransform] = useState<{
-    position: THREE.Vector3;
-    rotation: THREE.Euler;
-    bounds: THREE.Box3;
-  } | null>(null);
-  
-  // Track whether we're in the process of closing (to ignore spurious transforms)
-  const pivotClosingRef = useRef(false);
 
   // Calculate clamp support footprint points for convex hull calculation
   const prevClampSupportHullPointsRef = useRef<Array<{x: number; z: number}>>([]);
@@ -456,76 +454,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
 
   // Supports stay fixed in world space - they don't move when model moves
   // The baseplate will expand to include both the model and the supports
-  
-  // Handle live transform from PivotControls
-  // Supports stay fixed, but we track the transform for baseplate live updates
-  const handleLiveTransformChange = useCallback((transform: { position: THREE.Vector3; rotation: THREE.Euler; bounds: THREE.Box3; pivotClosed?: boolean } | null) => {
-    if (transform === null) {
-      setLiveTransform(null);
-      pivotClosingRef.current = false;
-      return;
-    }
-    
-    // Ignore transforms that come in while we're closing
-    if (pivotClosingRef.current && !transform.pivotClosed) {
-      return;
-    }
-    
-    if (transform.pivotClosed) {
-      // Mark that we're closing - ignore any further transforms until cleared
-      pivotClosingRef.current = true;
-      
-      // Emit the transform update first, then schedule collision check
-      // The collision check needs to happen AFTER SelectableTransformControls finishes
-      if (selectedPartId) {
-        const partRef = modelMeshRefs.current.get(selectedPartId);
-        if (partRef?.current) {
-          partRef.current.updateMatrixWorld(true);
-          partRef.current.getWorldPosition(tempVec);
-          
-          // Emit transform update immediately
-          window.dispatchEvent(new CustomEvent('model-transform-updated', {
-            detail: {
-              position: tempVec.clone(),
-              rotation: partRef.current.rotation.clone(),
-              partId: selectedPartId,
-            },
-          }));
-          
-          // Schedule collision check for after everything settles
-          // Use setTimeout to ensure it runs after the current call stack
-          if (basePlate) {
-            const partId = selectedPartId;
-            setTimeout(() => {
-              window.dispatchEvent(new CustomEvent('check-baseplate-collision-delayed', {
-                detail: { partId }
-              }));
-            }, 50); // Small delay to ensure all transforms are baked
-          }
-        }
-      }
-      
-      // Clear liveTransform after a short delay to allow geometry to update
-      requestAnimationFrame(() => {
-        setLiveTransform(null);
-        pivotClosingRef.current = false;
-      });
-      return;
-    }
-    
-    setLiveTransform(transform);
-  }, [basePlate, selectedPartId]);
-  
-  // Compute live position delta from the pivot transform for baseplate
-  const livePositionDelta = useMemo(() => {
-    if (!liveTransform) return null;
-    
-    // liveTransform.position is already the delta from pivot origin
-    return {
-      x: liveTransform.position.x,
-      z: liveTransform.position.z,
-    };
-  }, [liveTransform]);
+  // Note: handleLiveTransformChange and livePositionDelta come from useModelTransform hook
 
   const updateCamera = useCallback((orientation: ViewOrientation, bounds: BoundsSummary | null) => {
     const orthoCam = camera as THREE.OrthographicCamera;
