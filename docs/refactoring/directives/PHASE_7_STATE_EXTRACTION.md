@@ -976,24 +976,51 @@ const handleSelect = (id: string) => {
 
 ### AppShell.tsx State (47 useState calls)
 
-#### Selection State → `selectionStore` (cad-ui)
+#### Selection State → `selectionStore` (cad-ui) **GENERIC**
 
-| Current State | Type | → Store Property |
-|---------------|------|------------------|
-| `selectedPartId` | `string \| null` | `selectionStore.part` |
-| `selectedSupportId` | `string \| null` | `selectionStore.support` |
-| `selectedClampId` | `string \| null` | `selectionStore.clamp` |
-| `selectedLabelId` | `string \| null` | `selectionStore.label` |
-| `selectedHoleId` | `string \| null` | `selectionStore.hole` |
-| `selectedBasePlateSectionId` | `string \| null` | `selectionStore.baseplate` |
+The generic `selectionStore` uses `{ category, id }` pattern instead of separate fields:
 
-#### Workflow State → `workflowStore` (cad-ui)
+| Current State | Type | → Store Action |
+|---------------|------|----------------|
+| `selectedPartId` | `string \| null` | `selectionStore.select('part', id)` |
+| `selectedSupportId` | `string \| null` | `selectionStore.select('support', id)` |
+| `selectedClampId` | `string \| null` | `selectionStore.select('clamp', id)` |
+| `selectedLabelId` | `string \| null` | `selectionStore.select('label', id)` |
+| `selectedHoleId` | `string \| null` | `selectionStore.select('hole', id)` |
+| `selectedBasePlateSectionId` | `string \| null` | `selectionStore.select('baseplate', id)` |
+
+**Usage:**
+```typescript
+// Get selected item (any category)
+const selected = useSelectionStore(state => state.selected);
+// selected = { category: 'clamp', id: 'clamp-123' } or null
+
+// Select an item
+useSelectionStore.getState().select('part', 'part-456');
+
+// Check if specific item is selected
+const isSelected = useSelectionStore(state => state.isSelected('part', 'part-456'));
+```
+
+#### Workflow State → `workflowStore` (cad-ui) **GENERIC**
 
 | Current State | Type | → Store Property |
 |---------------|------|------------------|
 | `activeStep` | `WorkflowStep` | `workflowStore.activeStep` |
 | `completedSteps` | `WorkflowStep[]` | `workflowStore.completedSteps` |
 | `skippedSteps` | `WorkflowStep[]` | `workflowStore.skippedSteps` |
+
+**Initialization (in AppShell or App.tsx):**
+```typescript
+// Configure workflow on app start
+useEffect(() => {
+  useWorkflowStore.getState().configure({
+    steps: ['import', 'baseplate', 'supports', 'clamps', 'labels', 'holes', 'cavity', 'export'],
+    initialStep: 'import',
+    strictOrder: false
+  });
+}, []);
+```
 
 #### UI State → `uiStore` (cad-ui)
 
@@ -1003,7 +1030,7 @@ const handleSelect = (id: string) => {
 | `isPropertiesCollapsed` | `boolean` | `uiStore.propertiesPanelCollapsed` |
 | `baseplateVisible` | `boolean` | `uiStore.baseplateVisible` |
 
-#### Entity Data → `fixtureStore` (cad-ui) **NEW**
+#### Entity Data → `fixtureStore` (src/stores) **APP-SPECIFIC**
 
 | Current State | Type | → Store Property |
 |---------------|------|------------------|
@@ -1017,28 +1044,28 @@ const handleSelect = (id: string) => {
 | `currentBaseplate` | `BaseplateConfig \| null` | `fixtureStore.baseplate` |
 | `drawnBaseplateSections` | `Section[]` | `fixtureStore.baseplateSections` |
 
-#### Baseplate Drawing State → `baseplateDrawingStore` (cad-ui) **NEW**
+#### Baseplate Drawing State → `placementStore.baseplate` (src/stores) **APP-SPECIFIC**
 
 | Current State | Type | → Store Property |
 |---------------|------|------------------|
 | `isBaseplateDrawingMode` | `boolean` | `baseplateDrawingStore.isDrawingMode` |
 | `currentBaseplateParams` | `{ padding, height }` | `baseplateDrawingStore.params` |
 
-#### Hole Placement State → `holePlacementStore` (cad-ui) **NEW**
+#### Hole Placement State → `placementStore.hole` (src/stores) **APP-SPECIFIC**
 
 | Current State | Type | → Store Property |
 |---------------|------|------------------|
 | `isHolePlacementMode` | `boolean` | `holePlacementStore.isPlacementMode` |
 | `pendingHoleConfig` | `HoleConfig \| null` | `holePlacementStore.pendingConfig` |
 
-#### Support Placement State → `supportPlacementStore` (cad-ui) **NEW**
+#### Support Placement State → `placementStore.support` (src/stores) **APP-SPECIFIC**
 
 | Current State | Type | → Store Property |
 |---------------|------|------------------|
 | `isPlacementMode` | `boolean` | `supportPlacementStore.isPlacementMode` |
 | `selectedSupportType` | `SupportType` | `supportPlacementStore.selectedType` |
 
-#### Cavity State → `cavityStore` (cad-ui) **NEW**
+#### Cavity State → `cavityStore` (src/stores) **APP-SPECIFIC**
 
 | Current State | Type | → Store Property |
 |---------------|------|------------------|
@@ -1049,7 +1076,7 @@ const handleSelect = (id: string) => {
 | `hasCavityPreview` | `boolean` | `cavityStore.hasPreview` |
 | `isCavityApplied` | `boolean` | `cavityStore.isApplied` |
 
-#### Processing/Loading State → `processingStore` (cad-ui) **NEW**
+#### Processing/Loading State → `processingStore` (src/stores) **APP-SPECIFIC**
 
 | Current State | Type | → Store Property |
 |---------------|------|------------------|
@@ -1063,14 +1090,14 @@ const handleSelect = (id: string) => {
 | `processingResult` | `ProcessingResult \| null` | `processingStore.result` |
 | `isExporting` | `boolean` | `processingStore.isExporting` |
 
-#### Dialog State → `dialogStore` (cad-ui) **NEW**
+#### Dialog State → `dialogStore` (src/stores) **APP-SPECIFIC**
 
 | Current State | Type | → Store Property |
 |---------------|------|------------------|
 | `isUnitsDialogOpen` | `boolean` | `dialogStore.unitsDialogOpen` |
 | `isOptimizationDialogOpen` | `boolean` | `dialogStore.optimizationDialogOpen` |
 
-#### Undo/Redo State → `historyStore` (cad-ui) **NEW**
+#### Undo/Redo State → `historyStore` (cad-ui) **GENERIC**
 
 | Current State | Type | → Store Property |
 |---------------|------|------------------|
@@ -1081,7 +1108,7 @@ const handleSelect = (id: string) => {
 
 ### 3DScene.tsx State (12 useState calls)
 
-#### Scene-Specific State → `sceneStore` (cad-ui) **NEW**
+#### Scene-Specific State → Keep local in 3DScene
 
 | Current State | Type | → Store Property |
 |---------------|------|------------------|
@@ -1089,7 +1116,7 @@ const handleSelect = (id: string) => {
 | `currentOrientation` | `ViewOrientation` | `sceneStore.currentOrientation` |
 | `isDraggingAnyItem` | `boolean` | `sceneStore.isDragging` |
 
-#### Preview State → `previewStore` (cad-ui) **NEW**
+#### Preview State → Keep local in 3DScene or use hooks
 
 | Current State | Type | → Store Property |
 |---------------|------|------------------|
