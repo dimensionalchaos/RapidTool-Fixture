@@ -35,6 +35,12 @@ import {
   usePropertiesPanelCollapsed,
 } from "@/hooks/useUI";
 
+// Dialog hooks (Phase 7f migration)
+import {
+  useUnitsDialog,
+  useOptimizationDialog,
+} from "@/hooks/useDialogs";
+
 import PartPropertiesAccordion from "@/components/PartPropertiesAccordion";
 import ContextOptionsPanel, { WorkflowStep, WORKFLOW_STEPS } from "@/components/ContextOptionsPanel";
 import {
@@ -147,8 +153,9 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
     const [baseplateVisible, setBaseplateVisible] = useState(true);
     const [isProcessing, setIsProcessing] = useState(false);
     const [fileError, setFileError] = useState<string | null>(null);
-    const [isUnitsDialogOpen, setIsUnitsDialogOpen] = useState(false);
-    const [isOptimizationDialogOpen, setIsOptimizationDialogOpen] = useState(false);
+    // Dialog states (Phase 7f - now from Zustand store)
+    const [isUnitsDialogOpen, setIsUnitsDialogOpen] = useUnitsDialog();
+    const [isOptimizationDialogOpen, setIsOptimizationDialogOpen] = useOptimizationDialog();
     const [meshAnalysis, setMeshAnalysis] = useState<MeshAnalysisResult | null>(null);
     const [meshProgress, setMeshProgress] = useState<MeshProcessingProgress | null>(null);
     const [isMeshProcessing, setIsMeshProcessing] = useState(false);
