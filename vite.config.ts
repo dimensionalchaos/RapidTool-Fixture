@@ -61,7 +61,8 @@ export default defineConfig(({ mode }) => ({
         },
       },
     },
-    // Increase chunk size warning limit since we're intentionally creating larger vendor chunks
-    chunkSizeWarningLimit: 600,
+    // Increase chunk size warning limit - THREE.js is inherently large (~1MB)
+    // and cannot be split further. This is expected for 3D applications.
+    chunkSizeWarningLimit: 1100,
   },
 }));
