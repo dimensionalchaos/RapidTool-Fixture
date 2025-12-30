@@ -264,6 +264,106 @@ export function checkGeometryGrowth(threshold: number = 10): boolean {
 }
 
 /**
+ * Test session reset cleanup
+ * Takes a snapshot, triggers reset, waits for GC, then compares.
+ * Call from console: window.__memoryMonitor.testSessionReset()
+ */
+export async function testSessionReset(): Promise<void> {
+  console.log('[MemoryMonitor] Starting session reset test...');
+  
+  // Take "before" snapshot
+  const before = takeSnapshot('Before Session Reset');
+  console.log('Before reset:');
+  console.log(`  JS Heap: ${before.jsHeap?.usedMB ?? 'N/A'} MB`);
+  console.log(`  Geometries: ${before.threeResources?.geometries ?? 'N/A'}`);
+  console.log(`  Textures: ${before.threeResources?.textures ?? 'N/A'}`);
+  
+  // Trigger session reset
+  window.dispatchEvent(new CustomEvent('viewer-reset'));
+  window.dispatchEvent(new CustomEvent('session-reset'));
+  window.dispatchEvent(new Event('supports-cancel-placement'));
+  
+  // Wait for React to clean up
+  await new Promise(resolve => setTimeout(resolve, 500));
+  
+  // Try to trigger garbage collection (only works in Chrome with --js-flags="--expose-gc")
+  if ((window as any).gc) {
+    (window as any).gc();
+    console.log('[MemoryMonitor] Forced GC');
+  }
+  
+  // Wait for GC
+  await new Promise(resolve => setTimeout(resolve, 2000));
+  
+  // Take "after" snapshot
+  const after = takeSnapshot('After Session Reset');
+  console.log('After reset (2s delay):');
+  console.log(`  JS Heap: ${after.jsHeap?.usedMB ?? 'N/A'} MB`);
+  console.log(`  Geometries: ${after.threeResources?.geometries ?? 'N/A'}`);
+  console.log(`  Textures: ${after.threeResources?.textures ?? 'N/A'}`);
+  
+  // Compare
+  const delta = compareSnapshots('Before Session Reset', 'After Session Reset');
+  if (delta) {
+    console.log('Delta:');
+    console.log(`  JS Heap: ${delta.jsHeapDeltaMB > 0 ? '+' : ''}${delta.jsHeapDeltaMB.toFixed(2)} MB`);
+    console.log(`  Geometries: ${delta.geometriesDelta > 0 ? '+' : ''}${delta.geometriesDelta}`);
+    console.log(`  Textures: ${delta.texturesDelta > 0 ? '+' : ''}${delta.texturesDelta}`);
+    
+    // Warn if resources weren't freed
+    if (delta.geometriesDelta > 0) {
+      console.warn(`[MemoryMonitor] WARNING: ${delta.geometriesDelta} geometries not freed after reset`);
+    }
+    if (delta.texturesDelta > 0) {
+      console.warn(`[MemoryMonitor] WARNING: ${delta.texturesDelta} textures not freed after reset`);
+    }
+    if (delta.geometriesDelta <= 0 && delta.texturesDelta <= 0) {
+      console.log('[MemoryMonitor] ✓ Resources appear to be properly cleaned up');
+    }
+  }
+}
+
+/**
+ * Print a summary of memory usage over time
+ */
+export function printMemorySummary(): void {
+  if (snapshots.length < 2) {
+    console.log('[MemoryMonitor] Not enough snapshots to summarize');
+    return;
+  }
+  
+  console.group('[MemoryMonitor] Memory Summary');
+  
+  const first = snapshots[0];
+  const last = snapshots[snapshots.length - 1];
+  
+  console.log(`Time range: ${new Date(first.timestamp).toLocaleTimeString()} - ${new Date(last.timestamp).toLocaleTimeString()}`);
+  console.log(`Snapshots: ${snapshots.length}`);
+  
+  // Find peak memory
+  const peakHeap = snapshots.reduce((max, s) => 
+    Math.max(max, s.jsHeap?.usedMB ?? 0), 0);
+  const peakGeometries = snapshots.reduce((max, s) => 
+    Math.max(max, s.threeResources?.geometries ?? 0), 0);
+  
+  console.log(`Peak JS Heap: ${peakHeap.toFixed(2)} MB`);
+  console.log(`Peak Geometries: ${peakGeometries}`);
+  
+  // Current vs start
+  if (first.jsHeap && last.jsHeap) {
+    const heapGrowth = last.jsHeap.usedMB - first.jsHeap.usedMB;
+    console.log(`Heap growth from start: ${heapGrowth > 0 ? '+' : ''}${heapGrowth.toFixed(2)} MB`);
+  }
+  
+  if (first.threeResources && last.threeResources) {
+    const geoGrowth = last.threeResources.geometries - first.threeResources.geometries;
+    console.log(`Geometry growth from start: ${geoGrowth > 0 ? '+' : ''}${geoGrowth}`);
+  }
+  
+  console.groupEnd();
+}
+
+/**
  * Start periodic memory monitoring (for development)
  */
 let monitorInterval: ReturnType<typeof setInterval> | null = null;
@@ -305,7 +405,10 @@ if (typeof window !== 'undefined') {
     startPeriodicMonitoring,
     stopPeriodicMonitoring,
     checkGeometryGrowth,
+    testSessionReset,
+    printMemorySummary,
   };
   
   console.log('[MemoryMonitor] Debug commands available at window.__memoryMonitor');
+  console.log('[MemoryMonitor] Run window.__memoryMonitor.testSessionReset() to test cleanup');
 }
