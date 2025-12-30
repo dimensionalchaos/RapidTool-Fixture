@@ -31,7 +31,11 @@ import {
   repairMesh, 
   analyzeMesh, 
   laplacianSmooth, 
-  cleanupCSGResult 
+  cleanupCSGResult,
+  meshToSTL,
+  downloadFile,
+  generateExportFilename,
+  type ExportConfig,
 } from '@rapidtool/cad-core';
 import { LabelMesh, LabelTransformControls, LabelConfig } from '@/features/labels';
 import { ClampMesh, ClampTransformControls, ClampWithSupport, PlacedClamp, ClampModel, getClampById } from '@/features/clamps';
@@ -555,6 +559,9 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     setWaitingForLabelSectionSelection,
     pendingLabelConfig,
     setPendingLabelConfig,
+    setLabels,
+    setSelectedLabelId,
+    setItemBoundsUpdateTrigger,
     waitingForHoleSectionSelection,
     setWaitingForHoleSectionSelection,
     pendingHoleConfig,
@@ -734,6 +741,8 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     basePlate,
     baseTopY,
     baseplateWithHoles,
+    setBaseplateWithHoles,
+    setHoleCSGTrigger,
     basePlateMeshRef,
     modelMeshRefs,
     multiSectionBasePlateGroupRef,
@@ -1323,6 +1332,70 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     window.addEventListener('disable-orbit-controls', handleOrbitControlsToggle as EventListener);
     return () => window.removeEventListener('disable-orbit-controls', handleOrbitControlsToggle as EventListener);
   }, [setOrbitControlsEnabled]);
+
+  // Handle fixture export
+  React.useEffect(() => {
+    const handleExportFixture = async (e: CustomEvent) => {
+      const { config } = e.detail as { config: ExportConfig };
+      
+      if (!mergedFixtureMesh) {
+        console.error('[Export] No merged fixture mesh available');
+        window.dispatchEvent(new CustomEvent('export-complete', { 
+          detail: { success: false, error: 'No merged fixture available' } 
+        }));
+        return;
+      }
+
+      try {
+        const isMultiSection = basePlate?.type === 'multi-section';
+        const sections = basePlate?.sections || [];
+        
+        if (isMultiSection && config.splitParts && sections.length > 1) {
+          // Export parts individually for multi-section baseplate
+          // For now, we export the merged mesh - in future, we could split by section
+          // TODO: Implement proper section splitting when geometry is available per section
+          
+          // For now, export each section as the same merged mesh with different names
+          for (let i = 0; i < sections.length; i++) {
+            const filename = generateExportFilename({
+              filename: config.filename,
+              sectionNumber: i + 1,
+            }, config.format);
+            
+            const stlData = meshToSTL(mergedFixtureMesh, config.options);
+            downloadFile(stlData, filename, 'application/sla');
+            
+            // Small delay between downloads
+            await new Promise(resolve => setTimeout(resolve, 100));
+          }
+          
+          console.log(`[Export] Exported ${sections.length} section files`);
+        } else {
+          // Export as single file
+          const filename = generateExportFilename({
+            filename: config.filename,
+          }, config.format);
+          
+          const stlData = meshToSTL(mergedFixtureMesh, config.options);
+          downloadFile(stlData, filename, 'application/sla');
+          
+          console.log(`[Export] Exported single file: ${filename}`);
+        }
+        
+        window.dispatchEvent(new CustomEvent('export-complete', { 
+          detail: { success: true } 
+        }));
+      } catch (error) {
+        console.error('[Export] Failed:', error);
+        window.dispatchEvent(new CustomEvent('export-complete', { 
+          detail: { success: false, error: error instanceof Error ? error.message : 'Export failed' } 
+        }));
+      }
+    };
+
+    window.addEventListener('export-fixture', handleExportFixture as EventListener);
+    return () => window.removeEventListener('export-fixture', handleExportFixture as EventListener);
+  }, [mergedFixtureMesh, basePlate]);
 
   // Handle view reset events
   React.useEffect(() => {

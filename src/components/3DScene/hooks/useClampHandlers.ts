@@ -295,6 +295,8 @@ export function useClampHandlers({
       setClampPlacementMode({ active: false, clampModelId: null, clampCategory: null });
       partSilhouetteRef.current = null;
       setWaitingForClampSectionSelection(false);
+      // Clear selected baseplate section when cancelling placement
+      setSelectedBasePlateSectionId(null);
       // Clear debug silhouette visualization
       setDebugClampSilhouette(null);
     };

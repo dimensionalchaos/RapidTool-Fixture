@@ -250,6 +250,8 @@ export function useSupportHandlers({
       setPlacing({ active: false, type: null, initParams: {} });
       setOrbitControlsEnabled(true);
       setWaitingForSectionSelection(false);
+      // Clear selected baseplate section when cancelling placement
+      setSelectedBasePlateSectionId(null);
       // restore previous view
       setCurrentOrientation(prevOrientationRef.current);
       updateCamera(prevOrientationRef.current, modelBounds);

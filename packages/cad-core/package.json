@@ -14,6 +14,7 @@
   "peerDependencies": {
     "three": ">=0.160.0",
     "three-bvh-csg": "^0.0.17",
+    "three-stdlib": "^2.0.0",
     "manifold-3d": "^3.0.0"
   },
   "devDependencies": {
@@ -29,7 +30,8 @@
     "transform",
     "mesh",
     "stl",
-    "offset"
+    "offset",
+    "export"
   ],
   "license": "MIT"
 }

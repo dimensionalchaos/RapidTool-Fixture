@@ -65,6 +65,10 @@ interface UseMultiSectionSelectionParams {
   setWaitingForLabelSectionSelection: (waiting: boolean) => void;
   pendingLabelConfig: unknown | null;
   setPendingLabelConfig: (config: unknown | null) => void;
+  // Label state setters for direct placement
+  setLabels: React.Dispatch<React.SetStateAction<Array<unknown>>>;
+  setSelectedLabelId: (id: string | null) => void;
+  setItemBoundsUpdateTrigger: React.Dispatch<React.SetStateAction<number>>;
   
   // Hole placement waiting state
   waitingForHoleSectionSelection: boolean;
@@ -124,6 +128,9 @@ export function useMultiSectionSelection({
   setWaitingForLabelSectionSelection,
   pendingLabelConfig,
   setPendingLabelConfig,
+  setLabels,
+  setSelectedLabelId,
+  setItemBoundsUpdateTrigger,
   waitingForHoleSectionSelection,
   setWaitingForHoleSectionSelection,
   pendingHoleConfig,
@@ -192,6 +199,53 @@ export function useMultiSectionSelection({
     gl.domElement.addEventListener('click', handleCanvasClick);
     return () => gl.domElement.removeEventListener('click', handleCanvasClick);
   }, [waitingForSectionSelection, basePlate, gl, camera, scene, raycasterRef, setSelectedBasePlateSectionId]);
+
+  // =========================================================================
+  // DOM-level click handler for section selection during LABEL/HOLE placement
+  // This allows clicking through parts/supports/clamps to select baseplate sections
+  // =========================================================================
+  useEffect(() => {
+    if (!waitingForLabelSectionSelection && !waitingForHoleSectionSelection) return;
+
+    const handleCanvasClick = (event: MouseEvent) => {
+      if (basePlate?.type !== 'multi-section' || !basePlate.sections) return;
+
+      const rect = gl.domElement.getBoundingClientRect();
+      const mouse = new THREE.Vector2(
+        ((event.clientX - rect.left) / rect.width) * 2 - 1,
+        -((event.clientY - rect.top) / rect.height) * 2 + 1
+      );
+
+      raycasterRef.current.setFromCamera(mouse, camera);
+
+      // Get all baseplate section meshes by traversing the scene
+      const baseplateObjects: THREE.Object3D[] = [];
+      scene.traverse((obj) => {
+        if (obj.userData.isBaseplateSection) {
+          baseplateObjects.push(obj);
+        }
+      });
+
+      if (baseplateObjects.length > 0) {
+        // Raycast only against baseplate sections (ignoring parts/supports/clamps)
+        const baseplateIntersects = raycasterRef.current.intersectObjects(baseplateObjects, false);
+        if (baseplateIntersects.length > 0) {
+          const sectionMesh = baseplateIntersects[0].object;
+          const sectionId = sectionMesh.userData.sectionId;
+          if (sectionId) {
+            console.log('[LabelHolePlacement] Section selected via DOM click:', sectionId);
+            setSelectedBasePlateSectionId(sectionId);
+            window.dispatchEvent(new CustomEvent('baseplate-section-selected', {
+              detail: { sectionId }
+            }));
+          }
+        }
+      }
+    };
+
+    gl.domElement.addEventListener('click', handleCanvasClick);
+    return () => gl.domElement.removeEventListener('click', handleCanvasClick);
+  }, [waitingForLabelSectionSelection, waitingForHoleSectionSelection, basePlate, gl, camera, scene, raycasterRef, setSelectedBasePlateSectionId]);
 
   // =========================================================================
   // Handle section selection completion for SUPPORT placement
@@ -284,16 +338,68 @@ export function useMultiSectionSelection({
   // =========================================================================
   useEffect(() => {
     if (waitingForLabelSectionSelection && selectedBasePlateSectionId && pendingLabelConfig) {
+      console.log('[LabelPlacement] Section selected, placing label directly');
       setWaitingForLabelSectionSelection(false);
       
-      // Add section to label and dispatch
-      const labelWithSection = { ...(pendingLabelConfig as object), sectionId: selectedBasePlateSectionId };
-      setPendingLabelConfig(null);
+      // Get the section bounds
+      const section = basePlate?.type === 'multi-section' && basePlate.sections
+        ? basePlate.sections.find(s => s.id === selectedBasePlateSectionId)
+        : null;
       
-      // Dispatch the label-add event again with section
-      window.dispatchEvent(new CustomEvent('label-add', { detail: labelWithSection }));
+      if (section) {
+        // Cast to any to access LabelConfig properties
+        const label = pendingLabelConfig as {
+          id: string;
+          text: string;
+          fontSize: number;
+          depth: number;
+          font: string;
+          position: THREE.Vector3;
+          rotation: THREE.Euler;
+          sectionId?: string;
+        };
+        
+        // Position label at the center-front of the section
+        const sectionCenterX = (section.minX + section.maxX) / 2;
+        const sectionFrontZ = section.maxZ;
+        
+        const labelY = baseTopY;
+        const labelX = sectionCenterX;
+        const labelZ = sectionFrontZ + label.fontSize / 2;
+        
+        const newLabel = {
+          ...label,
+          sectionId: selectedBasePlateSectionId,
+          position: new THREE.Vector3(labelX, labelY, labelZ),
+          rotation: new THREE.Euler(-Math.PI / 2, 0, 0),
+        };
+        
+        // Add label directly to state
+        setLabels(prev => [...prev, newLabel]);
+        setSelectedLabelId(newLabel.id);
+        
+        // Force bounds recalculation
+        setTimeout(() => setItemBoundsUpdateTrigger(t => t + 1), 0);
+        
+        // Clear selected section after label placement
+        setSelectedBasePlateSectionId(null);
+        
+        // Dispatch events for other listeners
+        window.dispatchEvent(new CustomEvent('label-added', { detail: newLabel }));
+        window.dispatchEvent(new CustomEvent('label-placed', { 
+          detail: { 
+            labelId: newLabel.id, 
+            sectionId: newLabel.sectionId,
+            position: newLabel.position,
+            fontSize: newLabel.fontSize,
+            text: newLabel.text
+          } 
+        }));
+      }
+      
+      setPendingLabelConfig(null);
     }
-  }, [waitingForLabelSectionSelection, selectedBasePlateSectionId, pendingLabelConfig, setWaitingForLabelSectionSelection, setPendingLabelConfig]);
+  }, [waitingForLabelSectionSelection, selectedBasePlateSectionId, pendingLabelConfig, basePlate, baseTopY, setWaitingForLabelSectionSelection, setPendingLabelConfig, setLabels, setSelectedLabelId, setItemBoundsUpdateTrigger, setSelectedBasePlateSectionId]);
 
   // =========================================================================
   // Handle section selection completion for HOLE placement

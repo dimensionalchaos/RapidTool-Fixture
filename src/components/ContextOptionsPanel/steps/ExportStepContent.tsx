@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
+import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
@@ -11,41 +12,128 @@ import {
   AlertCircle, 
   FileBox, 
   Check, 
-  FileCheck,
-  Settings2
+  Settings2,
+  AlertTriangle,
+  Loader2
 } from 'lucide-react';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import type { ExportFormat, ExportConfig, ExportResult } from '@rapidtool/cad-core';
 
 interface ExportStepContentProps {
+  /** Whether a fixture exists */
   hasFixture?: boolean;
-  onExport?: (settings: ExportSettings) => void;
+  /** Whether cavity cutout has been created (merged fixture mesh exists) */
+  hasCavityCutout?: boolean;
+  /** Whether this is a multi-section baseplate */
+  isMultiSection?: boolean;
+  /** Number of sections in multi-section mode */
+  sectionCount?: number;
+  /** Callback when export is triggered */
+  onExport?: (config: ExportConfig) => void;
+  /** Whether export is in progress */
   isExporting?: boolean;
+  /** Whether mesh is valid for export */
   meshValid?: boolean;
+  /** List of mesh issues */
   meshIssues?: string[];
 }
 
-interface ExportSettings {
-  format: 'stl' | '3mf' | 'obj';
-  binary: boolean;
-  splitParts: boolean;
-}
-
-const EXPORT_FORMATS = [
+const EXPORT_FORMATS: Array<{
+  id: ExportFormat;
+  name: string;
+  description: string;
+  icon: typeof FileBox;
+  disabled?: boolean;
+  disabledReason?: string;
+}> = [
   { id: 'stl', name: 'STL', description: 'Standard Tessellation Language', icon: FileBox },
-  { id: '3mf', name: '3MF', description: '3D Manufacturing Format', icon: FileBox },
-  { id: 'obj', name: 'OBJ', description: 'Wavefront OBJ', icon: FileBox },
+  { id: '3mf', name: '3MF', description: '3D Manufacturing Format', icon: FileBox, disabled: true, disabledReason: 'Coming soon' },
+  { id: 'obj', name: 'OBJ', description: 'Wavefront OBJ', icon: FileBox, disabled: true, disabledReason: 'Coming soon' },
 ];
 
 const ExportStepContent: React.FC<ExportStepContentProps> = ({
   hasFixture = false,
+  hasCavityCutout = false,
+  isMultiSection = false,
+  sectionCount = 1,
   onExport,
   isExporting = false,
   meshValid = true,
   meshIssues = []
 }) => {
-  const [format, setFormat] = useState<'stl' | '3mf' | 'obj'>('stl');
+  const [format, setFormat] = useState<ExportFormat>('stl');
   const [binary, setBinary] = useState(true);
-  const [splitParts, setSplitParts] = useState(false);
+  const [splitParts, setSplitParts] = useState(true); // Default to split for multi-section
+  const [showFilenameDialog, setShowFilenameDialog] = useState(false);
+  const [filename, setFilename] = useState('Fixture');
+  const [filenameError, setFilenameError] = useState<string | null>(null);
 
+  // Listen for export dialog open event
+  useEffect(() => {
+    const handleOpenExportDialog = () => {
+      // Only show dialog if export is allowed
+      if (hasFixture && hasCavityCutout) {
+        setShowFilenameDialog(true);
+      }
+    };
+
+    window.addEventListener('open-export-dialog', handleOpenExportDialog);
+    return () => window.removeEventListener('open-export-dialog', handleOpenExportDialog);
+  }, [hasFixture, hasCavityCutout]);
+
+  // Validate filename
+  const validateFilename = useCallback((name: string): boolean => {
+    if (!name.trim()) {
+      setFilenameError('Filename is required');
+      return false;
+    }
+    // Check for invalid characters
+    const invalidChars = /[<>:"/\\|?*]/;
+    if (invalidChars.test(name)) {
+      setFilenameError('Filename contains invalid characters');
+      return false;
+    }
+    setFilenameError(null);
+    return true;
+  }, []);
+
+  const handleFilenameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    setFilename(value);
+    validateFilename(value);
+  };
+
+  const handleExportClick = () => {
+    if (!hasCavityCutout) {
+      return; // Should not happen, button should be disabled
+    }
+    setShowFilenameDialog(true);
+  };
+
+  const handleConfirmExport = () => {
+    if (!validateFilename(filename)) {
+      return;
+    }
+
+    const config: ExportConfig = {
+      filename: filename.trim(),
+      format,
+      splitParts: isMultiSection ? splitParts : false,
+      options: format === 'stl' ? { binary } : undefined,
+    };
+
+    onExport?.(config);
+    setShowFilenameDialog(false);
+  };
+
+  // Show message if no fixture exists
   if (!hasFixture) {
     return (
       <div className="p-4">
@@ -59,13 +147,38 @@ const ExportStepContent: React.FC<ExportStepContentProps> = ({
     );
   }
 
-  const handleExport = () => {
-    onExport?.({
-      format,
-      binary,
-      splitParts
-    });
-  };
+  // Show message if cavity cutout hasn't been created
+  if (!hasCavityCutout) {
+    return (
+      <div className="p-4 space-y-4">
+        <Alert className="font-tech border-yellow-500/50 bg-yellow-500/10">
+          <AlertTriangle className="h-4 w-4 text-yellow-500" />
+          <AlertDescription className="text-xs text-yellow-600 dark:text-yellow-400">
+            <span className="font-medium">Create cavity cutout first</span>
+            <br />
+            Use the Cavity tool to cut the workpiece cavities into the supports 
+            before exporting the fixture for 3D printing.
+          </AlertDescription>
+        </Alert>
+
+        <Card className="tech-glass p-3">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-md bg-muted/50 flex items-center justify-center">
+              <DownloadCloud className="w-4 h-4 text-muted-foreground" />
+            </div>
+            <div className="flex-1">
+              <p className="text-sm font-tech font-medium text-muted-foreground">
+                Export Disabled
+              </p>
+              <p className="text-xs text-muted-foreground font-tech">
+                Complete the cavity cutout step first
+              </p>
+            </div>
+          </div>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="p-4 space-y-4">
@@ -83,11 +196,11 @@ const ExportStepContent: React.FC<ExportStepContentProps> = ({
           )}
           <div className="flex-1">
             <p className="text-sm font-tech font-medium">
-              {meshValid ? 'Mesh is Valid' : 'Mesh Has Issues'}
+              {meshValid ? 'Fixture Ready' : 'Mesh Has Issues'}
             </p>
             <p className="text-xs text-muted-foreground font-tech">
               {meshValid 
-                ? 'Ready for export' 
+                ? `Ready for export${isMultiSection ? ` • ${sectionCount} section${sectionCount > 1 ? 's' : ''}` : ''}` 
                 : `${meshIssues.length} issue(s) detected`}
             </p>
           </div>
@@ -121,23 +234,30 @@ const ExportStepContent: React.FC<ExportStepContentProps> = ({
               <Card
                 key={fmt.id}
                 className={`
-                  tech-glass p-3 cursor-pointer transition-all
-                  hover:border-primary/50
-                  ${format === fmt.id ? 'border-primary bg-primary/5' : ''}
+                  tech-glass p-3 transition-all
+                  ${fmt.disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:border-primary/50'}
+                  ${format === fmt.id && !fmt.disabled ? 'border-primary bg-primary/5' : ''}
                 `}
-                onClick={() => setFormat(fmt.id as typeof format)}
+                onClick={() => !fmt.disabled && setFormat(fmt.id)}
               >
                 <div className="flex items-center gap-3">
-                  <RadioGroupItem value={fmt.id} id={fmt.id} />
+                  <RadioGroupItem 
+                    value={fmt.id} 
+                    id={fmt.id} 
+                    disabled={fmt.disabled}
+                  />
                   <div className="flex-1">
-                    <Label htmlFor={fmt.id} className="text-sm font-tech font-medium cursor-pointer">
+                    <Label 
+                      htmlFor={fmt.id} 
+                      className={`text-sm font-tech font-medium ${fmt.disabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}
+                    >
                       {fmt.name}
                     </Label>
                     <p className="text-xs text-muted-foreground font-tech">
-                      {fmt.description}
+                      {fmt.disabled ? fmt.disabledReason : fmt.description}
                     </p>
                   </div>
-                  {format === fmt.id && (
+                  {format === fmt.id && !fmt.disabled && (
                     <Badge variant="default" className="text-xs">
                       Selected
                     </Badge>
@@ -174,20 +294,23 @@ const ExportStepContent: React.FC<ExportStepContentProps> = ({
             </Card>
           )}
 
-          <Card className="tech-glass p-3">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-tech font-medium">Split Parts</p>
-                <p className="text-xs text-muted-foreground font-tech">
-                  Export each component separately
-                </p>
+          {/* Split Parts - Only show for multi-section baseplates */}
+          {isMultiSection && (
+            <Card className="tech-glass p-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-tech font-medium">Export Parts Individually</p>
+                  <p className="text-xs text-muted-foreground font-tech">
+                    Create separate file for each baseplate section
+                  </p>
+                </div>
+                <Switch
+                  checked={splitParts}
+                  onCheckedChange={setSplitParts}
+                />
               </div>
-              <Switch
-                checked={splitParts}
-                onCheckedChange={setSplitParts}
-              />
-            </div>
-          </Card>
+            </Card>
+          )}
         </div>
       </div>
 
@@ -196,12 +319,12 @@ const ExportStepContent: React.FC<ExportStepContentProps> = ({
         variant="default"
         size="sm"
         className="w-full font-tech"
-        onClick={handleExport}
+        onClick={handleExportClick}
         disabled={isExporting || !meshValid}
       >
         {isExporting ? (
           <>
-            <span className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin mr-2" />
+            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
             Exporting...
           </>
         ) : (
@@ -216,13 +339,97 @@ const ExportStepContent: React.FC<ExportStepContentProps> = ({
       <Card className="tech-glass">
         <div className="p-3 text-xs text-muted-foreground font-tech">
           <p>
-            Export your fixture design for 3D printing. STL is widely supported,
-            3MF includes material and color data, OBJ preserves UV coordinates.
+            {isMultiSection && splitParts
+              ? `Export will create ${sectionCount} separate STL file${sectionCount > 1 ? 's' : ''}, one for each baseplate section.`
+              : 'Export your fixture design for 3D printing. Files follow the naming convention: Filename_RapidTool.stl'
+            }
           </p>
         </div>
       </Card>
+
+      {/* Filename Dialog */}
+      <Dialog open={showFilenameDialog} onOpenChange={setShowFilenameDialog}>
+        <DialogContent className="sm:max-w-md tech-glass">
+          <DialogHeader>
+            <DialogTitle className="font-tech">Export Fixture</DialogTitle>
+            <DialogDescription className="font-tech text-xs">
+              Enter a filename for your exported fixture.
+              {isMultiSection && splitParts && (
+                <span className="block mt-1 text-primary">
+                  Section numbers will be appended automatically.
+                </span>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="filename" className="text-xs font-tech">
+                Filename
+              </Label>
+              <Input
+                id="filename"
+                value={filename}
+                onChange={handleFilenameChange}
+                placeholder="Enter filename"
+                className="font-tech"
+                autoFocus
+              />
+              {filenameError && (
+                <p className="text-xs text-red-500 font-tech">{filenameError}</p>
+              )}
+            </div>
+            
+            <div className="space-y-2">
+              <Label className="text-xs font-tech text-muted-foreground">
+                Preview
+              </Label>
+              <div className="bg-muted/50 rounded-md p-2 space-y-1">
+                {isMultiSection && splitParts ? (
+                  Array.from({ length: Math.min(sectionCount, 3) }, (_, i) => (
+                    <p key={i} className="text-xs font-mono text-muted-foreground">
+                      {filename || 'Fixture'}_Section{i + 1}_RapidTool.{format}
+                    </p>
+                  ))
+                ) : (
+                  <p className="text-xs font-mono text-muted-foreground">
+                    {filename || 'Fixture'}_RapidTool.{format}
+                  </p>
+                )}
+                {isMultiSection && splitParts && sectionCount > 3 && (
+                  <p className="text-xs font-mono text-muted-foreground">
+                    ... and {sectionCount - 3} more
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+          
+          <DialogFooter>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowFilenameDialog(false)}
+              className="font-tech"
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="default"
+              size="sm"
+              onClick={handleConfirmExport}
+              disabled={!!filenameError || !filename.trim()}
+              className="font-tech"
+            >
+              <DownloadCloud className="w-4 h-4 mr-2" />
+              Export
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
 
 export default ExportStepContent;
+

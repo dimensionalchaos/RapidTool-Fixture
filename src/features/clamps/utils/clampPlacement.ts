@@ -453,23 +453,26 @@ export function dropClampToPartSurface(
   
   // STEP 1: Try to find a valid top surface by raycasting DOWN from current position
   // A valid top surface has normal opposing the ray direction (normal.y > 0 when ray is -Y)
-  const directDropY = findTopSurfaceBelow(
+  // Also detect if ANY sample point is inside the part (partial overlap)
+  const { surfaceY: directDropY, anyInsidePart } = findTopSurfaceBelow(
     clampPosition,
     testOffsets,
     partMeshes,
     raycaster
   );
   
-  if (directDropY !== null) {
-    // Found a valid top surface - drop to it
+  // Only use direct drop if we found a surface AND no sample points are inside the part
+  // If any point is inside (partial overlap), we need to exit and drop from above
+  if (directDropY !== null && !anyInsidePart) {
+    // Found a valid top surface with no overlap - drop to it
     const adjusted = Math.abs(directDropY - clampPosition.y) > 0.01;
     return { newY: directDropY, adjusted };
   }
   
-  // STEP 2: No valid top surface found - fixture point must be inside the part mesh
-  // Move UP to exit the part, then drop down
-  const currentPoint = new THREE.Vector3(clampPosition.x, clampPosition.y, clampPosition.z);
-  const exitY = findExitPointMovingUp(currentPoint, partMeshes);
+  // STEP 2: Either no valid top surface found OR partial overlap detected
+  // Move UP to exit the part completely, then drop down
+  // Sample all 5 points to find the highest exit across the entire fixture disk
+  const exitY = findExitPointMovingUp(clampPosition, testOffsets, partMeshes);
   
   if (exitY === null) {
     // Could not find exit point - no adjustment possible
@@ -477,7 +480,8 @@ export function dropClampToPartSurface(
   }
   
   // Now drop down from above the part
-  const rayStartY = exitY + 100; // Start from above the exit point
+  // Add 5mm buffer above the exit point to ensure we're fully outside before raycasting down
+  const rayStartY = exitY + 5;
   
   let highestSurface = -Infinity;
   
@@ -517,16 +521,19 @@ export function dropClampToPartSurface(
 
 /**
  * Find the highest top-facing surface below the given position.
- * Returns null if no valid top surface is found (meaning we're likely inside the mesh).
+ * Returns { surfaceY, anyInsidePart } where:
+ * - surfaceY: highest valid top surface found (or null if none)
+ * - anyInsidePart: true if ANY sample point is inside the part (hits bottom-facing surface first)
  */
 function findTopSurfaceBelow(
   clampPosition: { x: number; y: number; z: number },
   testOffsets: Array<{ x: number; z: number }>,
   partMeshes: THREE.Object3D[],
   raycaster: THREE.Raycaster
-): number | null {
+): { surfaceY: number | null; anyInsidePart: boolean } {
   let highestValidSurface = -Infinity;
   let foundValidSurface = false;
+  let anyInsidePart = false;
   
   for (const offset of testOffsets) {
     const rayOrigin = new THREE.Vector3(
@@ -541,6 +548,7 @@ function findTopSurfaceBelow(
       const hits = raycaster.intersectObject(mesh, true);
       
       // Check the FIRST hit - if it's a top-facing surface, it's valid
+      // If it's a bottom-facing surface, this sample point is INSIDE the part
       if (hits.length > 0) {
         const firstHit = hits[0];
         if (firstHit.face) {
@@ -553,13 +561,19 @@ function findTopSurfaceBelow(
             if (firstHit.point.y > highestValidSurface) {
               highestValidSurface = firstHit.point.y;
             }
+          } else {
+            // First hit is bottom-facing - this sample is INSIDE the part
+            anyInsidePart = true;
           }
         }
       }
     }
   }
   
-  return foundValidSurface ? highestValidSurface : null;
+  return { 
+    surfaceY: foundValidSurface ? highestValidSurface : null,
+    anyInsidePart 
+  };
 }
 
 // ============================================================================
@@ -769,47 +783,76 @@ function getSilhouetteCenter(silhouette: Polygon2D): Point2D {
 }
 
 /**
- * Find the Y position where we exit the part mesh (moving upward)
+ * Find the Y position where we fully exit the part mesh (moving upward).
+ * Samples all test points across the fixture disk to find the HIGHEST exit point.
+ * Returns the highest top-facing surface to ensure we're completely outside.
  */
 function findExitPointMovingUp(
-  startPoint: THREE.Vector3,
+  clampPosition: { x: number; y: number; z: number },
+  testOffsets: Array<{ x: number; z: number }>,
   partMeshes: THREE.Object3D[]
 ): number | null {
   const raycaster = new THREE.Raycaster();
   raycaster.far = 5000;
   
-  // Cast ray upward
-  raycaster.set(startPoint, new THREE.Vector3(0, 1, 0));
+  let overallHighestExitY: number | null = null;
   
-  const allHits: THREE.Intersection[] = [];
-  for (const mesh of partMeshes) {
-    mesh.updateMatrixWorld(true);
-    const hits = raycaster.intersectObject(mesh, true);
-    allHits.push(...hits);
-  }
-  
-  if (allHits.length === 0) {
-    return null; // No surfaces above
-  }
-  
-  // Sort by distance (closest first)
-  allHits.sort((a, b) => a.distance - b.distance);
-  
-  // Find the first TOP-FACING surface (normal pointing up = we exit through top)
-  for (const hit of allHits) {
-    if (hit.face) {
-      const normalMatrix = new THREE.Matrix3().getNormalMatrix(hit.object.matrixWorld);
-      const worldNormal = hit.face.normal.clone().applyMatrix3(normalMatrix).normalize();
-      
-      // Top-facing surface (we exit through it going up)
-      if (worldNormal.y > MIN_TOP_SURFACE_ANGLE) {
-        return hit.point.y;
+  // Sample all test points to find the highest exit across the entire fixture disk
+  for (const offset of testOffsets) {
+    const startPoint = new THREE.Vector3(
+      clampPosition.x + offset.x,
+      clampPosition.y,
+      clampPosition.z + offset.z
+    );
+    
+    // Cast ray upward from this sample point
+    raycaster.set(startPoint, new THREE.Vector3(0, 1, 0));
+    
+    const allHits: THREE.Intersection[] = [];
+    for (const mesh of partMeshes) {
+      mesh.updateMatrixWorld(true);
+      const hits = raycaster.intersectObject(mesh, true);
+      allHits.push(...hits);
+    }
+    
+    if (allHits.length === 0) {
+      continue; // No surfaces above this sample point
+    }
+    
+    // Sort by distance (closest first, farthest last)
+    allHits.sort((a, b) => a.distance - b.distance);
+    
+    // Find the LAST (highest) top-facing surface for this sample point
+    let highestExitY: number | null = null;
+    
+    for (let i = allHits.length - 1; i >= 0; i--) {
+      const hit = allHits[i];
+      if (hit.face) {
+        const normalMatrix = new THREE.Matrix3().getNormalMatrix(hit.object.matrixWorld);
+        const worldNormal = hit.face.normal.clone().applyMatrix3(normalMatrix).normalize();
+        
+        // Top-facing surface (we exit through it going up)
+        if (worldNormal.y > MIN_TOP_SURFACE_ANGLE) {
+          highestExitY = hit.point.y;
+          break; // Found the highest top-facing surface for this sample
+        }
+      }
+    }
+    
+    // If no top-facing surface found, use the highest hit point as fallback
+    if (highestExitY === null && allHits.length > 0) {
+      highestExitY = allHits[allHits.length - 1].point.y;
+    }
+    
+    // Track the overall highest exit across all samples
+    if (highestExitY !== null) {
+      if (overallHighestExitY === null || highestExitY > overallHighestExitY) {
+        overallHighestExitY = highestExitY;
       }
     }
   }
   
-  // Fallback: return highest hit point
-  return allHits[allHits.length - 1].point.y;
+  return overallHighestExitY;
 }
 
 /**

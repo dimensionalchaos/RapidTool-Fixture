@@ -163,6 +163,8 @@ export function useHoleHandlers({
     const handleCancelHolePlacement = () => {
       setHolePlacementMode({ active: false, config: null, depth: 20 });
       setOrbitControlsEnabled(true);
+      // Clear selected baseplate section when cancelling placement
+      setSelectedBasePlateSectionId(null);
       // restore previous view
       setCurrentOrientation(prevOrientationRef.current);
       updateCamera(prevOrientationRef.current, modelBounds);

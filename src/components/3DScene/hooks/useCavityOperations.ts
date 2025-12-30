@@ -43,6 +43,8 @@ export interface UseCavityOperationsParams {
   basePlate: any;
   baseTopY: number;
   baseplateWithHoles: THREE.BufferGeometry | null;
+  setBaseplateWithHoles: React.Dispatch<React.SetStateAction<THREE.BufferGeometry | null>>;
+  setHoleCSGTrigger: React.Dispatch<React.SetStateAction<number>>;
   
   // Refs
   basePlateMeshRef: React.RefObject<THREE.Mesh | null>;
@@ -75,6 +77,8 @@ export function useCavityOperations({
   basePlate,
   baseTopY,
   baseplateWithHoles,
+  setBaseplateWithHoles,
+  setHoleCSGTrigger,
   basePlateMeshRef,
   modelMeshRefs,
   multiSectionBasePlateGroupRef,
@@ -1001,14 +1005,22 @@ export function useCavityOperations({
       });
       setOffsetMeshPreviews(new Map());
       
-      console.log('[useCavityOperations] Cavity reset complete - supports restored to original state');
+      // Re-trigger hole CSG if there are holes - needed for both single and multi-section baseplates
+      // Clear baseplateWithHoles first so original baseplate geometry is captured fresh
+      setBaseplateWithHoles(null);
+      // Trigger CSG recalculation after a short delay to allow geometry to re-render
+      setTimeout(() => {
+        setHoleCSGTrigger(prev => prev + 1);
+      }, 100);
+      
+      console.log('[useCavityOperations] Cavity reset complete - supports restored to original state, hole CSG retriggered');
     };
 
     window.addEventListener('reset-cavity', handleResetCavity as EventListener);
     return () => {
       window.removeEventListener('reset-cavity', handleResetCavity as EventListener);
     };
-  }, [mergedFixtureMesh, offsetMeshPreviews, modifiedSupportGeometries]);
+  }, [mergedFixtureMesh, offsetMeshPreviews, modifiedSupportGeometries, setBaseplateWithHoles, setHoleCSGTrigger]);
 
   return {};
 }

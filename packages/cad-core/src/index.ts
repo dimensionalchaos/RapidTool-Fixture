@@ -13,6 +13,7 @@
  * - Mesh utilities (simplification, decimation)
  * - File parsers (STL parser)
  * - Offset mesh processing (heightmap-based cavity generation)
+ * - Export utilities (STL, 3MF, OBJ export)
  * - Web workers (CSG, offset mesh processing)
  */
 
@@ -39,6 +40,9 @@ export * from './parsers';
 
 // Offset Mesh Processing
 export * from './offset';
+
+// Export Utilities
+export * from './export';
 
 // Workers
 export * from './workers';

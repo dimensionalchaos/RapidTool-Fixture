@@ -24,7 +24,7 @@ import { AnySupport, autoPlaceSupports, AutoPlacementStrategy } from "@/features
 import { PlacedClamp } from "@/features/clamps";
 import { PlacedHole, HoleConfig } from "@/features/holes";
 import { BasePlateSection } from "@/features/baseplate";
-import { CavitySettings, DEFAULT_CAVITY_SETTINGS, getAdaptivePixelsPerUnit } from "@rapidtool/cad-core";
+import { CavitySettings, DEFAULT_CAVITY_SETTINGS, getAdaptivePixelsPerUnit, type ExportConfig } from "@rapidtool/cad-core";
 import UnitsDialog from "@/modules/FileImport/components/UnitsDialog";
 import MeshOptimizationDialog from "@/modules/FileImport/components/MeshOptimizationDialog";
 import { useFileProcessing } from "@/modules/FileImport/hooks/useFileProcessing";
@@ -241,6 +241,30 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
       setIsCavityApplied(false);
       setHasCavityPreview(false);
       window.dispatchEvent(new CustomEvent('reset-cavity'));
+    }, []);
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Export Handlers
+    // ─────────────────────────────────────────────────────────────────────────
+
+    const [isExporting, setIsExporting] = useState(false);
+
+    const handleExport = useCallback((config: ExportConfig) => {
+      setIsExporting(true);
+      // Dispatch export event to 3DScene which has the merged fixture mesh
+      window.dispatchEvent(new CustomEvent('export-fixture', { detail: { config } }));
+      
+      // Listen for export completion
+      const handleExportComplete = (e: CustomEvent) => {
+        setIsExporting(false);
+        window.removeEventListener('export-complete', handleExportComplete as EventListener);
+      };
+      window.addEventListener('export-complete', handleExportComplete as EventListener);
+      
+      // Timeout fallback
+      setTimeout(() => {
+        setIsExporting(false);
+      }, 30000);
     }, []);
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -1723,6 +1747,11 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
                   {activeStep === 'export' && (
                     <ExportStepContent
                       hasFixture={!!actualFile || !!currentBaseplate}
+                      hasCavityCutout={isCavityApplied}
+                      isMultiSection={currentBaseplate?.type === 'multi-section'}
+                      sectionCount={currentBaseplate?.sections?.length ?? 1}
+                      onExport={handleExport}
+                      isExporting={isExporting}
                     />
                   )}
                 </ContextOptionsPanel>

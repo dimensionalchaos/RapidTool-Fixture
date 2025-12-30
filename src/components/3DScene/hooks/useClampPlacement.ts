@@ -132,35 +132,6 @@ export function useClampPlacement({
       // Set up raycaster
       raycasterRef.current.setFromCamera(mouse, camera);
       
-      // For multi-section baseplates, check if user clicked on a baseplate section first
-      if (basePlate?.type === 'multi-section' && basePlate.sections) {
-        // Get baseplate group reference and check intersections
-        const baseplateObjects: THREE.Object3D[] = [];
-        scene.traverse((obj) => {
-          if (obj.userData.isBaseplateSection) {
-            baseplateObjects.push(obj);
-          }
-        });
-        
-        if (baseplateObjects.length > 0) {
-          const baseplateIntersects = raycasterRef.current.intersectObjects(baseplateObjects, false);
-          if (baseplateIntersects.length > 0) {
-            // User clicked on a baseplate section - select it
-            const sectionMesh = baseplateIntersects[0].object;
-            const sectionId = sectionMesh.userData.sectionId;
-            if (sectionId) {
-              console.log('[ClampPlacement] Section selected:', sectionId);
-              setSelectedBasePlateSectionId(sectionId);
-              window.dispatchEvent(new CustomEvent('baseplate-section-selected', {
-                detail: { sectionId }
-              }));
-              // Don't proceed with clamp placement, just select the section
-              return;
-            }
-          }
-        }
-      }
-      
       // Get all part meshes to test against
       const partMeshes: THREE.Mesh[] = [];
       importedParts.forEach(part => {
@@ -172,13 +143,54 @@ export function useClampPlacement({
       
       console.log('[ClampPlacement] Raycasting against', partMeshes.length, 'part meshes');
       
-      if (partMeshes.length === 0) {
-        console.log('[ClampPlacement] No visible part meshes to raycast against');
+      // IMPORTANT: Check parts FIRST before baseplates
+      // This ensures clicking on a part that's above a baseplate hits the part, not the baseplate
+      let partIntersects: THREE.Intersection[] = [];
+      if (partMeshes.length > 0) {
+        partIntersects = raycasterRef.current.intersectObjects(partMeshes, false);
+      }
+      
+      // If we hit a part, proceed with clamp placement (don't check baseplates)
+      if (partIntersects.length > 0) {
+        // Part was clicked - continue with clamp placement below
+        console.log('[ClampPlacement] Hit part, proceeding with placement');
+      } else {
+        // No part hit - for multi-section baseplates, check if user clicked on a baseplate section
+        if (basePlate?.type === 'multi-section' && basePlate.sections) {
+          // Get baseplate group reference and check intersections
+          const baseplateObjects: THREE.Object3D[] = [];
+          scene.traverse((obj) => {
+            if (obj.userData.isBaseplateSection) {
+              baseplateObjects.push(obj);
+            }
+          });
+          
+          if (baseplateObjects.length > 0) {
+            const baseplateIntersects = raycasterRef.current.intersectObjects(baseplateObjects, false);
+            if (baseplateIntersects.length > 0) {
+              // User clicked on a baseplate section - select it
+              const sectionMesh = baseplateIntersects[0].object;
+              const sectionId = sectionMesh.userData.sectionId;
+              if (sectionId) {
+                console.log('[ClampPlacement] Section selected:', sectionId);
+                setSelectedBasePlateSectionId(sectionId);
+                window.dispatchEvent(new CustomEvent('baseplate-section-selected', {
+                  detail: { sectionId }
+                }));
+                // Don't proceed with clamp placement, just select the section
+                return;
+              }
+            }
+          }
+        }
+        
+        // No part or baseplate hit
+        console.log('[ClampPlacement] No intersection with parts or baseplates');
         return;
       }
       
-      // Perform raycast
-      const intersects = raycasterRef.current.intersectObjects(partMeshes, false);
+      // Use the partIntersects we already calculated above
+      const intersects = partIntersects;
       
       console.log('[ClampPlacement] Intersections found:', intersects.length);
       
