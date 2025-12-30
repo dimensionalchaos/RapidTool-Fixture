@@ -40,6 +40,21 @@ The refactoring follows a **Director of Engineering** orchestration model:
 ### Phase 6: Package Extraction (Risk: HIGH, Effort: HIGH)
 - `16-extract-cad-core.md` - Create @rapidtool/cad-core
 - `17-extract-cad-ui.md` - Create @rapidtool/cad-ui
+- `PHASE_6_PACKAGE_EXTRACTION.md` - Comprehensive package extraction plan
+
+### Phase 7: State Extraction & Decomposition (Risk: MEDIUM, Effort: HIGH)
+- `PHASE_7_STATE_EXTRACTION.md` - Zustand state management + component decomposition
+  - **Zustand Stores (in cad-ui)**:
+    - `selectionStore` - Multi-category selection state
+    - `workflowStore` - Workflow step + accordion sync
+    - `transformStore` - Transform mode, pivot, snap settings
+    - `uiStore` - UI preferences (persisted)
+  - **Benefits**:
+    - Eliminate custom event system (`highlight-component`, etc.)
+    - Remove prop drilling (30+ props → ~10)
+    - Redux DevTools integration
+    - Works outside React (3D interactions)
+  - **Target**: Reduce AppShell.tsx from 2,009 → ~500 lines
 
 ## Testing Protocol
 

@@ -182,12 +182,16 @@ const ModelMesh = React.memo(function ModelMesh({
     
     const now = Date.now();
     if (now - lastClickTimeRef.current < DOUBLE_CLICK_DELAY) {
+      // Dispatch navigation event to open step and accordion
+      window.dispatchEvent(new CustomEvent('highlight-component', {
+        detail: { category: 'part', id: file.id }
+      }));
       onDoubleClick?.() ?? window.dispatchEvent(new CustomEvent('mesh-double-click'));
       lastClickTimeRef.current = 0;
     } else {
       lastClickTimeRef.current = now;
     }
-  }, [disableDoubleClick, onDoubleClick]);
+  }, [disableDoubleClick, onDoubleClick, file.id]);
 
   return (
     <mesh 

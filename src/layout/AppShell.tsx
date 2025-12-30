@@ -783,6 +783,35 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
       
     }, [isPlacementMode, activeStep]);
 
+    // Listen for highlight-component events from double-click on 3D meshes
+    // This is in AppShell (always mounted) to ensure events are handled even if ContextOptionsPanel is collapsed
+    useEffect(() => {
+      const categoryToStep: Record<string, WorkflowStep> = {
+        'part': 'import',
+        'baseplate': 'baseplates',
+        'support': 'supports',
+        'clamp': 'clamps',
+        'label': 'labels',
+        'hole': 'drill',
+        'cavity': 'cavity'
+      };
+
+      const handleHighlightComponent = (event: CustomEvent<{ category: string; id: string }>) => {
+        const category = event.detail?.category;
+        if (!category) return;
+        
+        const targetStep = categoryToStep[category];
+        if (targetStep && targetStep !== activeStep) {
+          setActiveStep(targetStep);
+        }
+      };
+
+      window.addEventListener('highlight-component', handleHighlightComponent as EventListener);
+      return () => {
+        window.removeEventListener('highlight-component', handleHighlightComponent as EventListener);
+      };
+    }, [activeStep]);
+
     const handleResetSession = () => {
       // Log memory before reset
       logMemoryUsage('Session reset - before');

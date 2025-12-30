@@ -265,6 +265,11 @@ const HoleMesh: React.FC<HoleMeshProps> = ({
   const handleDoubleClick = (e: ThreeEvent<MouseEvent>) => {
     e.stopPropagation();
     onDoubleClick?.();
+    
+    // Dispatch navigation event to open step and accordion
+    window.dispatchEvent(new CustomEvent('highlight-component', {
+      detail: { category: 'hole', id: hole.id }
+    }));
   };
 
   // Display diameter for ring indicator

@@ -165,6 +165,12 @@ const LabelMesh: React.FC<LabelMeshProps> = ({
 
       if (timeSinceLastClick < DOUBLE_CLICK_THRESHOLD_MS) {
         onDoubleClick?.(label.id);
+        
+        // Dispatch navigation event to open step and accordion
+        window.dispatchEvent(new CustomEvent('highlight-component', {
+          detail: { category: 'label', id: label.id }
+        }));
+        
         lastClickTimeRef.current = 0;
       } else {
         onSelect?.(label.id);

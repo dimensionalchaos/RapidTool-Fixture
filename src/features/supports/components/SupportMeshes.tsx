@@ -1393,8 +1393,14 @@ const SupportMesh: React.FC<SupportMeshProps> = ({ support, preview, baseTopY = 
     const timeSinceLastClick = now - lastClickTimeRef.current;
     
     if (timeSinceLastClick < DOUBLE_CLICK_THRESHOLD_MS) {
-      // Double-click detected
+      // Double-click detected - navigate to supports step and highlight
       onDoubleClick?.(support.id);
+      
+      // Dispatch navigation event to open step and accordion
+      window.dispatchEvent(new CustomEvent('highlight-component', {
+        detail: { category: 'support', id: support.id }
+      }));
+      
       lastClickTimeRef.current = 0; // Reset to prevent triple-click
     } else {
       lastClickTimeRef.current = now;

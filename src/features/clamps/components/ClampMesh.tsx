@@ -156,7 +156,10 @@ const ClampMesh: React.FC<ClampMeshProps> = ({
     const timeSinceLastClick = now - lastClickTimeRef.current;
     
     if (timeSinceLastClick < DOUBLE_CLICK_THRESHOLD_MS) {
-      // Double click
+      // Double click - dispatch navigation event for accordion auto-open
+      window.dispatchEvent(new CustomEvent('highlight-component', {
+        detail: { category: 'clamp', id: placedClamp.id }
+      }));
       onDoubleClick?.(placedClamp.id);
     } else {
       // Single click
@@ -199,7 +202,6 @@ const ClampMesh: React.FC<ClampMeshProps> = ({
         {/* Main clamp group with materials from MTL file */}
         <primitive 
           object={clampData.clampGroup} 
-          onClick={handleClick}
         />
 
         {/* Debug geometries - only shown when showDebug is true */}

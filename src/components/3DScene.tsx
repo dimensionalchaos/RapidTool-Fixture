@@ -1930,6 +1930,10 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
                 window.dispatchEvent(new CustomEvent('pivot-control-activated', { detail: { clampId: id } }));
                 setSelectedClampId(id);
                 window.dispatchEvent(new CustomEvent('clamp-selected', { detail: id }));
+                // Dispatch highlight-component to navigate to clamps step
+                window.dispatchEvent(new CustomEvent('highlight-component', {
+                  detail: { category: 'clamp', id }
+                }));
               }}
               onClampDataLoaded={(clampId, supportInfo) => {
                 if (supportInfo) {

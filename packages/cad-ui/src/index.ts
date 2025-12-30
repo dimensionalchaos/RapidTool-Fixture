@@ -57,5 +57,6 @@ export * from './loading';
 // Primitive input components
 export * from './primitives';
 
-// Utilities
-export { cn } from './utils/utils';
+// Navigation (workflow step management)
+export * from './navigation';
+

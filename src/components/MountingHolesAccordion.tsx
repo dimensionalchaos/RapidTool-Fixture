@@ -93,7 +93,7 @@ const MountingHolesAccordion: React.FC<MountingHolesAccordionProps> = ({
   }
 
   return (
-    <AccordionItem value="mounting-holes" className="border-border/50">
+    <AccordionItem value="holes" className="border-border/50">
       <AccordionTrigger className="py-2 text-xs font-tech hover:no-underline">
         <div className="flex items-center gap-2 flex-1">
           <CircleDashed className="w-3.5 h-3.5 text-primary" />
