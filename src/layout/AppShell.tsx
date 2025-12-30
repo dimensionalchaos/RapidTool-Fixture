@@ -29,6 +29,12 @@ import {
   type FixtureWorkflowStep,
 } from "@/hooks/useWorkflow";
 
+// UI hooks (Phase 7h migration)
+import {
+  useContextPanelCollapsed,
+  usePropertiesPanelCollapsed,
+} from "@/hooks/useUI";
+
 import PartPropertiesAccordion from "@/components/PartPropertiesAccordion";
 import ContextOptionsPanel, { WorkflowStep, WORKFLOW_STEPS } from "@/components/ContextOptionsPanel";
 import {
@@ -111,9 +117,9 @@ interface AppShellProps {
 
 const AppShell = forwardRef<AppShellHandle, AppShellProps>(
   ({ children, onLogout, onToggleDesignMode, designMode = false, isProcessing: externalProcessing = false, fileStats, currentFile }, ref) => {
-    // UI State
-    const [isContextPanelCollapsed, setIsContextPanelCollapsed] = useState(false);
-    const [isPropertiesCollapsed, setIsPropertiesCollapsed] = useState(false);
+    // UI State (Phase 7h - panel states from Zustand store)
+    const [isContextPanelCollapsed, setIsContextPanelCollapsed] = useContextPanelCollapsed();
+    const [isPropertiesCollapsed, setIsPropertiesCollapsed] = usePropertiesPanelCollapsed();
     const [undoStack, setUndoStack] = useState<any[]>([]);
     const [redoStack, setRedoStack] = useState<any[]>([]);
     const [currentBaseplate, setCurrentBaseplate] = useState<{ id: string; type: string; padding?: number; height?: number; depth?: number; sections?: Array<{ id: string; minX: number; maxX: number; minZ: number; maxZ: number }> } | null>(null);
