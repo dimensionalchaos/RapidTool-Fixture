@@ -60,3 +60,5 @@ export * from './primitives';
 // Navigation (workflow step management)
 export * from './navigation';
 
+// State management (Zustand stores)
+export * from './stores';

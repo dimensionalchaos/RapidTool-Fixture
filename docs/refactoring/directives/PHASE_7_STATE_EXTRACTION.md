@@ -4,12 +4,29 @@
 
 Phase 7 continues the refactoring effort by introducing **Zustand** for state management and decomposing large components. This phase focuses on:
 
-1. **State Management Library** → Implement Zustand stores in `@rapidtool/cad-ui`
-2. **AppShell.tsx** (2,009 lines) → Extract state into Zustand stores
-3. **3DScene.tsx** (2,262 lines) → Further modularization with renderer components
-4. **Event System Replacement** → Replace custom events with reactive state
+1. **Generic State Management** → Implement Zustand stores in `@rapidtool/cad-ui` (workflow-agnostic)
+2. **App-Specific State** → Implement Zustand stores in `src/stores/` (fixture-specific)
+3. **AppShell.tsx** (2,009 lines) → Extract state into Zustand stores
+4. **3DScene.tsx** (2,262 lines) → Further modularization with renderer components
+5. **Event System Replacement** → Replace custom events with reactive state
 
 **Goal:** Reduce both files to under 500 lines each while maintaining functionality.
+
+---
+
+## Architecture Principle: Workflow-Agnostic cad-ui
+
+> **IMPORTANT:** `@rapidtool/cad-ui` must remain **workflow-agnostic**. It provides generic building blocks for ANY CAD workflow app, not just fixture design.
+>
+> ❌ **NOT in cad-ui:** baseplateStore, cavityStore, supportStore, holeStore, clampStore
+> ✅ **IN cad-ui:** selectionStore (generic categories), workflowStore (generic steps), transformStore, uiStore
+
+### Store Distribution
+
+| Store Location | Purpose | Examples |
+|---------------|---------|----------|
+| `packages/cad-ui/src/stores/` | Generic, reusable across apps | selection, workflow, transform, ui, history |
+| `src/stores/` | Fixture-specific, this app only | fixture, cavity, baseplate, processing, placement |
 
 ---
 
@@ -39,17 +56,17 @@ Phase 7 continues the refactoring effort by introducing **Zustand** for state ma
 
 ```typescript
 // ✅ Access state anywhere - even outside React components
-const selectedPartId = useSelectionStore.getState().part;
+const selectedId = useSelectionStore.getState().selected;
 
 // ✅ Subscribe to specific slices - minimal re-renders
-const partId = useSelectionStore(state => state.part);
+const selected = useSelectionStore(state => state.selected);
 
 // ✅ Update from 3D event handlers without React lifecycle
-mesh.onClick = () => useSelectionStore.getState().select('part', mesh.userData.id);
+mesh.onClick = () => useSelectionStore.getState().select('model', mesh.userData.id);
 
 // ✅ Combine multiple stores with selector
-const { part, activeStep } = useCombinedStore(state => ({
-  part: state.selection.part,
+const { selected, activeStep } = useCombinedStore(state => ({
+  selected: state.selection.selected,
   activeStep: state.workflow.activeStep
 }));
 ```
@@ -60,44 +77,132 @@ const { part, activeStep } = useCombinedStore(state => ({
 
 ### 7.0: Install Zustand & Setup (Est. 30 mins)
 
-**Install in cad-ui package:**
+**Install in BOTH packages:**
 ```bash
+# In cad-ui (generic stores)
 cd packages/cad-ui
+npm install zustand immer
+
+# In main app (app-specific stores)
+cd ../..
 npm install zustand immer
 ```
 
-**Create store structure in `packages/cad-ui/src/stores/`:**
+**Create store structures:**
 ```
+# Generic stores (cad-ui) - workflow agnostic
 packages/cad-ui/src/stores/
-├── index.ts              # Re-exports all stores
+├── index.ts              # Re-exports all generic stores
 ├── types.ts              # Shared store types
-├── selectionStore.ts     # Selection state
-├── workflowStore.ts      # Workflow/step state
+├── selectionStore.ts     # Generic selection (category + id)
+├── workflowStore.ts      # Generic workflow steps
 ├── transformStore.ts     # Transform mode/pivot state
-├── uiStore.ts            # UI preferences (theme, panels, etc.)
-└── middleware/
-    └── devtools.ts       # Redux DevTools integration
+├── uiStore.ts            # UI preferences (theme, panels)
+└── historyStore.ts       # Generic undo/redo
+
+# App-specific stores (fixture-view) - fixture workflow specific
+src/stores/
+├── index.ts              # Re-exports app stores + cad-ui stores
+├── fixtureStore.ts       # Parts, supports, clamps, labels, holes
+├── baseplateStore.ts     # Baseplate config + drawing mode
+├── cavityStore.ts        # Cavity operations
+├── processingStore.ts    # File processing, export
+├── dialogStore.ts        # Modal dialogs
+└── sceneStore.ts         # 3D scene state, previews
 ```
 
 ---
 
-### 7.1: Selection Store (Est. 1-2 hours)
-
-**Problem:** 6 different selection states with similar patterns, custom events for sync.
-
-**Current Code (AppShell.tsx):**
-```typescript
-const [selectedPartId, setSelectedPartId] = useState<string | null>(null);
-const [selectedSupportId, setSelectedSupportId] = useState<string | null>(null);
-const [selectedClampId, setSelectedClampId] = useState<string | null>(null);
-// ... 3 more + event listeners
-```
-
-**Solution:** Create `selectionStore` in `@rapidtool/cad-ui`.
+### 7.1: Generic Selection Store (Est. 1-2 hours) - IN CAD-UI
 
 **Create `packages/cad-ui/src/stores/selectionStore.ts`:**
 ```typescript
 /**
+ * Generic Selection Store
+ * 
+ * Manages selection state for ANY category of items.
+ * Categories are defined by the consuming application.
+ */
+
+import { create } from 'zustand';
+import { devtools, subscribeWithSelector } from 'zustand/middleware';
+import { immer } from 'zustand/middleware/immer';
+
+export interface SelectionState {
+  /** Currently selected item: { category, id } or null */
+  selected: { category: string; id: string } | null;
+  
+  /** Transform target (may differ from selection) */
+  transformTarget: { category: string; id: string } | null;
+  
+  /** Multi-select support (future) */
+  multiSelected: Array<{ category: string; id: string }>;
+}
+
+export interface SelectionActions {
+  /** Select an item */
+  select: (category: string, id: string | null) => void;
+  
+  /** Clear selection */
+  clear: () => void;
+  
+  /** Set transform target */
+  setTransformTarget: (category: string | null, id: string | null) => void;
+  
+  /** Check if item is selected */
+  isSelected: (category: string, id: string) => boolean;
+}
+
+type SelectionStore = SelectionState & SelectionActions;
+
+const INITIAL_STATE: SelectionState = {
+  selected: null,
+  transformTarget: null,
+  multiSelected: [],
+};
+
+export const useSelectionStore = create<SelectionStore>()(
+  devtools(
+    subscribeWithSelector(
+      immer((set, get) => ({
+        ...INITIAL_STATE,
+
+        select: (category, id) => {
+          set((state) => {
+            if (id === null) {
+              state.selected = null;
+              state.transformTarget = null;
+            } else {
+              state.selected = { category, id };
+              state.transformTarget = { category, id };
+            }
+          });
+        },
+
+        clear: () => {
+          set(INITIAL_STATE);
+        },
+
+        setTransformTarget: (category, id) => {
+          set((state) => {
+            state.transformTarget = category && id ? { category, id } : null;
+          });
+        },
+
+        isSelected: (category, id) => {
+          const { selected } = get();
+          return selected?.category === category && selected?.id === id;
+        },
+      }))
+    ),
+    { name: 'cad-selection' }
+  )
+);
+
+// Selectors
+export const selectSelected = (state: SelectionStore) => state.selected;
+export const selectTransformTarget = (state: SelectionStore) => state.transformTarget;
+```
  * Selection Store
  * 
  * Manages selection state for all component categories.
