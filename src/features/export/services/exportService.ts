@@ -231,6 +231,23 @@ async function performFullCSGUnion(
 }
 
 /**
+ * Generates and downloads STL file(s) for a single geometry
+ */
+function generateSingleSTLFile(
+  exportGeometry: THREE.BufferGeometry,
+  filename: string,
+  options: ExportConfig['options']
+): void {
+  const exportMesh = new THREE.Mesh(
+    exportGeometry, 
+    new THREE.MeshStandardMaterial()
+  );
+  
+  const stlData = meshToSTL(exportMesh, options);
+  downloadFile(stlData, filename, 'application/sla');
+}
+
+/**
  * Generates and downloads STL file(s)
  */
 function generateSTLFiles(
@@ -242,45 +259,16 @@ function generateSTLFiles(
 ): ExportResult {
   onProgress?.({ stage: 'exporting', progress: 95, message: 'Generating STL file...' });
   
-  // Create a temporary mesh for STL export
-  const exportMesh = new THREE.Mesh(
-    exportGeometry, 
-    new THREE.MeshStandardMaterial()
-  );
-  
   try {
-    if (isMultiSection && config.splitParts && sectionCount > 1) {
-      // Export parts individually for multi-section baseplate
-      for (let i = 0; i < sectionCount; i++) {
-        const filename = generateExportFilename({
-          filename: config.filename,
-          sectionNumber: i + 1,
-        }, config.format);
-        
-        onProgress?.({ 
-          stage: 'exporting', 
-          progress: 85 + ((i / sectionCount) * 10), 
-          message: `Exporting ${filename}...` 
-        });
-        
-        const stlData = meshToSTL(exportMesh, config.options);
-        downloadFile(stlData, filename, 'application/sla');
-      }
-      
-      console.log(`[Export] Exported ${sectionCount} section files`);
-      return { success: true, filesExported: sectionCount };
-    } else {
-      // Export as single file
-      const filename = generateExportFilename({
-        filename: config.filename,
-      }, config.format);
-      
-      const stlData = meshToSTL(exportMesh, config.options);
-      downloadFile(stlData, filename, 'application/sla');
-      
-      console.log(`[Export] Exported single file: ${filename}`);
-      return { success: true, filename, filesExported: 1 };
-    }
+    // Export as single file (combined geometry)
+    const filename = generateExportFilename({
+      filename: config.filename,
+    }, config.format);
+    
+    generateSingleSTLFile(exportGeometry, filename, config.options);
+    
+    console.log(`[Export] Exported single file: ${filename}`);
+    return { success: true, filename, filesExported: 1 };
   } catch (error) {
     console.error('[Export] STL generation failed:', error);
     return { 
@@ -288,6 +276,111 @@ function generateSTLFiles(
       error: error instanceof Error ? error.message : 'STL generation failed' 
     };
   }
+}
+
+/**
+ * Processes and exports a single section
+ */
+async function processSectionExport(
+  sectionData: import('../types').SectionExportData,
+  config: ExportConfig,
+  serviceConfig: ExportServiceConfig,
+  onProgress?: ExportProgressCallback
+): Promise<THREE.BufferGeometry> {
+  // Collect all geometries for this section
+  const sectionGeometries: THREE.BufferGeometry[] = [sectionData.baseplateGeometry];
+  sectionGeometries.push(...sectionData.supportGeometries);
+  sectionGeometries.push(...sectionData.labelGeometries);
+  
+  console.log(`[Export] Processing section ${sectionData.id}: ${sectionGeometries.length} geometries`);
+  
+  if (sectionGeometries.length === 1) {
+    return sectionGeometries[0];
+  }
+  
+  // Perform CSG union if enabled and we have overlapping geometries
+  if (serviceConfig.performCSGUnion && sectionData.supportGeometries.length > 0) {
+    const baseplateAndSupports = [sectionData.baseplateGeometry, ...sectionData.supportGeometries];
+    const unionResult = await performBaseplateSupportsUnion(baseplateAndSupports, serviceConfig, onProgress);
+    
+    if (unionResult) {
+      // Merge with labels
+      const toMerge = [unionResult, ...sectionData.labelGeometries];
+      const merged = await performFastMerge(toMerge, serviceConfig, onProgress);
+      if (merged) return merged;
+      return unionResult;
+    }
+  }
+  
+  // Fallback to fast merge
+  const merged = await performFastMerge(sectionGeometries, serviceConfig, onProgress);
+  if (merged) return merged;
+  
+  // Last resort: just use baseplate
+  return sectionData.baseplateGeometry;
+}
+
+/**
+ * Exports multi-section baseplate as separate files
+ */
+async function exportSeparateSections(
+  geometryCollection: ExportGeometryCollection,
+  config: ExportConfig,
+  serviceConfig: ExportServiceConfig,
+  onProgress?: ExportProgressCallback
+): Promise<ExportResult> {
+  const sections = Array.from(geometryCollection.sectionGeometries.values())
+    .sort((a, b) => a.index - b.index);
+  
+  console.log(`[Export] Exporting ${sections.length} sections separately`);
+  
+  const exportedFiles: string[] = [];
+  
+  for (let i = 0; i < sections.length; i++) {
+    const section = sections[i];
+    const sectionNumber = i + 1;
+    
+    onProgress?.({ 
+      stage: 'manifold', 
+      progress: 10 + ((i / sections.length) * 70), 
+      message: `Processing section ${sectionNumber}/${sections.length}...` 
+    });
+    
+    try {
+      // Process this section's geometry
+      const sectionGeometry = await processSectionExport(section, config, serviceConfig, onProgress);
+      
+      // Generate filename for this section
+      const filename = generateExportFilename({
+        filename: config.filename,
+        sectionNumber,
+      }, config.format);
+      
+      onProgress?.({ 
+        stage: 'exporting', 
+        progress: 85 + ((i / sections.length) * 10), 
+        message: `Exporting ${filename}...` 
+      });
+      
+      // Export this section
+      generateSingleSTLFile(sectionGeometry, filename, config.options);
+      exportedFiles.push(filename);
+      
+      console.log(`[Export] Exported section ${sectionNumber}: ${filename}`);
+      
+      // Small delay between downloads to avoid browser issues
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
+    } catch (error) {
+      console.error(`[Export] Failed to export section ${sectionNumber}:`, error);
+    }
+  }
+  
+  if (exportedFiles.length === 0) {
+    return { success: false, error: 'Failed to export any sections' };
+  }
+  
+  return { success: true, filesExported: exportedFiles.length };
 }
 
 /**
@@ -312,6 +405,31 @@ export async function exportFixture(
     const startTime = performance.now();
     console.log(`[Export] Starting export with quality: ${serviceConfig.quality}`);
     
+    // Check if we need to export sections separately
+    const shouldSplitSections = 
+      geometryCollection.isMultiSection && 
+      config.splitParts && 
+      geometryCollection.sectionGeometries.size > 1;
+    
+    if (shouldSplitSections) {
+      console.log(`[Export] Exporting ${geometryCollection.sectionGeometries.size} sections separately`);
+      
+      const result = await exportSeparateSections(
+        geometryCollection,
+        config,
+        serviceConfig,
+        onProgress
+      );
+      
+      const totalTime = ((performance.now() - startTime) / 1000).toFixed(2);
+      console.log(`[Export] Completed split export in ${totalTime}s`);
+      
+      onProgress?.({ stage: 'complete', progress: 100, message: `Export complete! (${totalTime}s)` });
+      
+      return result;
+    }
+    
+    // Single file export (combined geometry)
     // Collect all geometries for CSG union (baseplate + supports)
     let baseplateAndSupportsForCSG: THREE.BufferGeometry[] = [];
     

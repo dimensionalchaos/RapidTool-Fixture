@@ -1349,6 +1349,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     multiSectionBasePlateGroupRef,
     originalBaseplateGeoRef,
     modifiedSupportGeometries,
+    supports,
     placedClamps,
     clampSupportInfos,
     loadedClampDataRef,

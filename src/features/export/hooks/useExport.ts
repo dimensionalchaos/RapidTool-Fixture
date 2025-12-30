@@ -36,6 +36,8 @@ export interface UseExportParams {
   originalBaseplateGeoRef: React.MutableRefObject<THREE.BufferGeometry | null>;
   /** Modified support geometries map */
   modifiedSupportGeometries: Map<string, THREE.BufferGeometry>;
+  /** Supports array for section mapping */
+  supports: Array<{ id: string; sectionId?: string }>;
   /** Placed clamps array */
   placedClamps: PlacedClamp[];
   /** Clamp support info map */
@@ -62,6 +64,7 @@ export function useExport({
   multiSectionBasePlateGroupRef,
   originalBaseplateGeoRef,
   modifiedSupportGeometries,
+  supports,
   placedClamps,
   clampSupportInfos,
   loadedClampDataRef,
@@ -75,6 +78,7 @@ export function useExport({
     basePlate,
     baseplateWithHoles,
     modifiedSupportGeometries,
+    supports,
     placedClamps,
     clampSupportInfos,
     baseTopY,
@@ -88,12 +92,13 @@ export function useExport({
       basePlate,
       baseplateWithHoles,
       modifiedSupportGeometries,
+      supports,
       placedClamps,
       clampSupportInfos,
       baseTopY,
       exportQuality,
     };
-  }, [mergedFixtureMesh, basePlate, baseplateWithHoles, modifiedSupportGeometries, placedClamps, clampSupportInfos, baseTopY, exportQuality]);
+  }, [mergedFixtureMesh, basePlate, baseplateWithHoles, modifiedSupportGeometries, supports, placedClamps, clampSupportInfos, baseTopY, exportQuality]);
 
   /**
    * Handle export fixture event
@@ -126,6 +131,7 @@ export function useExport({
         multiSectionBasePlateGroupRef,
         originalBaseplateGeoRef,
         modifiedSupportGeometries: params.modifiedSupportGeometries,
+        supports: params.supports,
         placedClamps: params.placedClamps,
         clampSupportInfos: params.clampSupportInfos,
         loadedClampDataRef,

@@ -81,23 +81,68 @@ export function createBaseplateGeometryFromConfig(
 }
 
 /**
+ * Per-section geometry data with bounds
+ */
+interface SectionGeometryData {
+  id: string;
+  index: number;
+  geometry: THREE.BufferGeometry;
+  bounds: {
+    minX: number;
+    maxX: number;
+    minZ: number;
+    maxZ: number;
+  };
+}
+
+/**
  * Collects baseplate geometry from various sources
  */
 export function collectBaseplateGeometry(
   ctx: GeometryCollectionContext
-): { geometry: THREE.BufferGeometry | null; isMultiSection: boolean; multiSectionGeometries: THREE.BufferGeometry[] } {
+): { 
+  geometry: THREE.BufferGeometry | null; 
+  isMultiSection: boolean; 
+  multiSectionGeometries: THREE.BufferGeometry[];
+  sectionData: SectionGeometryData[];
+} {
   const isMultiSection = ctx.basePlate?.type === 'multi-section';
   const multiSectionGeometries: THREE.BufferGeometry[] = [];
+  const sectionData: SectionGeometryData[] = [];
   let geometry: THREE.BufferGeometry | null = null;
   
   if (ctx.baseplateWithHoles) {
     console.log('[Export] Using baseplateWithHoles geometry');
     geometry = ctx.baseplateWithHoles;
-  } else if (isMultiSection && ctx.multiSectionBasePlateGroupRef.current) {
+  } else if (isMultiSection && ctx.multiSectionBasePlateGroupRef.current && ctx.basePlate?.sections) {
     console.log('[Export] Collecting multi-section baseplate geometries');
+    const sections = ctx.basePlate.sections;
+    let sectionIndex = 0;
+    
     ctx.multiSectionBasePlateGroupRef.current.traverse((child) => {
       if (child instanceof THREE.Mesh && child.geometry) {
-        multiSectionGeometries.push(child.geometry);
+        const section = sections[sectionIndex];
+        if (section) {
+          // Clone geometry and apply world transform
+          const clonedGeom = child.geometry.clone();
+          child.updateMatrixWorld(true);
+          clonedGeom.applyMatrix4(child.matrixWorld);
+          
+          multiSectionGeometries.push(clonedGeom);
+          sectionData.push({
+            id: section.id,
+            index: sectionIndex,
+            geometry: clonedGeom,
+            bounds: {
+              minX: section.minX,
+              maxX: section.maxX,
+              minZ: section.minZ,
+              maxZ: section.maxZ,
+            },
+          });
+          console.log(`[Export] Collected section ${section.id} (${sectionIndex}): bounds [${section.minX.toFixed(1)}, ${section.maxX.toFixed(1)}] x [${section.minZ.toFixed(1)}, ${section.maxZ.toFixed(1)}]`);
+        }
+        sectionIndex++;
       }
     });
   } else if (ctx.basePlateMeshRef.current?.geometry) {
@@ -111,7 +156,7 @@ export function collectBaseplateGeometry(
     geometry = createBaseplateGeometryFromConfig(ctx.basePlate);
   }
   
-  return { geometry, isMultiSection, multiSectionGeometries };
+  return { geometry, isMultiSection, multiSectionGeometries, sectionData };
 }
 
 /**
@@ -286,7 +331,7 @@ export async function collectAllGeometries(
   emitProgress('preparing', 5, 'Collecting component geometries...');
   
   // 1. Collect baseplate
-  const { geometry: baseplateGeometry, isMultiSection, multiSectionGeometries } = 
+  const { geometry: baseplateGeometry, isMultiSection, multiSectionGeometries, sectionData } = 
     collectBaseplateGeometry(ctx);
   
   // 2. Collect regular supports
@@ -329,7 +374,98 @@ export async function collectAllGeometries(
     (msg) => emitProgress('preparing', 9, msg)
   );
   
-  // Handle multi-section baseplate
+  // 5. Build per-section export data for multi-section baseplates
+  const sectionGeometries = new Map<string, import('../types').SectionExportData>();
+  
+  if (isMultiSection && sectionData.length > 0) {
+    console.log(`[Export] Building per-section export data for ${sectionData.length} sections`);
+    
+    // Build a lookup map from support ID to sectionId
+    const supportSectionMap = new Map<string, string>();
+    for (const support of ctx.supports) {
+      if (support.sectionId) {
+        supportSectionMap.set(support.id, support.sectionId);
+      }
+    }
+    console.log(`[Export] Support section mapping: ${supportSectionMap.size} supports have sectionId`);
+    
+    for (const section of sectionData) {
+      // Find supports that belong to this section by sectionId
+      const sectionSupports: THREE.BufferGeometry[] = [];
+      
+      // Check each support geometry by ID
+      ctx.modifiedSupportGeometries.forEach((geom, supportId) => {
+        const supportSectionId = supportSectionMap.get(supportId);
+        if (supportSectionId === section.id) {
+          console.log(`[Export] Support ${supportId} assigned to section ${section.id} by sectionId`);
+          sectionSupports.push(geom.clone());
+        }
+      });
+      
+      // For clamp supports, use bounds-based filtering (clamps don't have sectionId)
+      for (const clampGeom of clampSupportGeometries) {
+        clampGeom.computeBoundingBox();
+        if (clampGeom.boundingBox) {
+          const center = new THREE.Vector3();
+          clampGeom.boundingBox.getCenter(center);
+          
+          const tolerance = 1.0;
+          if (
+            center.x >= section.bounds.minX - tolerance &&
+            center.x <= section.bounds.maxX + tolerance &&
+            center.z >= section.bounds.minZ - tolerance &&
+            center.z <= section.bounds.maxZ + tolerance
+          ) {
+            sectionSupports.push(clampGeom.clone());
+          }
+        }
+      }
+      
+      // Find labels that belong to this section by sectionId first, then fallback to bounds
+      const sectionLabels: THREE.BufferGeometry[] = [];
+      for (let i = 0; i < ctx.labels.length; i++) {
+        const label = ctx.labels[i];
+        const labelGeom = labelGeometries[i];
+        if (!labelGeom) continue;
+        
+        // Check if label has sectionId matching this section
+        if (label.sectionId === section.id) {
+          console.log(`[Export] Label "${label.text}" assigned to section ${section.id} by sectionId`);
+          sectionLabels.push(labelGeom.clone());
+        } else if (!label.sectionId) {
+          // Fallback to bounds-based filtering for labels without sectionId
+          labelGeom.computeBoundingBox();
+          if (labelGeom.boundingBox) {
+            const center = new THREE.Vector3();
+            labelGeom.boundingBox.getCenter(center);
+            
+            const tolerance = 1.0;
+            if (
+              center.x >= section.bounds.minX - tolerance &&
+              center.x <= section.bounds.maxX + tolerance &&
+              center.z >= section.bounds.minZ - tolerance &&
+              center.z <= section.bounds.maxZ + tolerance
+            ) {
+              sectionLabels.push(labelGeom.clone());
+            }
+          }
+        }
+      }
+      
+      sectionGeometries.set(section.id, {
+        id: section.id,
+        index: section.index,
+        baseplateGeometry: section.geometry,
+        supportGeometries: sectionSupports,
+        labelGeometries: sectionLabels,
+        bounds: section.bounds,
+      });
+      
+      console.log(`[Export] Section ${section.id}: ${sectionSupports.length} supports, ${sectionLabels.length} labels`);
+    }
+  }
+  
+  // Handle multi-section baseplate for combined export
   let finalBaseplateGeometry = baseplateGeometry;
   if (isMultiSection && multiSectionGeometries.length > 0 && !baseplateGeometry) {
     // For multi-section, we'll add them to supports for CSG union
@@ -343,5 +479,6 @@ export async function collectAllGeometries(
     clampSupportGeometries,
     labelGeometries,
     isMultiSection,
+    sectionGeometries,
   };
 }

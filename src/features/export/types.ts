@@ -70,6 +70,31 @@ export interface ExportGeometryCollection {
   labelGeometries: THREE.BufferGeometry[];
   /** Whether baseplate is multi-section */
   isMultiSection: boolean;
+  /** Per-section geometries for multi-section baseplates (indexed by section ID) */
+  sectionGeometries: Map<string, SectionExportData>;
+}
+
+/**
+ * Data for a single section in multi-section export
+ */
+export interface SectionExportData {
+  /** Section ID */
+  id: string;
+  /** Section index (0-based) */
+  index: number;
+  /** Section baseplate geometry */
+  baseplateGeometry: THREE.BufferGeometry;
+  /** Support geometries belonging to this section */
+  supportGeometries: THREE.BufferGeometry[];
+  /** Label geometries belonging to this section */
+  labelGeometries: THREE.BufferGeometry[];
+  /** Section bounds for filtering */
+  bounds: {
+    minX: number;
+    maxX: number;
+    minZ: number;
+    maxZ: number;
+  };
 }
 
 /**
@@ -86,8 +111,10 @@ export interface GeometryCollectionContext {
   multiSectionBasePlateGroupRef: React.RefObject<THREE.Group | null>;
   /** Cached original baseplate geometry */
   originalBaseplateGeoRef: React.MutableRefObject<THREE.BufferGeometry | null>;
-  /** Modified support geometries map */
+  /** Modified support geometries map (key is support ID) */
   modifiedSupportGeometries: Map<string, THREE.BufferGeometry>;
+  /** Supports array for looking up sectionId */
+  supports: Array<{ id: string; sectionId?: string }>;
   /** Placed clamps array */
   placedClamps: PlacedClamp[];
   /** Clamp support info map */
