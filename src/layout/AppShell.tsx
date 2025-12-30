@@ -20,6 +20,15 @@ import {
   useClearSelection,
 } from "@/hooks/useSelection";
 
+// Workflow hooks (Phase 7c migration)
+import {
+  useInitializeFixtureWorkflow,
+  useWorkflowStep,
+  useCompletedSteps,
+  useSkippedSteps,
+  type FixtureWorkflowStep,
+} from "@/hooks/useWorkflow";
+
 import PartPropertiesAccordion from "@/components/PartPropertiesAccordion";
 import ContextOptionsPanel, { WorkflowStep, WORKFLOW_STEPS } from "@/components/ContextOptionsPanel";
 import {
@@ -118,10 +127,11 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
     const [drawnBaseplateSections, setDrawnBaseplateSections] = useState<Array<{ id: string; minX: number; maxX: number; minZ: number; maxZ: number }>>([]);
     const [currentBaseplateParams, setCurrentBaseplateParams] = useState<{ padding: number; height: number }>({ padding: 5, height: 4 });
 
-    // Workflow State
-    const [activeStep, setActiveStep] = useState<WorkflowStep>('import');
-    const [completedSteps, setCompletedSteps] = useState<WorkflowStep[]>([]);
-    const [skippedSteps, setSkippedSteps] = useState<WorkflowStep[]>([]);
+    // Workflow State (Phase 7c - now from Zustand store)
+    useInitializeFixtureWorkflow(); // Configure workflow steps on mount
+    const [activeStep, setActiveStep] = useWorkflowStep();
+    const [completedSteps, setCompletedSteps] = useCompletedSteps();
+    const [skippedSteps, setSkippedSteps] = useSkippedSteps();
 
     // File Processing State (moved from FileImport)
     const [importedParts, setImportedParts] = useState<ProcessedFile[]>([]);
