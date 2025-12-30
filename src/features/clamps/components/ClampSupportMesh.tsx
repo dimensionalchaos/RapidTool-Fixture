@@ -17,7 +17,7 @@ import * as THREE from 'three';
 import { Brush, Evaluator, SUBTRACTION } from 'three-bvh-csg';
 import { ClampSupportInfo } from '../utils/clampSupportUtils';
 import { PlacedClamp } from '../types';
-import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { mergeGeometries, mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { performClampCSGInWorker } from '@rapidtool/cad-core';
 
 // Reusable CSG evaluator for better performance
@@ -57,6 +57,76 @@ const createClampSupportMaterial = () =>
     roughness: 0.6,
     side: THREE.DoubleSide,
   });
+
+/**
+ * Remove the bottom cap faces from an ExtrudeGeometry.
+ * ExtrudeGeometry creates both top and bottom caps which cause internal faces
+ * when merged with fillet geometry. This function removes faces at the bottom.
+ * @param geometry The ExtrudeGeometry (must be non-indexed or will be converted)
+ * @param bottomY The Y coordinate of the bottom cap to remove
+ * @param tolerance Tolerance for Y comparison
+ */
+const removeBottomCapFaces = (geometry: THREE.BufferGeometry, bottomY: number, tolerance: number = 0.01): THREE.BufferGeometry => {
+  // Convert to non-indexed if necessary
+  const nonIndexed = geometry.index ? geometry.toNonIndexed() : geometry;
+  const positions = nonIndexed.getAttribute('position');
+  const normals = nonIndexed.getAttribute('normal');
+  
+  const newPositions: number[] = [];
+  const newNormals: number[] = [];
+  
+  // Process triangles (3 vertices each)
+  for (let i = 0; i < positions.count; i += 3) {
+    const y1 = positions.getY(i);
+    const y2 = positions.getY(i + 1);
+    const y3 = positions.getY(i + 2);
+    
+    // Check if all three vertices are at the bottom Y (within tolerance)
+    const isBottomFace = 
+      Math.abs(y1 - bottomY) < tolerance &&
+      Math.abs(y2 - bottomY) < tolerance &&
+      Math.abs(y3 - bottomY) < tolerance;
+    
+    // Also check if the face normal points downward (bottom cap faces point -Y)
+    let isDownwardFacing = false;
+    if (normals) {
+      const ny1 = normals.getY(i);
+      const ny2 = normals.getY(i + 1);
+      const ny3 = normals.getY(i + 2);
+      const avgNy = (ny1 + ny2 + ny3) / 3;
+      isDownwardFacing = avgNy < -0.9;
+    }
+    
+    // Skip this triangle if it's a bottom cap face
+    if (isBottomFace && isDownwardFacing) {
+      continue;
+    }
+    
+    // Keep this triangle
+    for (let j = 0; j < 3; j++) {
+      newPositions.push(
+        positions.getX(i + j),
+        positions.getY(i + j),
+        positions.getZ(i + j)
+      );
+      if (normals) {
+        newNormals.push(
+          normals.getX(i + j),
+          normals.getY(i + j),
+          normals.getZ(i + j)
+        );
+      }
+    }
+  }
+  
+  const result = new THREE.BufferGeometry();
+  result.setAttribute('position', new THREE.Float32BufferAttribute(newPositions, 3));
+  if (newNormals.length > 0) {
+    result.setAttribute('normal', new THREE.Float32BufferAttribute(newNormals, 3));
+  }
+  
+  return result;
+};
 
 /**
  * Create the extruded geometry for a custom polygon support AT ORIGIN
@@ -138,17 +208,23 @@ function createSupportGeometryAtOrigin(
   shape.closePath();
 
   // Create the extruded body geometry
-  const bodyGeo = new THREE.ExtrudeGeometry(shape, { 
+  // ExtrudeGeometry creates both top and bottom caps which cause internal faces
+  // Remove the bottom cap to allow proper welding with fillet geometry
+  let extrudedBody = new THREE.ExtrudeGeometry(shape, { 
     depth: bodyHeight, 
     bevelEnabled: false, 
     curveSegments: EXTRUDE_CURVE_SEGMENTS 
   });
   
   // Rotate to make Y the up direction (extrusion is along Z by default)
-  bodyGeo.rotateX(-Math.PI / 2);
+  extrudedBody.rotateX(-Math.PI / 2);
   
   // Position body to sit on top of fillet (fillet stays at origin before merge)
-  bodyGeo.translate(0, effectiveFilletRadius, 0);
+  extrudedBody.translate(0, effectiveFilletRadius, 0);
+  
+  // Remove bottom cap faces (at y = effectiveFilletRadius after translation)
+  const bodyGeo = removeBottomCapFaces(extrudedBody, effectiveFilletRadius, 0.01);
+  extrudedBody.dispose();
 
   // Create bottom cap at Y=0 to seal the support
   const bottomCapGeo = createBottomCapGeometry(polygon, cornerRadius, effectiveFilletRadius);
@@ -184,9 +260,13 @@ function createSupportGeometryAtOrigin(
     return null;
   }
 
+  // Weld duplicate vertices at seams (fillet/body/cap boundaries) for watertight mesh
+  // Use a tolerance of 0.01mm to account for floating-point precision issues
+  const welded = mergeVertices(merged, 0.01);
+  welded.computeVertexNormals();
+  
   // Do NOT translate - geometry stays at origin
-  merged.computeVertexNormals();
-  return merged;
+  return welded;
 }
 
 /**

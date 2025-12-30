@@ -5,10 +5,17 @@
 
 import * as THREE from 'three';
 import { Brush, Evaluator, SUBTRACTION, ADDITION } from 'three-bvh-csg';
+import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+
+// BVH options with increased maxDepth to handle complex geometries without warnings
+const BVH_OPTIONS = {
+  maxDepth: 100, // Default is 40, increase for complex merged geometries
+  maxLeafTris: 10,
+};
 
 // Message types
 export interface CSGWorkerInput {
-  type: 'subtract-single' | 'subtract-batch' | 'union-batch';
+  type: 'subtract-single' | 'subtract-batch' | 'union-batch' | 'csg-union-batch';
   id: string;
   data: {
     // For single subtraction
@@ -105,16 +112,36 @@ function createGeometryFromArrays(
 
 // Extract geometry data for transfer
 function extractGeometryData(geometry: THREE.BufferGeometry) {
-  const positions = geometry.getAttribute('position').array as Float32Array;
-  const normals = geometry.getAttribute('normal')?.array as Float32Array || new Float32Array(0);
-  const indices = geometry.index?.array as Uint32Array || new Uint32Array(0);
+  // CSG results may be non-indexed - convert to indexed if necessary
+  let workingGeometry = geometry;
+  
+  // If no index, create one (each vertex is unique)
+  if (!workingGeometry.index) {
+    const positions = workingGeometry.getAttribute('position');
+    if (positions) {
+      const indexArray = new Uint32Array(positions.count);
+      for (let i = 0; i < positions.count; i++) {
+        indexArray[i] = i;
+      }
+      workingGeometry.setIndex(new THREE.BufferAttribute(indexArray, 1));
+    }
+  }
+  
+  const positions = workingGeometry.getAttribute('position').array as Float32Array;
+  const normals = workingGeometry.getAttribute('normal')?.array as Float32Array || new Float32Array(0);
+  const indices = workingGeometry.index?.array as Uint32Array || new Uint32Array(0);
+  
+  // For non-indexed geometry, triangle count is vertexCount / 3
+  const triangleCount = indices.length > 0 ? indices.length / 3 : positions.length / 9;
+  
+  console.log(`[extractGeometryData] positions: ${positions.length}, indices: ${indices.length}, triangles: ${triangleCount}`);
   
   return {
     positions: new Float32Array(positions),
     normals: new Float32Array(normals),
     indices: new Uint32Array(indices),
     vertexCount: positions.length / 3,
-    triangleCount: indices.length / 3
+    triangleCount
   };
 }
 
@@ -145,12 +172,12 @@ function processSingleSubtraction(
   const supportBrush = new Brush(supportGeometry);
   supportBrush.updateMatrixWorld();
   // Prepare BVH and half-edge structures for CSG
-  supportBrush.prepareGeometry();
+  supportBrush.prepareGeometry(BVH_OPTIONS);
   
   const cutterBrush = new Brush(cutterGeometry);
   cutterBrush.updateMatrixWorld();
   // Prepare BVH and half-edge structures for CSG
-  cutterBrush.prepareGeometry();
+  cutterBrush.prepareGeometry(BVH_OPTIONS);
   
   // Perform CSG subtraction
   const resultBrush = evaluator.evaluate(supportBrush, cutterBrush, SUBTRACTION);
@@ -191,7 +218,7 @@ function processBatchSubtraction(
   cutterBrush.updateMatrixWorld();
   // IMPORTANT: Prepare BVH and half-edge structures upfront for the cutter
   // This builds the MeshBVH once for reuse across all support subtractions
-  cutterBrush.prepareGeometry();
+  cutterBrush.prepareGeometry(BVH_OPTIONS);
   
   const results: CSGWorkerOutput['batchData'] = [];
   
@@ -210,7 +237,7 @@ function processBatchSubtraction(
       const supportBrush = new Brush(supportGeometry);
       supportBrush.updateMatrixWorld();
       // Prepare BVH for each support
-      supportBrush.prepareGeometry();
+      supportBrush.prepareGeometry(BVH_OPTIONS);
       
       // Perform CSG subtraction
       const resultBrush = evaluator.evaluate(supportBrush, cutterBrush, SUBTRACTION);
@@ -377,6 +404,130 @@ function processBatchMerge(
   };
 }
 
+// Process batch CSG union using three-bvh-csg ADDITION operation
+// This creates proper manifold geometry by computing actual boolean unions
+function processBatchCSGUnion(
+  geometries: Array<{
+    id: string;
+    positions: Float32Array;
+    normals?: Float32Array;
+    indices?: Uint32Array;
+  }>,
+  progressCallback: (current: number, total: number, stage: string) => void
+): CSGWorkerOutput['data'] | null {
+  console.log('[processBatchCSGUnion] Starting CSG union of', geometries.length, 'geometries');
+  
+  if (!geometries || geometries.length === 0) {
+    console.error('[CSGWorker] No geometries provided for CSG union');
+    return null;
+  }
+  
+  if (geometries.length === 1) {
+    // Single geometry - just return it
+    const geom = geometries[0];
+    return {
+      positions: new Float32Array(geom.positions),
+      normals: new Float32Array(geom.normals || geom.positions.length),
+      indices: new Uint32Array(geom.indices || Array.from({ length: geom.positions.length / 3 }, (_, i) => i)),
+      vertexCount: geom.positions.length / 3,
+      triangleCount: (geom.indices?.length || geom.positions.length / 3) / 3
+    };
+  }
+  
+  const evaluator = new Evaluator();
+  evaluator.useGroups = false;
+  
+  progressCallback(1, geometries.length, 'Preparing first geometry...');
+  
+  // Start with the first geometry as the accumulated result
+  let accumulatedGeometry = createGeometryFromArrays(
+    geometries[0].positions,
+    geometries[0].normals,
+    geometries[0].indices
+  );
+  
+  let accumulatedBrush = new Brush(accumulatedGeometry);
+  accumulatedBrush.updateMatrixWorld();
+  accumulatedBrush.prepareGeometry(BVH_OPTIONS);
+  
+  // Progressively union each geometry with the accumulated result
+  for (let i = 1; i < geometries.length; i++) {
+    const geom = geometries[i];
+    progressCallback(i + 1, geometries.length, `CSG union ${i + 1}/${geometries.length}: ${geom.id}`);
+    
+    console.log(`[processBatchCSGUnion] Unioning geometry ${i + 1}/${geometries.length}: ${geom.id}`);
+    
+    try {
+      // Create brush for this geometry
+      const nextGeometry = createGeometryFromArrays(
+        geom.positions,
+        geom.normals,
+        geom.indices
+      );
+      
+      const nextBrush = new Brush(nextGeometry);
+      nextBrush.updateMatrixWorld();
+      nextBrush.prepareGeometry(BVH_OPTIONS);
+      
+      // Perform CSG union (ADDITION)
+      const resultBrush = evaluator.evaluate(accumulatedBrush, nextBrush, ADDITION);
+      
+      if (resultBrush && resultBrush.geometry) {
+        // CSG results are non-indexed, which causes exponential growth in vertex count
+        // Use mergeVertices to consolidate duplicate vertices and create indexed geometry
+        // This dramatically reduces vertex count and improves BVH performance
+        const mergedGeometry = mergeVertices(resultBrush.geometry, 0.001);
+        
+        // Log result geometry info
+        const pos = mergedGeometry.getAttribute('position');
+        const idx = mergedGeometry.index;
+        console.log(`[processBatchCSGUnion] Result ${i + 1}: ${pos?.count || 0} vertices, ${idx ? idx.count / 3 : 'no index'} triangles`);
+        
+        // Dispose old accumulated brush and result brush
+        accumulatedBrush.geometry.dispose();
+        resultBrush.geometry.dispose();
+        
+        // Create new brush from merged geometry for next iteration
+        accumulatedBrush = new Brush(mergedGeometry);
+        accumulatedBrush.updateMatrixWorld();
+        // Prepare geometry for the next CSG operation
+        accumulatedBrush.prepareGeometry(BVH_OPTIONS);
+      } else {
+        console.warn(`[processBatchCSGUnion] CSG union failed for geometry ${geom.id}, skipping`);
+      }
+      
+      // Cleanup this iteration's geometry
+      nextGeometry.dispose();
+      
+    } catch (error) {
+      console.warn(`[processBatchCSGUnion] Error unioning geometry ${geom.id}:`, error);
+      // Continue with what we have
+    }
+  }
+  
+  progressCallback(geometries.length, geometries.length, 'Finalizing geometry...');
+  
+  // Extract final result
+  const finalGeometry = accumulatedBrush.geometry.clone();
+  
+  // Debug: log final geometry state before extracting
+  const finalPos = finalGeometry.getAttribute('position');
+  const finalIdx = finalGeometry.index;
+  console.log(`[processBatchCSGUnion] Final geometry: ${finalPos?.count || 0} vertices, index: ${finalIdx ? finalIdx.count : 'null'}`);
+  
+  finalGeometry.computeVertexNormals();
+  
+  const result = extractGeometryData(finalGeometry);
+  
+  // Cleanup
+  accumulatedBrush.geometry.dispose();
+  finalGeometry.dispose();
+  
+  console.log(`[processBatchCSGUnion] Complete: ${result.vertexCount} vertices, ${result.triangleCount} triangles`);
+  
+  return result;
+}
+
 // Worker message handler
 self.onmessage = (e: MessageEvent<CSGWorkerInput>) => {
   const { type, id, data } = e.data;
@@ -511,6 +662,73 @@ self.onmessage = (e: MessageEvent<CSGWorkerInput>) => {
         vertexCount: result.vertexCount,
         triangleCount: result.triangleCount
       } : 'null');
+      
+      if (result) {
+        const transferables: Transferable[] = [
+          result.positions.buffer as ArrayBuffer,
+          result.normals.buffer as ArrayBuffer,
+          result.indices.buffer as ArrayBuffer
+        ];
+        
+        (self as unknown as Worker).postMessage(
+          {
+            type: 'union-result',
+            id,
+            data: result
+          } as CSGWorkerOutput,
+          transferables
+        );
+      } else {
+        (self as unknown as Worker).postMessage({
+          type: 'error',
+          id,
+          error: 'CSG union returned no result'
+        } as CSGWorkerOutput);
+      }
+    } catch (error) {
+      (self as unknown as Worker).postMessage({
+        type: 'error',
+        id,
+        error: error instanceof Error ? error.message : String(error)
+      } as CSGWorkerOutput);
+    }
+  } else if (type === 'csg-union-batch') {
+    // NEW: Proper CSG union using three-bvh-csg ADDITION operation
+    console.log('[CSGWorker] Received csg-union-batch request (real CSG union)');
+    try {
+      const progressCallback = (current: number, total: number, stage: string) => {
+        (self as unknown as Worker).postMessage({
+          type: 'progress',
+          id,
+          progress: {
+            current,
+            total,
+            stage
+          }
+        } as CSGWorkerOutput);
+      };
+      
+      // Extract geometries from supports array
+      const geometries = data.supports?.map(s => ({
+        id: s.id,
+        positions: s.positions,
+        normals: s.normals,
+        indices: s.indices
+      })) || [];
+      
+      // Add baseplate if provided (it will be the first geometry to union)
+      if (data.cutter) {
+        geometries.unshift({
+          id: 'baseplate',
+          positions: data.cutter.positions,
+          normals: data.cutter.normals,
+          indices: data.cutter.indices
+        });
+      }
+      
+      console.log(`[CSGWorker] Running CSG union on ${geometries.length} geometries`);
+      
+      const result = processBatchCSGUnion(geometries, progressCallback);
       
       if (result) {
         const transferables: Transferable[] = [

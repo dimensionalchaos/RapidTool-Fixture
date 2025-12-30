@@ -7,7 +7,12 @@ import type { CSGWorkerInput, CSGWorkerOutput } from './csgWorker';
 
 // Worker pool for CSG operations
 let csgWorker: Worker | null = null;
-const csgWorkerPromises: Map<string, { resolve: (value: any) => void; reject: (error: any) => void }> = new Map();
+const csgWorkerPromises: Map<string, { 
+  resolve: (value: any) => void; 
+  reject: (error: any) => void;
+  onProgress?: (current: number, total: number, stage: string) => void;
+  needsReconstruction?: boolean; // Whether to reconstruct geometry from raw data
+}> = new Map();
 
 /**
  * Get or create the CSG worker
@@ -20,7 +25,7 @@ function getCSGWorker(): Worker {
     );
     
     csgWorker.onmessage = (e: MessageEvent<CSGWorkerOutput>) => {
-      const { type, id, data, batchData, error } = e.data;
+      const { type, id, data, batchData, error, progress } = e.data;
       const promise = csgWorkerPromises.get(id);
       
       if (!promise) return;
@@ -28,8 +33,24 @@ function getCSGWorker(): Worker {
       if (type === 'error') {
         promise.reject(new Error(error));
         csgWorkerPromises.delete(id);
+      } else if (type === 'progress' && progress && promise.onProgress) {
+        // Handle progress updates
+        promise.onProgress(progress.current, progress.total, progress.stage);
       } else if (type === 'subtraction-result' || type === 'batch-result' || type === 'union-result') {
-        promise.resolve(data || batchData);
+        // For union-result, reconstruct geometry if needed
+        if (type === 'union-result' && promise.needsReconstruction && data) {
+          const geometry = reconstructGeometry({
+            positions: data.positions,
+            normals: data.normals,
+            indices: data.indices
+          });
+          if (!geometry.getAttribute('normal')) {
+            geometry.computeVertexNormals();
+          }
+          promise.resolve(geometry);
+        } else {
+          promise.resolve(data || batchData);
+        }
         csgWorkerPromises.delete(id);
       } else if (type === 'progress') {
         // Progress updates are handled separately via callbacks
@@ -363,6 +384,109 @@ export async function performBatchCSGUnionInWorker(
     worker.postMessage(
       {
         type: 'union-batch',
+        id,
+        data: {
+          supports: geometriesData,
+          cutter: baseplateData
+        }
+      } as CSGWorkerInput,
+      transferables
+    );
+  });
+}
+
+/**
+ * Perform REAL CSG union of multiple geometries using three-bvh-csg ADDITION.
+ * Unlike performBatchCSGUnionInWorker which just concatenates buffers,
+ * this performs proper boolean union that removes internal faces at intersections.
+ * This is slower but produces manifold geometry suitable for 3D printing/export.
+ */
+export function performRealCSGUnionInWorker(
+  geometries: Array<{ id: string; geometry: THREE.BufferGeometry }>,
+  baseplateGeometry?: THREE.BufferGeometry,
+  onProgress?: (current: number, total: number, stage: string) => void
+): Promise<THREE.BufferGeometry | null> {
+  return new Promise((resolve, reject) => {
+    const id = `csg-real-union-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    
+    // Get or create worker
+    const worker = getCSGWorker();
+    
+    // Store promise handlers with needsReconstruction flag for union results
+    csgWorkerPromises.set(id, { resolve, reject, onProgress, needsReconstruction: true });
+    
+    // Convert geometries to transferable format
+    const geometriesData: Array<{
+      id: string;
+      positions: Float32Array;
+      normals: Float32Array;
+      indices: Uint32Array | null;
+    }> = [];
+    const transferables: Transferable[] = [];
+    
+    for (const { id: geomId, geometry } of geometries) {
+      const positionAttr = geometry.getAttribute('position');
+      const normalAttr = geometry.getAttribute('normal');
+      const indexAttr = geometry.index;
+      
+      if (!positionAttr || !normalAttr) {
+        console.warn(`Geometry ${geomId} missing position or normal attributes, skipping`);
+        continue;
+      }
+      
+      // Clone the arrays so we can transfer them
+      const positions = new Float32Array(positionAttr.array);
+      const normals = new Float32Array(normalAttr.array);
+      const indices = indexAttr ? new Uint32Array(indexAttr.array) : null;
+      
+      geometriesData.push({
+        id: geomId,
+        positions,
+        normals,
+        indices
+      });
+      
+      transferables.push(positions.buffer, normals.buffer);
+      if (indices) {
+        transferables.push(indices.buffer);
+      }
+    }
+    
+    // Convert baseplate geometry if provided
+    let baseplateData: {
+      positions: Float32Array;
+      normals: Float32Array;
+      indices: Uint32Array | null;
+    } | undefined;
+    
+    if (baseplateGeometry) {
+      const positionAttr = baseplateGeometry.getAttribute('position');
+      const normalAttr = baseplateGeometry.getAttribute('normal');
+      const indexAttr = baseplateGeometry.index;
+      
+      if (positionAttr && normalAttr) {
+        const positions = new Float32Array(positionAttr.array);
+        const normals = new Float32Array(normalAttr.array);
+        const indices = indexAttr ? new Uint32Array(indexAttr.array) : null;
+        
+        baseplateData = { positions, normals, indices };
+        
+        transferables.push(positions.buffer, normals.buffer);
+        if (indices) {
+          transferables.push(indices.buffer);
+        }
+      }
+    }
+    
+    if (geometriesData.length === 0 && !baseplateData) {
+      resolve(null);
+      return;
+    }
+    
+    // Send message to worker - use the NEW 'csg-union-batch' type for real CSG union
+    worker.postMessage(
+      {
+        type: 'csg-union-batch',
         id,
         data: {
           supports: geometriesData,

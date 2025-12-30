@@ -148,11 +148,22 @@ export function useBaseplateHandlers({
     // Expand to include each nearby label
     nearbyLabels.forEach(label => {
       if (label.position) {
-        // Approximate label bounds based on text length and font size
+        // Use actual computed bounds if available, otherwise estimate
         const fontSize = label.fontSize ?? 10;
-        const textLength = (label.text?.length ?? 0) * fontSize * 0.6;
-        const labelHalfWidth = textLength / 2;
-        const labelHalfHeight = fontSize / 2;
+        let labelHalfWidth: number;
+        let labelHalfHeight: number;
+        
+        if (label.computedWidth !== undefined && label.computedHeight !== undefined) {
+          // Use actual computed dimensions from rendered text geometry
+          labelHalfWidth = label.computedWidth / 2;
+          labelHalfHeight = label.computedHeight / 2;
+        } else {
+          // Fallback: estimate based on text length (used before geometry is computed)
+          // Use a more conservative factor of 0.5 instead of 0.6
+          const textLength = (label.text?.length ?? 0) * fontSize * 0.5;
+          labelHalfWidth = textLength / 2;
+          labelHalfHeight = fontSize / 2;
+        }
         
         minX = Math.min(minX, label.position.x - labelHalfWidth - padding);
         maxX = Math.max(maxX, label.position.x + labelHalfWidth + padding);

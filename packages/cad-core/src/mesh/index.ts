@@ -51,6 +51,8 @@ export {
   repairMeshWithManifold,
   decimateMeshWithManifold,
   repairAndDecimateMesh,
+  unionGeometriesWithManifold,
+  repairMeshForExport,
   initManifold as initManifoldMeshService
 } from './manifoldMeshService';
 
@@ -58,5 +60,7 @@ export type {
   ManifoldRepairResult,
   ManifoldDecimationResult,
   ManifoldProcessResult,
-  ManifoldProgressCallback
+  ManifoldProgressCallback,
+  ManifoldUnionResult,
+  MeshRepairForExportResult
 } from './manifoldMeshService';

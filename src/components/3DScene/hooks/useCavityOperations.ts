@@ -52,6 +52,7 @@ export interface UseCavityOperationsParams {
   multiSectionBasePlateGroupRef: React.RefObject<THREE.Group | null>;
   loadedClampDataRef: React.MutableRefObject<Map<string, LoadedClampData>>;
   labelsRef: React.MutableRefObject<LabelConfig[]>;
+  originalBaseplateGeoRef: React.MutableRefObject<THREE.BufferGeometry | null>;
 }
 
 export interface UseCavityOperationsReturn {
@@ -84,6 +85,7 @@ export function useCavityOperations({
   multiSectionBasePlateGroupRef,
   loadedClampDataRef,
   labelsRef,
+  originalBaseplateGeoRef,
 }: UseCavityOperationsParams): UseCavityOperationsReturn {
 
   // Cavity context request/dispatch
@@ -532,6 +534,13 @@ export function useCavityOperations({
             basePlateMeshRef.current.updateMatrixWorld(true);
             baseplateGeometry = basePlateMeshRef.current.geometry.clone();
             baseplateGeometry.applyMatrix4(basePlateMeshRef.current.matrixWorld);
+            
+            // Cache the baseplate geometry for export (since BasePlate component will be hidden after cavity)
+            // This is needed when there are no holes, so originalBaseplateGeoRef would otherwise be null
+            if (!originalBaseplateGeoRef.current) {
+              originalBaseplateGeoRef.current = baseplateGeometry.clone();
+              console.log('[useCavityOperations] Cached baseplate geometry for export');
+            }
             console.log('[useCavityOperations] Using original baseplate geometry');
           }
           

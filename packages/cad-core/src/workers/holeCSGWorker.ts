@@ -10,6 +10,12 @@
 import * as THREE from 'three';
 import { Brush, Evaluator, SUBTRACTION } from 'three-bvh-csg';
 
+// BVH options with increased maxDepth to handle complex geometries without warnings
+const BVH_OPTIONS = {
+  maxDepth: 100, // Default is 40, increase for complex merged geometries
+  maxLeafTris: 10,
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────────────────────────────────────
@@ -109,6 +115,10 @@ function performCSGSubtraction(
     // Create brushes for CSG
     const baseplateBrush = new Brush(baseplateClone);
     const holesBrush = new Brush(holesClone);
+    
+    // Prepare BVH structures with increased maxDepth
+    baseplateBrush.prepareGeometry(BVH_OPTIONS);
+    holesBrush.prepareGeometry(BVH_OPTIONS);
     
     sendProgress(50);
     

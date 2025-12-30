@@ -6,6 +6,7 @@ export {
   performBatchCSGSubtractionInWorker,
   performCSGSubtractionInWorker,
   performBatchCSGUnionInWorker,
+  performRealCSGUnionInWorker,
   performClampCSGInWorker,
   performHoleCSGInWorker,
   terminateHoleCSGWorker,

@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Switch } from '@/components/ui/switch';
+import { Progress } from '@/components/ui/progress';
 import { 
   DownloadCloud, 
   AlertCircle, 
@@ -14,7 +15,8 @@ import {
   Check, 
   Settings2,
   AlertTriangle,
-  Loader2
+  Loader2,
+  Cog
 } from 'lucide-react';
 import {
   Dialog,
@@ -25,6 +27,12 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import type { ExportFormat, ExportConfig, ExportResult } from '@rapidtool/cad-core';
+
+interface ExportProgressState {
+  stage: string;
+  progress: number;
+  message: string;
+}
 
 interface ExportStepContentProps {
   /** Whether a fixture exists */
@@ -74,6 +82,29 @@ const ExportStepContent: React.FC<ExportStepContentProps> = ({
   const [showFilenameDialog, setShowFilenameDialog] = useState(false);
   const [filename, setFilename] = useState('Fixture');
   const [filenameError, setFilenameError] = useState<string | null>(null);
+  
+  // Export progress state
+  const [exportProgress, setExportProgress] = useState<ExportProgressState | null>(null);
+
+  // Listen for export progress events
+  useEffect(() => {
+    const handleExportProgress = (e: CustomEvent<ExportProgressState>) => {
+      setExportProgress(e.detail);
+    };
+
+    const handleExportComplete = () => {
+      // Clear progress after a short delay to show 100%
+      setTimeout(() => setExportProgress(null), 500);
+    };
+
+    window.addEventListener('export-progress', handleExportProgress as EventListener);
+    window.addEventListener('export-complete', handleExportComplete);
+    
+    return () => {
+      window.removeEventListener('export-progress', handleExportProgress as EventListener);
+      window.removeEventListener('export-complete', handleExportComplete);
+    };
+  }, []);
 
   // Listen for export dialog open event
   useEffect(() => {
@@ -314,18 +345,51 @@ const ExportStepContent: React.FC<ExportStepContentProps> = ({
         </div>
       </div>
 
+      {/* Export Progress Indicator */}
+      {(isExporting || exportProgress) && (
+        <Card className="tech-glass p-4 border-primary/30 bg-primary/5">
+          <div className="space-y-3">
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center">
+                <Cog className="w-4 h-4 text-primary animate-spin" />
+              </div>
+              <div className="flex-1">
+                <p className="text-sm font-tech font-medium text-primary">
+                  {exportProgress?.stage === 'manifold' ? 'Creating Manifold Geometry' :
+                   exportProgress?.stage === 'exporting' ? 'Generating STL' :
+                   exportProgress?.stage === 'complete' ? 'Export Complete!' :
+                   'Preparing Export...'}
+                </p>
+                <p className="text-xs text-muted-foreground font-tech">
+                  {exportProgress?.message || 'Initializing...'}
+                </p>
+              </div>
+            </div>
+            
+            <Progress 
+              value={exportProgress?.progress ?? 0} 
+              className="h-2"
+            />
+            
+            <p className="text-xs text-muted-foreground font-tech text-center">
+              {Math.round(exportProgress?.progress ?? 0)}% complete
+            </p>
+          </div>
+        </Card>
+      )}
+
       {/* Export Button */}
       <Button
         variant="default"
         size="sm"
         className="w-full font-tech"
         onClick={handleExportClick}
-        disabled={isExporting || !meshValid}
+        disabled={isExporting || !meshValid || !!exportProgress}
       >
-        {isExporting ? (
+        {isExporting || exportProgress ? (
           <>
             <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-            Exporting...
+            {exportProgress?.stage === 'manifold' ? 'Processing...' : 'Exporting...'}
           </>
         ) : (
           <>

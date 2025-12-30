@@ -607,8 +607,18 @@ export function useBaseplateOperations({
       
       // Expand the bounding box to include label footprints
       for (const label of labels) {
-        const textWidth = label.text.length * label.fontSize * 0.6;
-        const textHeight = label.fontSize;
+        // Use actual computed dimensions if available, otherwise estimate
+        let textWidth: number;
+        let textHeight: number;
+        
+        if (label.computedWidth !== undefined && label.computedHeight !== undefined) {
+          textWidth = label.computedWidth;
+          textHeight = label.computedHeight;
+        } else {
+          // Fallback estimate with conservative factor
+          textWidth = label.text.length * label.fontSize * 0.5;
+          textHeight = label.fontSize;
+        }
         const padding = 5;
         
         const rot = label.rotation;
