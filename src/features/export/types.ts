@@ -145,6 +145,13 @@ export interface ExportServiceConfig {
   quality: ExportQuality;
   /** Whether to perform CSG union on overlapping geometries */
   performCSGUnion: boolean;
+  /**
+   * Whether to use the pre-computed union from cavity step (fallbackGeometry).
+   * When true and fallbackGeometry is provided, export will skip redundant CSG 
+   * operations and use the already-unioned geometry directly.
+   * This significantly speeds up export since cavity step already performs CSG union.
+   */
+  useCachedUnion: boolean;
   /** Vertex merge tolerance for welding */
   vertexMergeTolerance: number;
   /** Target triangle count for decimation (0 = no decimation) */
@@ -166,6 +173,7 @@ export function getExportConfigForQuality(quality: ExportQuality): ExportService
       return {
         quality: 'fast',
         performCSGUnion: false, // Skip CSG for speed
+        useCachedUnion: true, // Use cavity step's pre-computed union
         vertexMergeTolerance: 0.01, // Looser tolerance for faster welding
         targetTriangleCount: 50000, // Aggressive decimation
         csgBatchSize: 5,
@@ -176,6 +184,7 @@ export function getExportConfigForQuality(quality: ExportQuality): ExportService
       return {
         quality: 'balanced',
         performCSGUnion: true,
+        useCachedUnion: true, // Use cavity step's pre-computed union
         vertexMergeTolerance: 0.005,
         targetTriangleCount: 100000, // Moderate decimation
         csgBatchSize: 10,
@@ -187,6 +196,7 @@ export function getExportConfigForQuality(quality: ExportQuality): ExportService
       return {
         quality: 'high',
         performCSGUnion: true,
+        useCachedUnion: true, // Use cavity step's pre-computed union (skip redundant CSG)
         vertexMergeTolerance: 0.001, // Tight tolerance
         targetTriangleCount: 0, // No decimation
         csgBatchSize: 20,

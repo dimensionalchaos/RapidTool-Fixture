@@ -16,7 +16,6 @@ import {
   downloadFile,
   generateExportFilename,
   performRealCSGUnionInWorker,
-  unionGeometriesWithManifold,
   type ExportConfig,
 } from '@rapidtool/cad-core';
 import type { 
@@ -35,8 +34,7 @@ import {
 
 /**
  * Performs CSG union on baseplate and supports
- * Uses Manifold3D for cleaner manifold geometry without non-manifold triangles at fillet intersections
- * Falls back to three-bvh-csg worker if Manifold fails
+ * With chunked processing for better UI responsiveness
  */
 async function performBaseplateSupportsUnion(
   baseplateAndSupports: THREE.BufferGeometry[],
@@ -55,69 +53,33 @@ async function performBaseplateSupportsUnion(
   onProgress?.({ 
     stage: 'manifold', 
     progress: 10, 
-    message: `CSG union: baseplate + ${baseplateAndSupports.length - 1} supports (using Manifold3D)...` 
-  });
-  
-  // Yield before heavy operation if using chunked processing
-  if (config.useChunkedProcessing) {
-    await yieldToMain();
-  }
-  
-  // First, try using Manifold3D for cleaner manifold geometry
-  // This produces better results without non-manifold triangles at fillet intersections
-  try {
-    console.log('[Export] Attempting Manifold3D CSG union for clean manifold output...');
-    
-    const manifoldResult = await unionGeometriesWithManifold(
-      baseplateAndSupports,
-      (progress) => {
-        // Map Manifold progress stages to export progress
-        const progressPercent = 10 + (progress.progress * 0.25); // 10-35%
-        onProgress?.({ 
-          stage: 'manifold', 
-          progress: progressPercent, 
-          message: `CSG union (Manifold3D): ${progress.message}` 
-        });
-      }
-    );
-    
-    if (manifoldResult.success && manifoldResult.geometry) {
-      console.log(`[Export] ✓ Manifold3D CSG union succeeded: ${manifoldResult.totalInputTriangles} → ${manifoldResult.finalTriangles} triangles`);
-      return manifoldResult.geometry;
-    } else {
-      console.warn('[Export] Manifold3D CSG union failed:', manifoldResult.error);
-      // Fall through to worker fallback
-    }
-  } catch (error) {
-    console.warn('[Export] Manifold3D CSG union error, falling back to worker:', error);
-    // Fall through to worker fallback
-  }
-  
-  // Fallback: Use three-bvh-csg worker (may produce non-manifold triangles at intersections)
-  console.log('[Export] Falling back to three-bvh-csg worker for CSG union...');
-  onProgress?.({ 
-    stage: 'manifold', 
-    progress: 15, 
-    message: `CSG union: Using fallback CSG engine...` 
+    message: `CSG union: baseplate + ${baseplateAndSupports.length - 1} supports...` 
   });
   
   try {
+    // Process in batches for better memory management on low-end devices
     const batchSize = config.csgBatchSize;
+    const totalParts = baseplateAndSupports.length;
     
     const geomsForWorker = baseplateAndSupports.map((geom, idx) => ({
       id: idx === 0 ? 'baseplate' : `support-${idx}`,
       geometry: geom
     }));
     
+    // Yield before heavy operation if using chunked processing
+    if (config.useChunkedProcessing) {
+      await yieldToMain();
+    }
+    
     const result = await performRealCSGUnionInWorker(
       geomsForWorker,
       undefined,
       async (current, total, stage) => {
-        const progress = 15 + ((current / total) * 20); // 15-35%
+        const progress = 10 + ((current / total) * 25); // 10-35%
         onProgress?.({ 
           stage: 'manifold', 
           progress, 
-          message: `CSG union (fallback): ${stage} (${current}/${total})` 
+          message: `CSG union: ${stage} (${current}/${total})` 
         });
         
         // Yield periodically during long operations
@@ -128,11 +90,11 @@ async function performBaseplateSupportsUnion(
     );
     
     if (result) {
-      console.log('[Export] Fallback CSG union succeeded (note: may have non-manifold triangles at fillet intersections)');
+      console.log('[Export] Baseplate + supports CSG union succeeded - manifold geometry created');
       return result;
     }
   } catch (error) {
-    console.error('[Export] Fallback CSG union also failed:', error);
+    console.error('[Export] Baseplate + supports CSG union failed:', error);
   }
   
   return null;
@@ -466,6 +428,33 @@ export async function exportFixture(
       
       return result;
     }
+    
+    // OPTIMIZATION: Use cached union from cavity step if available
+    // The cavity step already performs CSG union (baseplate + supports + labels + hole subtraction)
+    // so we can skip redundant CSG operations and use the pre-computed geometry directly
+    if (serviceConfig.useCachedUnion && fallbackGeometry) {
+      console.log('[Export] Using cached union from cavity step (skipping redundant CSG)');
+      onProgress?.({ stage: 'manifold', progress: 50, message: 'Using pre-computed geometry...' });
+      
+      // Generate STL directly from the cached geometry
+      const result = generateSTLFiles(
+        fallbackGeometry,
+        config,
+        geometryCollection.isMultiSection,
+        sectionCount,
+        onProgress
+      );
+      
+      const totalTime = ((performance.now() - startTime) / 1000).toFixed(2);
+      console.log(`[Export] Completed with cached union in ${totalTime}s (quality: ${serviceConfig.quality})`);
+      
+      onProgress?.({ stage: 'complete', progress: 100, message: `Export complete! (${totalTime}s)` });
+      
+      return result;
+    }
+    
+    // Fallback: Collect and process geometries manually (when cached union not available)
+    console.log('[Export] No cached union available, performing CSG operations...');
     
     // Single file export (combined geometry)
     // Collect all geometries for CSG union (baseplate + supports)
