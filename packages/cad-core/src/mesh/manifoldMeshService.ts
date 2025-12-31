@@ -309,10 +309,26 @@ function toNonIndexed(geometry: THREE.BufferGeometry): THREE.BufferGeometry {
 }
 
 /**
- * Edge key for tracking edges in a mesh
+ * Edge key for tracking edges in a mesh - uses rounded position values for stability
  */
-function makeEdgeKey(i1: number, i2: number): string {
-  return i1 < i2 ? `${i1}-${i2}` : `${i2}-${i1}`;
+function makePositionEdgeKey(
+  positions: Float32Array,
+  i1: number,
+  i2: number,
+  precision: number = 10000
+): string {
+  const x1 = Math.round(positions[i1 * 3] * precision);
+  const y1 = Math.round(positions[i1 * 3 + 1] * precision);
+  const z1 = Math.round(positions[i1 * 3 + 2] * precision);
+  const x2 = Math.round(positions[i2 * 3] * precision);
+  const y2 = Math.round(positions[i2 * 3 + 1] * precision);
+  const z2 = Math.round(positions[i2 * 3 + 2] * precision);
+  
+  const key1 = `${x1},${y1},${z1}`;
+  const key2 = `${x2},${y2},${z2}`;
+  
+  // Sort to make edge undirected
+  return key1 < key2 ? `${key1}-${key2}` : `${key2}-${key1}`;
 }
 
 /**
@@ -346,11 +362,11 @@ function analyzeMeshTopology(geometry: THREE.BufferGeometry): {
       i2 = t * 3 + 2;
     }
     
-    // Add all three edges of this triangle
+    // Add all three edges of this triangle using position-based keys
     const edges = [
-      makeEdgeKey(i0, i1),
-      makeEdgeKey(i1, i2),
-      makeEdgeKey(i2, i0)
+      makePositionEdgeKey(positions, i0, i1),
+      makePositionEdgeKey(positions, i1, i2),
+      makePositionEdgeKey(positions, i2, i0)
     ];
     
     for (const edge of edges) {
@@ -1104,34 +1120,108 @@ export async function unionGeometriesWithManifold(
         
         // Create Manifold from mesh - try multiple approaches
         let manifold: any = null;
+        let lastError: any = null;
         
-        // Approach 1: Direct construction
+        // Log mesh stats for debugging
+        console.log(`[ManifoldUnion] Mesh ${i} stats: ${mesh.numVert} verts, ${mesh.numTri} tris`);
+        
+        // Approach 1: Direct construction with error capture
         try {
           manifold = new Manifold(mesh);
-          if (manifold.isEmpty()) {
+          
+          // Check manifold status
+          const status = manifold.status?.();
+          if (status !== undefined && status !== 0) {
+            const statusNames = ['OK', 'NonFiniteVertex', 'NotManifold', 'VertexOutOfBounds', 'PropertiesWrongLength', 'MissingPositionProperties', 'MergeVectorsDifferentLengths', 'MergeIndexOutOfBounds', 'TransformWrongLength', 'RunIndexWrongLength', 'FaceIDWrongLength', 'InvalidConstruction'];
+            console.log(`[ManifoldUnion] Manifold ${i} status: ${statusNames[status] || status}`);
+            manifold.delete();
+            manifold = null;
+          } else if (manifold.isEmpty()) {
+            console.log(`[ManifoldUnion] Manifold ${i} is empty`);
             manifold.delete();
             manifold = null;
           }
-        } catch (e) {
-          console.log(`[ManifoldUnion] Direct Manifold construction failed for ${i}, trying alternatives...`);
+        } catch (e: any) {
+          lastError = e;
+          console.log(`[ManifoldUnion] Direct Manifold construction failed for ${i}: ${e.message || e}`);
         }
         
-        // Approach 2: Use Manifold.compose for topological composition (doesn't require manifold input)
+        // Approach 2: Try with smooth() which can fix some topology issues
         if (!manifold) {
           try {
-            // Manifold.compose creates a manifold from a list of meshes without requiring manifold input
-            // It's more tolerant of non-manifold geometry
-            manifold = Manifold.compose([new Manifold(mesh)]);
+            // Create a fresh mesh and try smooth
+            const mesh2 = threeGeometryToManifoldMesh(processedGeom, wasm);
+            const tempManifold = new Manifold(mesh2);
+            
+            // smooth() can help fix edge cases by interpolating
+            manifold = tempManifold.smooth?.(0);
+            
             if (manifold && manifold.isEmpty()) {
               manifold.delete();
               manifold = null;
             }
-          } catch (e2) {
-            console.log(`[ManifoldUnion] Manifold.compose also failed for ${i}`);
+            
+            if (manifold !== tempManifold) {
+              tempManifold.delete?.();
+            }
+            mesh2.delete?.();
+          } catch (e2: any) {
+            console.log(`[ManifoldUnion] Smooth approach failed for ${i}: ${e2.message || e2}`);
           }
         }
         
-        // Approach 3: Try with hull as fallback for severely broken meshes
+        // Approach 3: Try reserving capacity and batch construction
+        if (!manifold) {
+          try {
+            // Try using batch reserve which can be more tolerant
+            const positions = processedGeom.getAttribute('position').array as Float32Array;
+            const numVerts = positions.length / 3;
+            const numTris = numVerts / 3;
+            
+            // Build indexed mesh manually
+            const uniqueVerts = new Map<string, number>();
+            const indexedPositions: number[] = [];
+            const indices: number[] = [];
+            
+            for (let v = 0; v < numVerts; v++) {
+              const x = positions[v * 3];
+              const y = positions[v * 3 + 1];
+              const z = positions[v * 3 + 2];
+              
+              // Round to reduce floating point issues
+              const key = `${Math.round(x * 10000)},${Math.round(y * 10000)},${Math.round(z * 10000)}`;
+              
+              if (!uniqueVerts.has(key)) {
+                uniqueVerts.set(key, indexedPositions.length / 3);
+                indexedPositions.push(x, y, z);
+              }
+              indices.push(uniqueVerts.get(key)!);
+            }
+            
+            console.log(`[ManifoldUnion] Rebuilt mesh ${i}: ${numVerts} verts → ${indexedPositions.length / 3} unique verts`);
+            
+            const { Mesh: MeshClass } = wasm;
+            const rebuiltMesh = new MeshClass({
+              numProp: 3,
+              vertProperties: new Float32Array(indexedPositions),
+              triVerts: new Uint32Array(indices),
+            });
+            rebuiltMesh.merge();
+            
+            manifold = new Manifold(rebuiltMesh);
+            
+            if (manifold.isEmpty()) {
+              manifold.delete();
+              manifold = null;
+            }
+            
+            rebuiltMesh.delete?.();
+          } catch (e3: any) {
+            console.log(`[ManifoldUnion] Rebuilt mesh approach failed for ${i}: ${e3.message || e3}`);
+          }
+        }
+        
+        // Approach 4: Try with hull as fallback for severely broken meshes
         if (!manifold) {
           try {
             // Use convex hull as absolute fallback - preserves volume but loses detail
@@ -1147,8 +1237,8 @@ export async function unionGeometriesWithManifold(
               manifold.delete();
               manifold = null;
             }
-          } catch (e3) {
-            console.log(`[ManifoldUnion] Convex hull fallback also failed for ${i}`);
+          } catch (e4: any) {
+            console.log(`[ManifoldUnion] Convex hull fallback also failed for ${i}: ${e4.message || e4}`);
           }
         }
         
