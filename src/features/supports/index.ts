@@ -35,3 +35,11 @@ export {
 } from './utils/metrics';
 export { autoPlaceSupports, type AutoPlacementStrategy } from './utils/autoPlacement';
 export { placeOverhangSupports } from './utils/overhangAnalysis';
+export {
+  polygonSignedArea2D,
+  isPolygonClockwiseXZ,
+  computePolygonWindingCW,
+  ensureClockwiseWindingXZ,
+  preparePolygonForGeometry,
+  computeEdgeNormal,
+} from './utils/polygonUtils';

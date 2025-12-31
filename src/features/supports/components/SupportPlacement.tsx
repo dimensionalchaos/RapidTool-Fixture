@@ -2,6 +2,7 @@ import React from 'react';
 import * as THREE from 'three';
 import { AnySupport, SupportType, RectSupport, CylSupport, ConicalSupport } from '../types';
 import { computeSupportMetrics as evaluateSupportMetrics } from '../utils/metrics';
+import { ensureClockwiseWindingXZ } from '../utils/polygonUtils';
 import type { BasePlateSection } from '@/features/baseplate';
 
 interface SupportPlacementProps {
@@ -240,7 +241,15 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
     const cx = pts.reduce((sum, v) => sum + v.x, 0) / pts.length;
     const cz = pts.reduce((sum, v) => sum + v.y, 0) / pts.length;
     const centerV = new THREE.Vector2(cx, cz);
-    const polygon = pts.map(v => [v.x - cx, v.y - cz] as [number, number]);
+    
+    // Create polygon in local coordinates (relative to center)
+    let polygon = pts.map(v => [v.x - cx, v.y - cz] as [number, number]);
+    
+    // Normalize winding order to clockwise (in XZ plane)
+    // This ensures the resulting 3D geometry is always manifold,
+    // regardless of whether the user drew the outline clockwise or anti-clockwise
+    polygon = ensureClockwiseWindingXZ(polygon);
+    
     const baseHeight = Number(initParams?.height ?? 5);
     const support = {
       id: `sup-${Date.now()}`,

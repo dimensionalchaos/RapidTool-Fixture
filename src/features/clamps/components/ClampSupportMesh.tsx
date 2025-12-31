@@ -19,6 +19,10 @@ import { ClampSupportInfo } from '../utils/clampSupportUtils';
 import { PlacedClamp } from '../types';
 import { mergeGeometries, mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { performClampCSGInWorker } from '@rapidtool/cad-core';
+import { 
+  computeEdgeNormal, 
+  ensureClockwiseWindingXZ 
+} from '@/features/supports/utils/polygonUtils';
 
 // Reusable CSG evaluator for better performance
 const csgEvaluator = new Evaluator();
@@ -500,7 +504,11 @@ function createBottomCapGeometry(
 
 /**
  * Create fillet geometry for a polygon support base
- * Full implementation from SupportMeshes.tsx that handles rounded corners
+ * Uses shared polygon utilities for consistent behavior with SupportMeshes.
+ * Normalizes polygon to CW winding internally for consistent manifold geometry.
+ * 
+ * CRITICAL: Uses SAME vertex ordering as body geometry (CW, no reversal).
+ * This ensures fillet corners match body corners exactly for proper welding.
  */
 function createPolygonFilletGeometry(
   polygon: Array<[number, number]>,
@@ -513,29 +521,17 @@ function createPolygonFilletGeometry(
   const positions: number[] = [];
   const indices: number[] = [];
 
-  // Reverse the polygon to match the body's winding (same as SupportMeshes)
-  const workingPolygon: [number, number][] = [...polygon].reverse();
+  // CRITICAL: Use SAME polygon ordering as body geometry (CW, no reversal).
+  // The body uses: normalizedPolygon.map([x,z] => [x,-z]) for Shape, then ExtrudeGeometry + rotateX(-PI/2)
+  // This keeps vertices in the SAME ORDER as the normalized polygon.
+  // To ensure fillet corners match body corners, we must use the same vertex order.
+  const workingPolygon = ensureClockwiseWindingXZ(polygon);
+  const isCW = true;  // We've normalized to CW
 
-  // Check polygon winding (clockwise or counter-clockwise)
-  let signedArea = 0;
-  for (let i = 0; i < workingPolygon.length; i++) {
-    const [x1, z1] = workingPolygon[i];
-    const [x2, z2] = workingPolygon[(i + 1) % workingPolygon.length];
-    signedArea += (x2 - x1) * (z2 + z1);
-  }
-  const isCW = signedArea > 0;
-
-  // Compute edge normals
+  // Use shared utility for computing edge normals
+  // For CW polygon in XZ plane: outward normal is (-dz, dx) / len
   const getEdgeNormal = (p1: [number, number], p2: [number, number]): [number, number] => {
-    const dx = p2[0] - p1[0];
-    const dz = p2[1] - p1[1];
-    const len = Math.sqrt(dx * dx + dz * dz);
-    if (len < 0.01) return [0, 0];
-    if (isCW) {
-      return [-dz / len, dx / len];
-    } else {
-      return [dz / len, -dx / len];
-    }
+    return computeEdgeNormal(p1, p2, isCW);
   };
 
   // Helper to add a fillet strip along an edge
@@ -562,6 +558,7 @@ function createPolygonFilletGeometry(
       }
     }
 
+    // Face winding for outward-facing normals
     for (let i = 0; i < segments; i++) {
       for (let j = 0; j < stripSegments; j++) {
         const a = baseIdx + i * (stripSegments + 1) + j;
@@ -589,6 +586,7 @@ function createPolygonFilletGeometry(
       const endAngle = Math.atan2(n2z, n2x);
       let angleDiff = endAngle - startAngle;
 
+      // For CW polygon, we sweep in the negative direction (clockwise in XZ)
       if (isCW) {
         if (angleDiff > 0) angleDiff -= 2 * Math.PI;
       } else {
@@ -612,6 +610,7 @@ function createPolygonFilletGeometry(
         }
       }
 
+      // Face winding for outward-facing normals
       for (let i = 0; i < segments; i++) {
         for (let j = 0; j < cornerSegs; j++) {
           const a = baseIdx + i * (cornerSegs + 1) + j;
@@ -648,16 +647,13 @@ function createPolygonFilletGeometry(
         const tz = 2 * omt * (vz - insetStartZ) + 2 * t * (insetEndZ - vz);
         const tLen = Math.sqrt(tx * tx + tz * tz);
 
-        // Outward normal
+        // Outward normal for CW polygon: perpendicular to tangent, pointing outward
+        // For CW polygon in XZ plane: outward = (-tz, tx) / len
         let nx: number, nz: number;
         if (tLen > 0.001) {
-          if (isCW) {
-            nx = -tz / tLen;
-            nz = tx / tLen;
-          } else {
-            nx = tz / tLen;
-            nz = -tx / tLen;
-          }
+          // isCW is always true now (we normalized to CW)
+          nx = -tz / tLen;
+          nz = tx / tLen;
         } else {
           nx = n1x * (1 - t) + n2x * t;
           nz = n1z * (1 - t) + n2z * t;
@@ -669,6 +665,7 @@ function createPolygonFilletGeometry(
       }
     }
 
+    // Face winding for outward-facing normals
     for (let i = 0; i < segments; i++) {
       for (let j = 0; j < cornerSegs; j++) {
         const a = baseIdx + i * (cornerSegs + 1) + j;

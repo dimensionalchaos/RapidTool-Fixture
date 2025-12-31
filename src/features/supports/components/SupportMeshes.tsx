@@ -3,6 +3,10 @@ import * as THREE from 'three';
 import { ThreeEvent } from '@react-three/fiber';
 import { mergeGeometries, mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { AnySupport } from '../types';
+import { 
+  computeEdgeNormal,
+  ensureClockwiseWindingXZ 
+} from '../utils/polygonUtils';
 
 interface SupportMeshProps {
   support: AnySupport;
@@ -63,7 +67,6 @@ const createCylindricalFilletGeometry = (supportRadius: number, filletRadius: nu
   }
   
   // Generate indices - winding order for outward-facing normals
-  // Use (a,c,b) and (c,d,b) winding for outward normals on the fillet surface
   for (let i = 0; i < segments; i++) {
     for (let j = 0; j < radialSegments; j++) {
       const a = i * (radialSegments + 1) + j;
@@ -71,8 +74,8 @@ const createCylindricalFilletGeometry = (supportRadius: number, filletRadius: nu
       const c = a + 1;
       const d = b + 1;
       
-      indices.push(a, c, b);
-      indices.push(c, d, b);
+      indices.push(a, b, c);
+      indices.push(c, b, d);
     }
   }
   
@@ -155,8 +158,7 @@ const createConicalFilletGeometry = (
     }
   }
   
-  // Generate indices - match the winding from circular fillet
-  // Use (a,c,b) and (c,d,b) winding for outward normals on the fillet surface
+  // Generate indices - winding for outward normals on the fillet surface
   for (let i = 0; i < segments; i++) {
     for (let j = 0; j < radialSegments; j++) {
       const a = i * (radialSegments + 1) + j;
@@ -164,8 +166,8 @@ const createConicalFilletGeometry = (
       const c = a + 1;
       const d = b + 1;
       
-      indices.push(a, c, b);
-      indices.push(c, d, b);
+      indices.push(a, b, c);
+      indices.push(c, b, d);
     }
   }
   
@@ -262,46 +264,44 @@ const createRoundedPolygon = (polygon: [number, number][], cornerRadius: number)
   return { points, cornerCenters };
 };
 
-// Create a fillet for custom polygon supports
-// This traces the polygon edges and creates fillet strips along each edge
+/**
+ * Create a fillet geometry for custom polygon supports.
+ * 
+ * CRITICAL: This function must use the SAME polygon vertex ordering as the body
+ * extrusion to ensure corner geometry matches perfectly. The body uses:
+ *   normalizedPolygon.map([x, z] => [x, -z]) with the same vertex order
+ * 
+ * The fillet must NOT reverse the polygon, as this would cause corners to have
+ * opposite prev/next directions, resulting in mismatched corner curves.
+ * 
+ * Instead, we:
+ * 1. Normalize to CW winding (same as body)
+ * 2. Keep the same vertex order (NO reverse!)
+ * 3. Compute normals for CW polygon
+ * 4. Build geometry with face winding that produces outward-facing normals
+ * 
+ * @param polygon - Polygon coordinates [x, z] in XZ plane (any winding - will be normalized)
+ * @param cornerRadius - Radius for corner rounding
+ * @param filletRadius - Radius of the fillet curve
+ * @param segments - Number of segments in the fillet arc
+ */
 const createPolygonFilletGeometry = (polygon: [number, number][], cornerRadius: number = 0, filletRadius: number = FILLET_RADIUS, segments: number = FILLET_SEGMENTS): THREE.BufferGeometry => {
   if (polygon.length < 3) {
     return new THREE.BufferGeometry();
   }
   
-  // The polygon coordinates are [x, y] and we work directly in XZ space.
-  // The body uses Shape [x, -y] + rotateX(-PI/2), which results in world coords (x, height, y).
-  // So body's z_world = original y. The fillet uses [x, z] directly where z = original y.
-  // We just need to use the polygon as-is for [x, z] positioning.
-  // However, the body's [x, -y] + rotation effectively reverses the winding when viewed from above.
-  // To match this, we reverse the polygon order for the fillet.
-  const workingPolygon: [number, number][] = [...polygon].reverse();
+  // Normalize polygon to CW - SAME as body does
+  const workingPolygon = ensureClockwiseWindingXZ(polygon);
+  
+  // For CW polygon in XZ, outward normals point OUTWARD from the shape
+  const isCW = true;  // We've normalized to CW
   
   const positions: number[] = [];
   const indices: number[] = [];
   
-  // Determine polygon winding order (CW vs CCW) by computing signed area
-  let signedArea = 0;
-  for (let i = 0; i < workingPolygon.length; i++) {
-    const [x1, z1] = workingPolygon[i];
-    const [x2, z2] = workingPolygon[(i + 1) % workingPolygon.length];
-    signedArea += (x2 - x1) * (z2 + z1);
-  }
-  // If signedArea > 0, polygon is CW; if < 0, polygon is CCW
-  const isCW = signedArea > 0;
-  
-  // For each vertex, compute the outward normal direction
+  // Use the shared utility for computing edge normals
   const getEdgeNormal = (p1: [number, number], p2: [number, number]): [number, number] => {
-    const dx = p2[0] - p1[0];
-    const dz = p2[1] - p1[1];
-    const len = Math.sqrt(dx * dx + dz * dz);
-    if (len < 0.01) return [0, 0];
-    // Perpendicular: (dz, -dx) or (-dz, dx) depending on winding
-    if (isCW) {
-      return [-dz / len, dx / len]; // outward for CW
-    } else {
-      return [dz / len, -dx / len]; // outward for CCW
-    }
+    return computeEdgeNormal(p1, p2, isCW);
   };
   
   // Helper to add a fillet strip along an edge
@@ -336,9 +336,7 @@ const createPolygonFilletGeometry = (polygon: [number, number][], cornerRadius: 
         const c = a + 1;
         const d = b + 1;
         
-        // Use (a,b,c) and (c,b,d) winding for polygon fillets
-        // This is opposite to cylindrical/rectangular fillets because the polygon
-        // uses reverse() which inverts the effective winding direction
+        // Winding for outward-facing triangles
         indices.push(a, b, c);
         indices.push(c, b, d);
       }
@@ -362,11 +360,8 @@ const createPolygonFilletGeometry = (polygon: [number, number][], cornerRadius: 
       const endAngle = Math.atan2(n2z, n2x);
       let angleDiff = endAngle - startAngle;
       
-      if (isCW) {
-        if (angleDiff > 0) angleDiff -= 2 * Math.PI;
-      } else {
-        if (angleDiff < 0) angleDiff += 2 * Math.PI;
-      }
+      // For CW polygon, we sweep CW (negative angle diff)
+      if (angleDiff > 0) angleDiff -= 2 * Math.PI;
       
       if (Math.abs(angleDiff) < 0.01 || Math.abs(angleDiff) > 2 * Math.PI - 0.01) return;
       
@@ -391,7 +386,7 @@ const createPolygonFilletGeometry = (polygon: [number, number][], cornerRadius: 
           const b = a + cornerSegs + 1;
           const c = a + 1;
           const d = b + 1;
-          // Use (a,b,c) and (c,b,d) winding for polygon fillets (opposite to cylindrical)
+          // Winding for outward-facing triangles
           indices.push(a, b, c);
           indices.push(c, b, d);
         }
@@ -425,20 +420,11 @@ const createPolygonFilletGeometry = (polygon: [number, number][], cornerRadius: 
         const tLen = Math.sqrt(tx * tx + tz * tz);
         
         // Outward normal (perpendicular to tangent)
-        // The Bezier curves inward toward the vertex (control point), so the outward
-        // normal for the fillet is on the opposite side of what the curve direction suggests
-        // We need to flip the normal direction from what the winding would suggest
+        // For CW polygon: outward normal is (-tz, tx) / len
         let nx: number, nz: number;
         if (tLen > 0.001) {
-          if (isCW) {
-            // For CW winding, flip to get outward normal for the fillet
-            nx = -tz / tLen;
-            nz = tx / tLen;
-          } else {
-            // For CCW winding, flip to get outward normal for the fillet
-            nx = tz / tLen;
-            nz = -tx / tLen;
-          }
+          nx = -tz / tLen;
+          nz = tx / tLen;
         } else {
           // Fallback: interpolate between start and end normals
           nx = n1x * (1 - t) + n2x * t;
@@ -458,14 +444,14 @@ const createPolygonFilletGeometry = (polygon: [number, number][], cornerRadius: 
         const b = a + cornerSegs + 1;
         const c = a + 1;
         const d = b + 1;
-        // Use (a,b,c) and (c,b,d) winding for polygon fillets (opposite to cylindrical)
+        // Winding for outward-facing triangles
         indices.push(a, b, c);
         indices.push(c, b, d);
       }
     }
   };
   
-  // Process each edge and corner using mirrored polygon
+  // Process each edge and corner using the CW polygon (SAME ORDER as body)
   const n = workingPolygon.length;
   const edgeNormals: [number, number][] = [];
   
@@ -607,9 +593,9 @@ const createRectangularFilletGeometry = (width: number, depthVal: number, corner
         const c = a + 1;
         const d = b + 1;
         
-        // Use (a,c,b) and (c,d,b) winding for outward normals
-        indices.push(a, c, b);
-        indices.push(c, d, b);
+        // Winding for outward normals
+        indices.push(a, b, c);
+        indices.push(c, b, d);
       }
     }
   };
@@ -644,9 +630,9 @@ const createRectangularFilletGeometry = (width: number, depthVal: number, corner
         const c = a + 1;
         const d = b + 1;
         
-        // Use (a,c,b) and (c,d,b) winding for outward normals
-        indices.push(a, c, b);
-        indices.push(c, d, b);
+        // Winding for outward normals
+        indices.push(a, b, c);
+        indices.push(c, b, d);
       }
     }
   };
@@ -736,30 +722,14 @@ const createBottomCapGeometry = (
     const { polygon, cornerRadius = 0 } = support;
     if (!polygon || polygon.length < 3) return null;
     
-    // The fillet geometry uses reverse() on the polygon to match the body's effective winding.
-    // The bottom cap must use the same transformation to match the fillet's outer perimeter.
-    const workingPolygon: [number, number][] = [...polygon].reverse();
+    // CRITICAL: Use SAME polygon ordering as fillet (CW, no reversal)
+    // This ensures the bottom cap perimeter matches the fillet's outer edge at y=0
+    const workingPolygon = ensureClockwiseWindingXZ(polygon);
+    const isCW = true;  // We've normalized to CW
     
-    // Determine winding for outward offset direction (same logic as fillet)
-    let signedArea = 0;
-    for (let i = 0; i < workingPolygon.length; i++) {
-      const [x1, z1] = workingPolygon[i];
-      const [x2, z2] = workingPolygon[(i + 1) % workingPolygon.length];
-      signedArea += (x2 - x1) * (z2 + z1);
-    }
-    const isCW = signedArea > 0;
-    
-    // Compute edge normals (same as fillet)
+    // Use shared utility for computing edge normals
     const getEdgeNormal = (p1: [number, number], p2: [number, number]): [number, number] => {
-      const dx = p2[0] - p1[0];
-      const dz = p2[1] - p1[1];
-      const len = Math.sqrt(dx * dx + dz * dz);
-      if (len < 0.01) return [0, 0];
-      if (isCW) {
-        return [-dz / len, dx / len];
-      } else {
-        return [dz / len, -dx / len];
-      }
+      return computeEdgeNormal(p1, p2, isCW);
     };
     
     const n = workingPolygon.length;
@@ -1237,11 +1207,18 @@ export function buildFullSupportGeometry(support: AnySupport, baseTopY: number =
     const { polygon, cornerRadius = 0 } = support as any;
     if (!polygon || polygon.length < 3) return null;
     
+    // Normalize polygon to CW for the body shape.
+    // Both createPolygonFilletGeometry and createBottomCapGeometry now normalize internally,
+    // but we still need the normalized polygon for the body extrusion.
+    const normalizedPolygon = ensureClockwiseWindingXZ(polygon);
+    
+    // Create fillet geometry - normalizes internally for robustness
     filletGeo = createPolygonFilletGeometry(polygon, cornerRadius, effectiveFilletRadius, FILLET_SEGMENTS);
     
     // Build the custom shape for the body
-    // Mirror the Y coordinates to match the rotation direction (same as SupportMesh component)
-    const workingPolygon: [number, number][] = polygon.map(([x, y]: [number, number]) => [x, -y]);
+    // Apply [x, -y] transform which flips winding: CW in XZ → CCW in Shape's XY
+    // THREE.js Shape expects CCW for front-facing geometry
+    const workingPolygon: [number, number][] = normalizedPolygon.map(([x, y]: [number, number]) => [x, -y]);
     const safeCornerRadius = Math.max(0, cornerRadius);
     const shape = new THREE.Shape();
     let started = false;
