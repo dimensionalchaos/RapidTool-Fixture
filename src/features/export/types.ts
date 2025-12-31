@@ -150,13 +150,20 @@ export interface ExportServiceConfig {
    * When true and fallbackGeometry is provided, export will skip redundant CSG 
    * operations and use the already-unioned geometry directly.
    * This significantly speeds up export since cavity step already performs CSG union.
+   * NOTE: This is overridden when repairManifold=true (see below).
    */
   useCachedUnion: boolean;
   /**
-   * Whether to repair the mesh to ensure manifold output before export.
-   * Uses Manifold3D to convert the geometry to a proper manifold mesh,
-   * fixing non-manifold edges from overlapping supports, fillet intersections, etc.
-   * Recommended for 3D printing exports.
+   * Whether to produce manifold output for 3D printing compatibility.
+   * 
+   * When true: Uses real CSG union (three-bvh-csg ADDITION) on individual geometries
+   * to produce proper manifold geometry. This is slower but guaranteed to work.
+   * The cached union is NOT used because it was created via buffer concatenation
+   * which produces internal faces at overlapping supports.
+   * 
+   * When false: Uses the cached union (fast) which may have non-manifold issues.
+   * 
+   * Recommended: true for 3D printing, false for quick preview exports.
    */
   repairManifold: boolean;
   /** Vertex merge tolerance for welding */
