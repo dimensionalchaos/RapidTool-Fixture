@@ -9,7 +9,11 @@ import ThreeDViewer from "@/components/3DViewer";
 import { logMemoryUsage } from "@/utils/memoryMonitor";
 import { terminateWorkers } from "@rapidtool/cad-core";
 
-// Selection hooks (Phase 7a migration)
+// ═══════════════════════════════════════════════════════════════════════════
+// Phase 7 - Zustand Store Hooks (migrated from useState)
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Selection hooks (Phase 7a)
 import {
   useSelectedPart,
   useSelectedSupport,
@@ -20,7 +24,7 @@ import {
   useClearSelection,
 } from "@/hooks/useSelection";
 
-// Workflow hooks (Phase 7c migration)
+// Workflow hooks (Phase 7c)
 import {
   useInitializeFixtureWorkflow,
   useWorkflowStep,
@@ -29,17 +33,66 @@ import {
   type FixtureWorkflowStep,
 } from "@/hooks/useWorkflow";
 
-// UI hooks (Phase 7h migration)
+// UI hooks (Phase 7h)
 import {
   useContextPanelCollapsed,
   usePropertiesPanelCollapsed,
 } from "@/hooks/useUI";
 
-// Dialog hooks (Phase 7f migration)
+// Dialog hooks (Phase 7f)
 import {
   useUnitsDialog,
   useOptimizationDialog,
 } from "@/hooks/useDialogs";
+
+// Placement hooks (Phase 7d)
+import {
+  useSupportPlacementMode,
+  useSelectedSupportType,
+  useHolePlacementMode,
+  usePendingHoleConfig,
+  useBaseplateDrawingMode,
+  useDrawnBaseplateSections,
+  useBaseplateParams,
+} from "@/hooks/usePlacement";
+
+// Processing hooks (Phase 7e)
+import {
+  useIsProcessing,
+  useFileError,
+  useIsMeshProcessing,
+  useMeshAnalysis,
+  useMeshProgress,
+  useIsExporting,
+} from "@/hooks/useProcessing";
+
+// Cavity hooks (Phase 7g)
+import {
+  useCavitySettings,
+  useIsCavityProcessing,
+  useIsApplyingCavity,
+  useHasCavityPreview,
+  useIsCavityApplied,
+} from "@/hooks/useCavity";
+
+// Fixture data hooks (Phase 7b)
+import {
+  useImportedParts,
+  usePartVisibility,
+  useModelColors,
+  useBaseplateVisible,
+  useSupports,
+  useLabels,
+  useClamps,
+  useMountingHoles,
+  useCurrentBaseplate,
+} from "@/hooks/useFixture";
+
+// History hooks
+import {
+  useUndoStack,
+  useRedoStack,
+} from "@/hooks/useHistory";
 
 import PartPropertiesAccordion from "@/components/PartPropertiesAccordion";
 import ContextOptionsPanel, { WorkflowStep, WORKFLOW_STEPS } from "@/components/ContextOptionsPanel";
@@ -123,46 +176,58 @@ interface AppShellProps {
 
 const AppShell = forwardRef<AppShellHandle, AppShellProps>(
   ({ children, onLogout, onToggleDesignMode, designMode = false, isProcessing: externalProcessing = false, fileStats, currentFile }, ref) => {
-    // UI State (Phase 7h - panel states from Zustand store)
+    // ═══════════════════════════════════════════════════════════════════════
+    // State from Zustand stores (Phase 7 migration)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    // UI State (Phase 7h)
     const [isContextPanelCollapsed, setIsContextPanelCollapsed] = useContextPanelCollapsed();
     const [isPropertiesCollapsed, setIsPropertiesCollapsed] = usePropertiesPanelCollapsed();
-    const [undoStack, setUndoStack] = useState<any[]>([]);
-    const [redoStack, setRedoStack] = useState<any[]>([]);
-    const [currentBaseplate, setCurrentBaseplate] = useState<{ id: string; type: string; padding?: number; height?: number; depth?: number; sections?: Array<{ id: string; minX: number; maxX: number; minZ: number; maxZ: number }> } | null>(null);
     
-    // Selection state (Phase 7a - now from Zustand store)
+    // History state
+    const [undoStack, setUndoStack] = useUndoStack();
+    const [redoStack, setRedoStack] = useRedoStack();
+    
+    // Baseplate state (Phase 7b)
+    const [currentBaseplate, setCurrentBaseplate] = useCurrentBaseplate();
+    
+    // Selection state (Phase 7a)
     const [selectedBasePlateSectionId, setSelectedBasePlateSectionId] = useSelectedBaseplateSection();
     const clearSelection = useClearSelection();
 
-    // Multi-section baseplate drawing state
-    const [isBaseplateDrawingMode, setIsBaseplateDrawingMode] = useState(false);
-    const [drawnBaseplateSections, setDrawnBaseplateSections] = useState<Array<{ id: string; minX: number; maxX: number; minZ: number; maxZ: number }>>([]);
-    const [currentBaseplateParams, setCurrentBaseplateParams] = useState<{ padding: number; height: number }>({ padding: 5, height: 4 });
+    // Baseplate drawing state (Phase 7d)
+    const [isBaseplateDrawingMode, setIsBaseplateDrawingMode] = useBaseplateDrawingMode();
+    const [drawnBaseplateSections, setDrawnBaseplateSections] = useDrawnBaseplateSections();
+    const [currentBaseplateParams, setCurrentBaseplateParams] = useBaseplateParams();
 
-    // Workflow State (Phase 7c - now from Zustand store)
-    useInitializeFixtureWorkflow(); // Configure workflow steps on mount
+    // Workflow State (Phase 7c)
+    useInitializeFixtureWorkflow();
     const [activeStep, setActiveStep] = useWorkflowStep();
     const [completedSteps, setCompletedSteps] = useCompletedSteps();
     const [skippedSteps, setSkippedSteps] = useSkippedSteps();
 
-    // File Processing State (moved from FileImport)
-    const [importedParts, setImportedParts] = useState<ProcessedFile[]>([]);
-    // Selection: Part (Phase 7a - now from Zustand store)
+    // Parts state (Phase 7b)
+    const [importedParts, setImportedParts] = useImportedParts();
     const [selectedPartId, setSelectedPartId] = useSelectedPart();
-    const [partVisibility, setPartVisibility] = useState<Map<string, boolean>>(new Map());
-    const [baseplateVisible, setBaseplateVisible] = useState(true);
-    const [isProcessing, setIsProcessing] = useState(false);
-    const [fileError, setFileError] = useState<string | null>(null);
-    // Dialog states (Phase 7f - now from Zustand store)
+    const [partVisibility, setPartVisibility] = usePartVisibility();
+    const [baseplateVisible, setBaseplateVisible] = useBaseplateVisible();
+    
+    // Processing state (Phase 7e)
+    const [isProcessing, setIsProcessing] = useIsProcessing();
+    const [fileError, setFileError] = useFileError();
+    const [meshAnalysis, setMeshAnalysis] = useMeshAnalysis();
+    const [meshProgress, setMeshProgress] = useMeshProgress();
+    const [isMeshProcessing, setIsMeshProcessing] = useIsMeshProcessing();
+    
+    // Dialog states (Phase 7f)
     const [isUnitsDialogOpen, setIsUnitsDialogOpen] = useUnitsDialog();
     const [isOptimizationDialogOpen, setIsOptimizationDialogOpen] = useOptimizationDialog();
-    const [meshAnalysis, setMeshAnalysis] = useState<MeshAnalysisResult | null>(null);
-    const [meshProgress, setMeshProgress] = useState<MeshProcessingProgress | null>(null);
-    const [isMeshProcessing, setIsMeshProcessing] = useState(false);
+    
+    // Pending file state (kept as local - transient)
     const [pendingProcessedFile, setPendingProcessedFile] = useState<ProcessedFile | null>(null);
     const [pendingFileSize, setPendingFileSize] = useState<number | undefined>(undefined);
     
-    // Processing results state - shown after repair/optimization completes
+    // Processing results state (kept as local - transient)
     const [processingResult, setProcessingResult] = useState<{
       success: boolean;
       wasRepaired: boolean;
@@ -191,52 +256,40 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
     const actualFile = currentFile || (importedParts.length > 0 ? importedParts[0] : null);
     const actualProcessing = externalProcessing || isProcessing;
 
-    // Support placement state
-    const [isPlacementMode, setIsPlacementMode] = useState(false);
-    const [supports, setSupports] = useState<AnySupport[]>([]);
-    const [selectedSupportType, setSelectedSupportType] = useState<SupportType>('cylindrical');
-    // Selection: Support (Phase 7a - now from Zustand store)
+    // Support placement state (Phase 7d)
+    const [isPlacementMode, setIsPlacementMode] = useSupportPlacementMode();
+    const [supports, setSupports] = useSupports();
+    const [selectedSupportType, setSelectedSupportType] = useSelectedSupportType();
     const [selectedSupportId, setSelectedSupportId] = useSelectedSupport();
 
-    // Labels state
-    const [labels, setLabels] = useState<Array<{
-      id: string;
-      text: string;
-      fontSize: number;
-      depth: number;
-      position: { x: number; y: number; z: number };
-      rotation: { x: number; y: number; z: number };
-    }>>([]);
-    // Selection: Label (Phase 7a - now from Zustand store)
+    // Labels state (Phase 7b)
+    const [labels, setLabels] = useLabels();
     const [selectedLabelId, setSelectedLabelId] = useSelectedLabel();
 
-    // Clamps state
-    const [clamps, setClamps] = useState<PlacedClamp[]>([]);
-    // Selection: Clamp (Phase 7a - now from Zustand store)
+    // Clamps state (Phase 7b)
+    const [clamps, setClamps] = useClamps();
     const [selectedClampId, setSelectedClampId] = useSelectedClamp();
 
-    // Mounting holes state
-    const [mountingHoles, setMountingHoles] = useState<PlacedHole[]>([]);
-    // Selection: Hole (Phase 7a - now from Zustand store)
+    // Mounting holes state (Phase 7b + 7d)
+    const [mountingHoles, setMountingHoles] = useMountingHoles();
     const [selectedHoleId, setSelectedHoleId] = useSelectedHole();
-    const [isHolePlacementMode, setIsHolePlacementMode] = useState(false);
-    const [pendingHoleConfig, setPendingHoleConfig] = useState<HoleConfig | null>(null);
+    const [isHolePlacementMode, setIsHolePlacementMode] = useHolePlacementMode();
+    const [pendingHoleConfig, setPendingHoleConfig] = usePendingHoleConfig();
 
-    // Model colors state - tracks colors assigned to models in 3D scene
-    const [modelColors, setModelColors] = useState<Map<string, string>>(new Map());
+    // Model colors state (Phase 7b)
+    const [modelColors, setModelColors] = useModelColors();
 
-    // Cavity state
-    const [cavityClearance, setCavityClearance] = useState(0.5);
-    const [cavitySettings, setCavitySettings] = useState<CavitySettings>(DEFAULT_CAVITY_SETTINGS);
-    const [isCavityProcessing, setIsCavityProcessing] = useState(false);
-    const [isApplyingCavity, setIsApplyingCavity] = useState(false);
-    const [hasCavityPreview, setHasCavityPreview] = useState(false);
-    const [isCavityApplied, setIsCavityApplied] = useState(false);
+    // Cavity state (Phase 7g)
+    const [cavitySettings, setCavitySettings] = useCavitySettings();
+    const [isCavityProcessing, setIsCavityProcessing] = useIsCavityProcessing();
+    const [isApplyingCavity, setIsApplyingCavity] = useIsApplyingCavity();
+    const [hasCavityPreview, setHasCavityPreview] = useHasCavityPreview();
+    const [isCavityApplied, setIsCavityApplied] = useIsCavityApplied();
 
     // Cavity settings handlers
     const handleCavitySettingsChange = useCallback((settings: CavitySettings) => {
       setCavitySettings(settings);
-    }, []);
+    }, [setCavitySettings]);
 
     const handleGenerateCavityPreview = useCallback(() => {
       setIsCavityProcessing(true);
@@ -288,10 +341,10 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
     }, []);
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Export Handlers
+    // Export Handlers (Phase 7e - Processing)
     // ─────────────────────────────────────────────────────────────────────────
 
-    const [isExporting, setIsExporting] = useState(false);
+    const [isExporting, setIsExporting] = useIsExporting();
 
     const handleExport = useCallback((config: ExportConfig) => {
       setIsExporting(true);

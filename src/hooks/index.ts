@@ -51,6 +51,69 @@ export {
   useDialogs,
 } from './useDialogs';
 
+// Placement hooks (Phase 7d)
+export {
+  useSupportPlacementMode,
+  useSelectedSupportType,
+  useHolePlacementMode,
+  usePendingHoleConfig,
+  useBaseplateDrawingMode,
+  useDrawnBaseplateSections,
+  useBaseplateParams,
+  useIsAnyPlacementActive,
+  usePlacement,
+} from './usePlacement';
+
+// Processing hooks (Phase 7e)
+export {
+  useIsProcessing,
+  useFileError,
+  useIsMeshProcessing,
+  useMeshAnalysis,
+  useMeshProgress,
+  usePendingFile,
+  useProcessingResult,
+  useIsExporting,
+  useClearProcessing,
+  useProcessing,
+} from './useProcessing';
+
+// Cavity hooks (Phase 7g)
+export {
+  useCavityClearance,
+  useCavitySettings,
+  useIsCavityProcessing,
+  useIsApplyingCavity,
+  useHasCavityPreview,
+  useIsCavityApplied,
+  useResetCavity,
+  useCavity,
+} from './useCavity';
+
+// Fixture data hooks (Phase 7b)
+export {
+  useImportedParts,
+  usePartVisibility,
+  useModelColors,
+  useBaseplateVisible,
+  useSupports,
+  useLabels,
+  useClamps,
+  useMountingHoles,
+  useCurrentBaseplate,
+  useResetFixture,
+  useFixtureSnapshot,
+  useFixture,
+} from './useFixture';
+
+// History hooks
+export {
+  useUndoStack,
+  useRedoStack,
+  useUndoRedo,
+  useHistory,
+} from './useHistory';
+
 // Existing hooks
 export { useDragDrop } from './useDragDrop';
 export { useLoadingManager } from './useLoadingManager';
