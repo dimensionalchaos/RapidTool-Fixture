@@ -7,7 +7,7 @@
  * - Chunked processing with idle callbacks
  * - Memory-efficient cleanup
  * - Multiple quality presets (fast/balanced/high)
- * - Manifold repair for 3D printing compatibility
+ * - Real CSG union for manifold output (3D printing compatibility)
  */
 
 import * as THREE from 'three';
@@ -17,7 +17,6 @@ import {
   downloadFile,
   generateExportFilename,
   performRealCSGUnionInWorker,
-  repairMeshForExport,
   type ExportConfig,
 } from '@rapidtool/cad-core';
 import type { 
@@ -433,68 +432,26 @@ export async function exportFixture(
     
     // OPTIMIZATION: Use cached union from cavity step if available
     // The cavity step already performs CSG union (baseplate + supports + labels + hole subtraction)
-    // so we can skip redundant CSG operations and use the pre-computed geometry directly
-    if (serviceConfig.useCachedUnion && fallbackGeometry) {
+    // However, the cavity step uses buffer concatenation (fast) which creates non-manifold geometry
+    // at overlapping supports. For manifold output, we need to use real CSG union.
+    
+    // If manifold repair is enabled, skip the cached union and use real CSG union instead
+    // This is slower but produces proper manifold geometry for 3D printing
+    if (serviceConfig.repairManifold) {
+      console.log('[Export] Manifold output requested - using real CSG union (not cached buffer concat)');
+      // Fall through to the CSG union path below
+    } else if (serviceConfig.useCachedUnion && fallbackGeometry) {
       console.log('[Export] Using cached union from cavity step (skipping redundant CSG)');
+      onProgress?.({ stage: 'manifold', progress: 50, message: 'Using pre-computed geometry...' });
       
-      let exportGeometry: THREE.BufferGeometry = fallbackGeometry;
-      
-      // Apply manifold repair if enabled to fix non-manifold edges from:
-      // - Overlapping supports (buffer concatenation creates internal faces)
-      // - Fillet-baseplate intersections
-      // - Clamp support overlaps
-      if (serviceConfig.repairManifold) {
-        console.log('[Export] Repairing mesh for manifold output...');
-        onProgress?.({ stage: 'manifold', progress: 20, message: 'Repairing mesh for manifold output...' });
-        
-        try {
-          const repairResult = await repairMeshForExport(fallbackGeometry, (progress) => {
-            // Map repair progress to 20-70% range
-            const mappedProgress = 20 + (progress.progress * 0.5);
-            onProgress?.({ 
-              stage: 'manifold', 
-              progress: Math.round(mappedProgress), 
-              message: progress.message 
-            });
-          });
-          
-          if (repairResult.success && repairResult.geometry) {
-            exportGeometry = repairResult.geometry;
-            console.log('[Export] Manifold repair complete:', {
-              isManifold: repairResult.isManifold,
-              originalTriangles: repairResult.originalTriangles,
-              finalTriangles: repairResult.finalTriangles,
-              steps: repairResult.repairSteps,
-            });
-            
-            if (!repairResult.isManifold) {
-              console.warn('[Export] Mesh may still have manifold issues after repair');
-            }
-          } else {
-            console.warn('[Export] Manifold repair failed, using original geometry:', repairResult.error);
-            exportGeometry = fallbackGeometry;
-          }
-        } catch (repairError) {
-          console.warn('[Export] Manifold repair threw error, using original geometry:', repairError);
-          exportGeometry = fallbackGeometry;
-        }
-      } else {
-        onProgress?.({ stage: 'manifold', progress: 50, message: 'Using pre-computed geometry...' });
-      }
-      
-      // Generate STL from the (possibly repaired) geometry
+      // Generate STL directly from the cached geometry
       const result = generateSTLFiles(
-        exportGeometry,
+        fallbackGeometry,
         config,
         geometryCollection.isMultiSection,
         sectionCount,
         onProgress
       );
-      
-      // Cleanup repaired geometry if it's different from fallback
-      if (exportGeometry !== fallbackGeometry) {
-        exportGeometry.dispose();
-      }
       
       const totalTime = ((performance.now() - startTime) / 1000).toFixed(2);
       console.log(`[Export] Completed with cached union in ${totalTime}s (quality: ${serviceConfig.quality})`);
@@ -504,8 +461,8 @@ export async function exportFixture(
       return result;
     }
     
-    // Fallback: Collect and process geometries manually (when cached union not available)
-    console.log('[Export] No cached union available, performing CSG operations...');
+    // Use real CSG union to produce manifold geometry
+    console.log('[Export] Performing real CSG union for manifold output...');
     
     // Single file export (combined geometry)
     // Collect all geometries for CSG union (baseplate + supports)
