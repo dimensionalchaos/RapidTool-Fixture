@@ -666,77 +666,238 @@ function findBoundaryLoops(geometry: THREE.BufferGeometry): {
 }
 
 /**
- * Fill holes in a mesh by triangulating boundary loops
- * Uses simple ear-clipping triangulation for each hole
+ * Fill holes in an INDEXED mesh by adding new triangles that reference existing vertices
+ * The geometry MUST be indexed (call mergeVertices first)
  */
-function fillHoles(geometry: THREE.BufferGeometry): THREE.BufferGeometry {
-  const positions = geometry.getAttribute('position').array as Float32Array;
-  const { loops } = findBoundaryLoops(geometry);
-  
-  if (loops.length === 0) {
-    console.log('[fillHoles] No boundary loops found');
+function fillHolesIndexed(geometry: THREE.BufferGeometry): THREE.BufferGeometry {
+  if (!geometry.index) {
+    console.warn('[fillHolesIndexed] Geometry must be indexed');
     return geometry;
   }
   
-  console.log(`[fillHoles] Found ${loops.length} boundary loops to fill`);
+  const positions = geometry.getAttribute('position').array as Float32Array;
+  const indices = geometry.index.array;
+  const numVerts = positions.length / 3;
   
-  // Collect new triangles to add
-  const newTriangles: number[] = [];
+  // Build a map from position key to canonical vertex index
+  const precision = 10000;
+  const posToIndex = new Map<string, number>();
+  
+  for (let i = 0; i < numVerts; i++) {
+    const key = `${Math.round(positions[i * 3] * precision)},${Math.round(positions[i * 3 + 1] * precision)},${Math.round(positions[i * 3 + 2] * precision)}`;
+    if (!posToIndex.has(key)) {
+      posToIndex.set(key, i);
+    }
+  }
+  
+  // Build adjacency: for each vertex, track which other vertices share an edge
+  // and count how many triangles share that edge
+  const edgeCount = new Map<string, number>();
+  const numTris = indices.length / 3;
+  
+  const makeEdgeKey = (i1: number, i2: number): string => {
+    return i1 < i2 ? `${i1}-${i2}` : `${i2}-${i1}`;
+  };
+  
+  for (let t = 0; t < numTris; t++) {
+    const i0 = indices[t * 3];
+    const i1 = indices[t * 3 + 1];
+    const i2 = indices[t * 3 + 2];
+    
+    for (const key of [makeEdgeKey(i0, i1), makeEdgeKey(i1, i2), makeEdgeKey(i2, i0)]) {
+      edgeCount.set(key, (edgeCount.get(key) || 0) + 1);
+    }
+  }
+  
+  // Find boundary edges (only 1 triangle)
+  const boundaryEdges: [number, number][] = [];
+  for (const [key, count] of edgeCount) {
+    if (count === 1) {
+      const [a, b] = key.split('-').map(Number);
+      boundaryEdges.push([a, b]);
+    }
+  }
+  
+  if (boundaryEdges.length === 0) {
+    console.log('[fillHolesIndexed] No boundary edges found - mesh is watertight');
+    return geometry;
+  }
+  
+  console.log(`[fillHolesIndexed] Found ${boundaryEdges.length} boundary edges`);
+  
+  // Build adjacency for boundary vertices
+  const boundaryAdj = new Map<number, number[]>();
+  for (const [a, b] of boundaryEdges) {
+    if (!boundaryAdj.has(a)) boundaryAdj.set(a, []);
+    if (!boundaryAdj.has(b)) boundaryAdj.set(b, []);
+    boundaryAdj.get(a)!.push(b);
+    boundaryAdj.get(b)!.push(a);
+  }
+  
+  // Find closed loops by following boundary edges
+  const visited = new Set<number>();
+  const loops: number[][] = [];
+  
+  for (const [startVertex] of boundaryAdj) {
+    if (visited.has(startVertex)) continue;
+    
+    const loop: number[] = [];
+    let current = startVertex;
+    let prev = -1;
+    
+    while (!visited.has(current)) {
+      visited.add(current);
+      loop.push(current);
+      
+      const neighbors = boundaryAdj.get(current) || [];
+      // Find next unvisited neighbor (or any neighbor if all visited except prev)
+      let next = -1;
+      for (const n of neighbors) {
+        if (n !== prev && !visited.has(n)) {
+          next = n;
+          break;
+        }
+      }
+      
+      // Check if we can close the loop
+      if (next === -1 && loop.length >= 3) {
+        // Check if start vertex is a neighbor
+        if (neighbors.includes(startVertex) && startVertex !== prev) {
+          // Loop is complete
+          break;
+        }
+      }
+      
+      if (next === -1) break;
+      
+      prev = current;
+      current = next;
+    }
+    
+    // Only keep loops that form a cycle back to start
+    if (loop.length >= 3) {
+      const startNeighbors = boundaryAdj.get(loop[0]) || [];
+      const endNeighbors = boundaryAdj.get(loop[loop.length - 1]) || [];
+      if (startNeighbors.includes(loop[loop.length - 1]) || endNeighbors.includes(loop[0])) {
+        loops.push(loop);
+      }
+    }
+  }
+  
+  if (loops.length === 0) {
+    console.log('[fillHolesIndexed] No closed loops found');
+    return geometry;
+  }
+  
+  console.log(`[fillHolesIndexed] Found ${loops.length} closed boundary loops`);
+  
+  // Create new triangles to fill each loop (fan triangulation)
+  const newIndices: number[] = [...indices];
   
   for (const loop of loops) {
     if (loop.length < 3) continue;
     
-    // Simple fan triangulation from first vertex
-    // Works well for convex or nearly-convex holes
-    const v0Idx = loop[0];
-    const v0 = new THREE.Vector3(
-      positions[v0Idx * 3],
-      positions[v0Idx * 3 + 1],
-      positions[v0Idx * 3 + 2]
-    );
+    // Fan triangulation: all triangles share the first vertex
+    const v0 = loop[0];
     
-    for (let i = 1; i < loop.length - 1; i++) {
-      const v1Idx = loop[i];
-      const v2Idx = loop[i + 1];
+    // Determine correct winding by checking adjacent triangle
+    // Find a triangle that shares an edge with the loop
+    let correctWinding = true; // default
+    
+    outer: for (let t = 0; t < numTris; t++) {
+      const ti0 = indices[t * 3];
+      const ti1 = indices[t * 3 + 1];
+      const ti2 = indices[t * 3 + 2];
+      const triVerts = [ti0, ti1, ti2];
       
-      const v1 = new THREE.Vector3(
-        positions[v1Idx * 3],
-        positions[v1Idx * 3 + 1],
-        positions[v1Idx * 3 + 2]
-      );
-      const v2 = new THREE.Vector3(
-        positions[v2Idx * 3],
-        positions[v2Idx * 3 + 1],
-        positions[v2Idx * 3 + 2]
-      );
+      // Check if this triangle shares edge with loop[0]-loop[1]
+      const loopV0 = loop[0];
+      const loopV1 = loop[1];
       
-      // Add triangle (reverse winding to match hole orientation)
-      newTriangles.push(
-        v0.x, v0.y, v0.z,
-        v2.x, v2.y, v2.z,
-        v1.x, v1.y, v1.z
-      );
+      for (let i = 0; i < 3; i++) {
+        const e0 = triVerts[i];
+        const e1 = triVerts[(i + 1) % 3];
+        
+        if ((e0 === loopV0 && e1 === loopV1) || (e0 === loopV1 && e1 === loopV0)) {
+          // Found adjacent triangle - winding should be OPPOSITE to fill hole
+          correctWinding = (e0 === loopV1 && e1 === loopV0);
+          break outer;
+        }
+      }
     }
     
-    console.log(`[fillHoles] Filled loop with ${loop.length} vertices (${loop.length - 2} triangles)`);
+    for (let i = 1; i < loop.length - 1; i++) {
+      const v1 = loop[i];
+      const v2 = loop[i + 1];
+      
+      if (correctWinding) {
+        newIndices.push(v0, v1, v2);
+      } else {
+        newIndices.push(v0, v2, v1);
+      }
+    }
+    
+    console.log(`[fillHolesIndexed] Filled loop with ${loop.length} vertices (${loop.length - 2} triangles)`);
   }
   
-  if (newTriangles.length === 0) {
-    return geometry;
-  }
-  
-  // Create new geometry with original triangles + hole-filling triangles
-  const origPositions = toNonIndexed(geometry).getAttribute('position').array as Float32Array;
-  const combinedPositions = new Float32Array(origPositions.length + newTriangles.length);
-  combinedPositions.set(origPositions, 0);
-  combinedPositions.set(new Float32Array(newTriangles), origPositions.length);
-  
+  // Create new geometry with added triangles
   const newGeometry = new THREE.BufferGeometry();
-  newGeometry.setAttribute('position', new THREE.Float32BufferAttribute(combinedPositions, 3));
+  newGeometry.setAttribute('position', geometry.getAttribute('position').clone());
+  newGeometry.setIndex(newIndices);
   
-  console.log(`[fillHoles] Added ${newTriangles.length / 9} hole-filling triangles`);
+  console.log(`[fillHolesIndexed] Added ${(newIndices.length - indices.length) / 3} hole-filling triangles`);
   
   return newGeometry;
+}
+
+/**
+ * Iteratively fill holes until no more can be filled or mesh is watertight
+ */
+function fillHolesIterative(geometry: THREE.BufferGeometry, maxIterations: number = 5): THREE.BufferGeometry {
+  let workingGeom = geometry;
+  
+  // Ensure we have an indexed geometry
+  if (!workingGeom.index) {
+    const posCount = workingGeom.getAttribute('position').count;
+    const tempIndices: number[] = [];
+    for (let i = 0; i < posCount; i++) {
+      tempIndices.push(i);
+    }
+    workingGeom = workingGeom.clone();
+    workingGeom.setIndex(tempIndices);
+    workingGeom = mergeVertices(workingGeom, 1e-4);
+  }
+  
+  for (let iter = 0; iter < maxIterations; iter++) {
+    const beforeAnalysis = analyzeMeshTopology(workingGeom);
+    
+    if (beforeAnalysis.boundaryEdges === 0) {
+      console.log(`[fillHolesIterative] Mesh is watertight after ${iter} iterations`);
+      return workingGeom;
+    }
+    
+    console.log(`[fillHolesIterative] Iteration ${iter + 1}: ${beforeAnalysis.boundaryEdges} boundary edges`);
+    
+    const filled = fillHolesIndexed(workingGeom);
+    
+    // Re-merge vertices after filling
+    const filledMerged = mergeVertices(filled, 1e-4);
+    
+    const afterAnalysis = analyzeMeshTopology(filledMerged);
+    
+    // Check if we made progress
+    if (afterAnalysis.boundaryEdges >= beforeAnalysis.boundaryEdges) {
+      console.log(`[fillHolesIterative] No progress made, stopping at ${afterAnalysis.boundaryEdges} boundary edges`);
+      return filledMerged;
+    }
+    
+    workingGeom = filledMerged;
+  }
+  
+  const finalAnalysis = analyzeMeshTopology(workingGeom);
+  console.log(`[fillHolesIterative] Reached max iterations with ${finalAnalysis.boundaryEdges} boundary edges remaining`);
+  
+  return workingGeom;
 }
 
 /**
@@ -778,21 +939,14 @@ function prepareGeometryForManifold(geometry: THREE.BufferGeometry): THREE.Buffe
   // Step 4: Remove non-manifold triangles
   workingGeom = removeNonManifoldTriangles(workingGeom);
   
-  // Step 5: Fill holes (close boundary edges)
+  // Step 5: Fill holes iteratively (close boundary edges)
   // This is critical for making the mesh watertight
   const preHoleAnalysis = analyzeMeshTopology(workingGeom);
   if (preHoleAnalysis.boundaryEdges > 0) {
     console.log(`[prepareGeometryForManifold] Attempting to fill ${preHoleAnalysis.boundaryEdges} boundary edges...`);
-    workingGeom = fillHoles(workingGeom);
     
-    // Re-merge vertices after hole filling
-    const posCount2 = workingGeom.getAttribute('position').count;
-    const tempIndices2: number[] = [];
-    for (let i = 0; i < posCount2; i++) {
-      tempIndices2.push(i);
-    }
-    workingGeom.setIndex(tempIndices2);
-    workingGeom = mergeVertices(workingGeom, 1e-4);
+    // Use new iterative hole filling that works with indexed geometry
+    workingGeom = fillHolesIterative(workingGeom, 10); // up to 10 iterations
     
     const postHoleAnalysis = analyzeMeshTopology(workingGeom);
     console.log(`[prepareGeometryForManifold] After hole filling: ${postHoleAnalysis.boundaryEdges} boundary edges remaining`);
