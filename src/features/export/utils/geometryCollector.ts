@@ -5,7 +5,7 @@
  */
 
 import * as THREE from 'three';
-import type { BasePlateConfig } from '@/features/baseplate';
+import type { BasePlateConfig, BasePlateSection } from '@/features/baseplate';
 import type { LabelConfig } from '@/features/labels';
 import { buildClampSupportGeometryAtOrigin, buildLabelGeometry } from '@/components/3DScene/utils/csgUtils';
 import { performClampCSGInWorker } from '@rapidtool/cad-core';
@@ -15,6 +15,113 @@ import type {
   ExportProgressCallback,
   ClampExportData 
 } from '../types';
+
+// Constants matching MultiSectionBasePlate.tsx
+const CORNER_RADIUS_FACTOR = 0.08;
+const CHAMFER_SIZE_FACTOR = 0.15;
+
+/**
+ * Creates a rounded rectangle shape for extrusion (matches MultiSectionBasePlate)
+ */
+function createRoundedRectShape(width: number, height: number): THREE.Shape {
+  const halfWidth = width / 2;
+  const halfHeight = height / 2;
+  const radius = Math.min(width, height) * CORNER_RADIUS_FACTOR;
+  const r = Math.min(radius, halfWidth, halfHeight);
+
+  const shape = new THREE.Shape();
+  shape.moveTo(-halfWidth + r, -halfHeight);
+  shape.lineTo(halfWidth - r, -halfHeight);
+  shape.quadraticCurveTo(halfWidth, -halfHeight, halfWidth, -halfHeight + r);
+  shape.lineTo(halfWidth, halfHeight - r);
+  shape.quadraticCurveTo(halfWidth, halfHeight, halfWidth - r, halfHeight);
+  shape.lineTo(-halfWidth + r, halfHeight);
+  shape.quadraticCurveTo(-halfWidth, halfHeight, -halfWidth, halfHeight - r);
+  shape.lineTo(-halfWidth, -halfHeight + r);
+  shape.quadraticCurveTo(-halfWidth, -halfHeight, -halfWidth + r, -halfHeight);
+
+  return shape;
+}
+
+/**
+ * Creates an extruded section geometry (matches MultiSectionBasePlate)
+ */
+function createExtrudedSectionGeometry(width: number, height: number, depth: number): THREE.BufferGeometry {
+  const shape = createRoundedRectShape(width, height);
+  const chamferSize = Math.min(1.0, depth * CHAMFER_SIZE_FACTOR);
+  const extrudeDepth = Math.max(0.1, depth - 2 * chamferSize);
+
+  const geometry = new THREE.ExtrudeGeometry(shape, {
+    depth: extrudeDepth,
+    bevelEnabled: true,
+    bevelThickness: chamferSize,
+    bevelSize: chamferSize,
+    bevelSegments: 1,
+  });
+
+  geometry.rotateX(-Math.PI / 2);
+  geometry.translate(0, chamferSize, 0);
+  geometry.computeBoundingBox();
+  geometry.computeVertexNormals();
+
+  return geometry;
+}
+
+/**
+ * Creates multi-section baseplate geometries from config when refs aren't available.
+ * This is a fallback for when the MultiSectionBasePlate component is unmounted (e.g., merged fixture shown).
+ */
+export function createMultiSectionGeometriesFromConfig(
+  config: BasePlateConfig
+): { geometries: THREE.BufferGeometry[]; sectionData: SectionGeometryData[] } {
+  const geometries: THREE.BufferGeometry[] = [];
+  const sectionData: SectionGeometryData[] = [];
+  
+  if (config.type !== 'multi-section' || !config.sections) {
+    console.warn('[Export] createMultiSectionGeometriesFromConfig called for non-multi-section baseplate');
+    return { geometries, sectionData };
+  }
+  
+  const depth = config.depth ?? 4;
+  
+  config.sections.forEach((section, index) => {
+    // Validate section
+    if (!Number.isFinite(section.minX) || !Number.isFinite(section.maxX) ||
+        !Number.isFinite(section.minZ) || !Number.isFinite(section.maxZ) ||
+        section.maxX <= section.minX || section.maxZ <= section.minZ) {
+      console.warn(`[Export] Skipping invalid section ${section.id}:`, section);
+      return;
+    }
+    
+    const width = section.maxX - section.minX;
+    const height = section.maxZ - section.minZ;
+    const centerX = (section.minX + section.maxX) / 2;
+    const centerZ = (section.minZ + section.maxZ) / 2;
+    
+    // Create the section geometry
+    const geometry = createExtrudedSectionGeometry(width, height, depth);
+    
+    // Apply world position (translate to section center)
+    geometry.translate(centerX, 0, centerZ);
+    
+    geometries.push(geometry);
+    sectionData.push({
+      id: section.id,
+      index,
+      geometry,
+      bounds: {
+        minX: section.minX,
+        maxX: section.maxX,
+        minZ: section.minZ,
+        maxZ: section.maxZ,
+      },
+    });
+    
+    console.log(`[Export] Created section ${section.id} from config: ${width.toFixed(1)}x${height.toFixed(1)} at (${centerX.toFixed(1)}, ${centerZ.toFixed(1)})`);
+  });
+  
+  return { geometries, sectionData };
+}
 
 /**
  * Creates baseplate geometry from config when refs are not available.
@@ -119,42 +226,59 @@ export function collectBaseplateGeometry(
   let geometry: THREE.BufferGeometry | null = null;
   
   // Multi-section baseplates: always use the group reference (ignore baseplateWithHoles)
-  if (isMultiSection && ctx.multiSectionBasePlateGroupRef.current && ctx.basePlate?.sections) {
-    console.log('[Export] Collecting multi-section baseplate geometries');
-    const sections = ctx.basePlate.sections;
-    let sectionIndex = 0;
-    
-    ctx.multiSectionBasePlateGroupRef.current.traverse((child) => {
-      if (child instanceof THREE.Mesh && child.geometry) {
-        const section = sections[sectionIndex];
-        if (section) {
-          // Clone geometry and apply world transform
-          const clonedGeom = child.geometry.clone();
-          child.updateMatrixWorld(true);
-          clonedGeom.applyMatrix4(child.matrixWorld);
-          
-          multiSectionGeometries.push(clonedGeom);
-          sectionData.push({
-            id: section.id,
-            index: sectionIndex,
-            geometry: clonedGeom,
-            bounds: {
-              minX: section.minX,
-              maxX: section.maxX,
-              minZ: section.minZ,
-              maxZ: section.maxZ,
-            },
-          });
-          console.log(`[Export] Collected section ${section.id} (${sectionIndex}): bounds [${section.minX.toFixed(1)}, ${section.maxX.toFixed(1)}] x [${section.minZ.toFixed(1)}, ${section.maxZ.toFixed(1)}]`);
+  if (isMultiSection) {
+    if (ctx.multiSectionBasePlateGroupRef.current && ctx.basePlate?.sections) {
+      console.log('[Export] Collecting multi-section baseplate geometries');
+      const sections = ctx.basePlate.sections;
+      let sectionIndex = 0;
+      
+      ctx.multiSectionBasePlateGroupRef.current.traverse((child) => {
+        if (child instanceof THREE.Mesh && child.geometry) {
+          const section = sections[sectionIndex];
+          if (section) {
+            // Clone geometry and apply world transform
+            const clonedGeom = child.geometry.clone();
+            child.updateMatrixWorld(true);
+            clonedGeom.applyMatrix4(child.matrixWorld);
+            
+            multiSectionGeometries.push(clonedGeom);
+            sectionData.push({
+              id: section.id,
+              index: sectionIndex,
+              geometry: clonedGeom,
+              bounds: {
+                minX: section.minX,
+                maxX: section.maxX,
+                minZ: section.minZ,
+                maxZ: section.maxZ,
+              },
+            });
+            console.log(`[Export] Collected section ${section.id} (${sectionIndex}): bounds [${section.minX.toFixed(1)}, ${section.maxX.toFixed(1)}] x [${section.minZ.toFixed(1)}, ${section.maxZ.toFixed(1)}]`);
+          }
+          sectionIndex++;
         }
-        sectionIndex++;
+      });
+      
+      if (multiSectionGeometries.length === 0) {
+        console.warn('[Export] Multi-section baseplate group has no mesh children!');
       }
-    });
-    
-    if (multiSectionGeometries.length === 0) {
-      console.warn('[Export] Multi-section baseplate group has no mesh children!');
+    } else if (ctx.basePlate?.sections) {
+      // Multi-section but ref not available (component unmounted, e.g., merged fixture shown)
+      // Fall back to creating geometries from config
+      console.log('[Export] Multi-section baseplate ref not available, creating from config');
+      const fallback = createMultiSectionGeometriesFromConfig(ctx.basePlate);
+      multiSectionGeometries.push(...fallback.geometries);
+      sectionData.push(...fallback.sectionData);
+    } else {
+      // Multi-section but no sections defined - this is an error condition
+      console.error('[Export] Multi-section baseplate but no sections defined!');
     }
-  } else if (ctx.baseplateWithHoles) {
+    // Don't fall through to other branches for multi-section - return what we have
+    return { geometry: null, isMultiSection, multiSectionGeometries, sectionData };
+  }
+  
+  // Single baseplate handling
+  if (ctx.baseplateWithHoles) {
     // Single baseplate with holes cut (CSG result)
     console.log('[Export] Using baseplateWithHoles geometry');
     geometry = ctx.baseplateWithHoles;
