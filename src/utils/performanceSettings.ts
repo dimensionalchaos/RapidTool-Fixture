@@ -5,6 +5,8 @@
  * performance on less powerful hardware.
  */
 
+import { performanceLogger as logger } from './logger';
+
 export type PerformanceLevel = 'high' | 'medium' | 'low' | 'auto';
 
 export interface PerformanceSettings {
@@ -121,7 +123,7 @@ export function detectDeviceCapability(): PerformanceLevel {
   if (webglTier === 'low') score += 2;
   else if (webglTier === 'medium') score += 1;
   
-  console.log(`[Performance] Device detection score: ${score}`, {
+  logger.debug(`Device detection score: ${score}`, {
     isMobileOrTablet,
     hasTouch,
     isLowMemory,
@@ -157,7 +159,7 @@ export function initPerformanceSettings(level: PerformanceLevel = 'auto'): Perfo
   
   currentSettings = PERFORMANCE_PRESETS[currentLevel === 'auto' ? 'high' : currentLevel];
   
-  console.log(`[Performance] Initialized with level: ${currentLevel}`, currentSettings);
+  logger.info(`Initialized with level: ${currentLevel}`, currentSettings);
   
   // Dispatch event so components can react
   window.dispatchEvent(new CustomEvent('performance-settings-changed', { 
@@ -192,10 +194,10 @@ export function setPerformanceLevel(level: Exclude<PerformanceLevel, 'auto'>): P
   try {
     localStorage.setItem(STORAGE_KEY, level);
   } catch (e) {
-    console.warn('[Performance] Failed to save settings:', e);
+    logger.warn('Failed to save settings:', e);
   }
   
-  console.log(`[Performance] Changed to level: ${level}`, currentSettings);
+  logger.info(`Changed to level: ${level}`, currentSettings);
   
   // Dispatch event so components can react
   window.dispatchEvent(new CustomEvent('performance-settings-changed', { 
@@ -312,7 +314,7 @@ export function getDeviceCapabilities(): DeviceCapabilities {
       maxViewportSize = [maxVp[0], maxVp[1]];
     }
   } catch (e) {
-    console.warn('[Performance] WebGL detection failed:', e);
+    logger.warn('WebGL detection failed:', e);
   }
   
   // Estimate tier based on GPU
@@ -419,5 +421,5 @@ if (typeof window !== 'undefined') {
     presets: PERFORMANCE_PRESETS,
   };
   
-  console.log('[Performance] Debug commands available at window.__performanceSettings');
-  console.log('[Performance] Run window.__performanceSettings.printReport() to see device capabilities');}
+  logger.debug('Debug commands available at window.__performanceSettings');
+  logger.debug('Run window.__performanceSettings.printReport() to see device capabilities');}

@@ -6,6 +6,7 @@
  */
 
 import * as THREE from 'three';
+import { memoryLogger as logger } from './logger';
 
 // ============================================================================
 // Types
@@ -53,7 +54,7 @@ let currentRenderer: THREE.WebGLRenderer | null = null;
  */
 export function registerRenderer(renderer: THREE.WebGLRenderer): void {
   currentRenderer = renderer;
-  console.log('[MemoryMonitor] Renderer registered for tracking');
+  logger.debug('Renderer registered for tracking');
 }
 
 /**
@@ -156,7 +157,7 @@ export function compareSnapshots(fromLabel: string, toLabel: string): MemoryDelt
   const to = snapshots.find(s => s.label === toLabel);
   
   if (!from || !to) {
-    console.warn('[MemoryMonitor] Could not find snapshots:', fromLabel, toLabel);
+    logger.warn('[MemoryMonitor] Could not find snapshots:', fromLabel, toLabel);
     return null;
   }
   
@@ -269,11 +270,11 @@ export function checkGeometryGrowth(threshold: number = 10): boolean {
  * Call from console: window.__memoryMonitor.testSessionReset()
  */
 export async function testSessionReset(): Promise<void> {
-  console.log('[MemoryMonitor] Starting session reset test...');
+  logger.debug('[MemoryMonitor] Starting session reset test...');
   
   // Take "before" snapshot
   const before = takeSnapshot('Before Session Reset');
-  console.log('Before reset:');
+  logger.debug('Before reset:');
   console.log(`  JS Heap: ${before.jsHeap?.usedMB ?? 'N/A'} MB`);
   console.log(`  Geometries: ${before.threeResources?.geometries ?? 'N/A'}`);
   console.log(`  Textures: ${before.threeResources?.textures ?? 'N/A'}`);
@@ -289,7 +290,7 @@ export async function testSessionReset(): Promise<void> {
   // Try to trigger garbage collection (only works in Chrome with --js-flags="--expose-gc")
   if ((window as any).gc) {
     (window as any).gc();
-    console.log('[MemoryMonitor] Forced GC');
+    logger.debug('[MemoryMonitor] Forced GC');
   }
   
   // Wait for GC
@@ -297,7 +298,7 @@ export async function testSessionReset(): Promise<void> {
   
   // Take "after" snapshot
   const after = takeSnapshot('After Session Reset');
-  console.log('After reset (2s delay):');
+  logger.debug('After reset (2s delay):');
   console.log(`  JS Heap: ${after.jsHeap?.usedMB ?? 'N/A'} MB`);
   console.log(`  Geometries: ${after.threeResources?.geometries ?? 'N/A'}`);
   console.log(`  Textures: ${after.threeResources?.textures ?? 'N/A'}`);
@@ -305,7 +306,7 @@ export async function testSessionReset(): Promise<void> {
   // Compare
   const delta = compareSnapshots('Before Session Reset', 'After Session Reset');
   if (delta) {
-    console.log('Delta:');
+    logger.debug('Delta:');
     console.log(`  JS Heap: ${delta.jsHeapDeltaMB > 0 ? '+' : ''}${delta.jsHeapDeltaMB.toFixed(2)} MB`);
     console.log(`  Geometries: ${delta.geometriesDelta > 0 ? '+' : ''}${delta.geometriesDelta}`);
     console.log(`  Textures: ${delta.texturesDelta > 0 ? '+' : ''}${delta.texturesDelta}`);
@@ -318,7 +319,7 @@ export async function testSessionReset(): Promise<void> {
       console.warn(`[MemoryMonitor] WARNING: ${delta.texturesDelta} textures not freed after reset`);
     }
     if (delta.geometriesDelta <= 0 && delta.texturesDelta <= 0) {
-      console.log('[MemoryMonitor] ✓ Resources appear to be properly cleaned up');
+      logger.debug('[MemoryMonitor] ✓ Resources appear to be properly cleaned up');
     }
   }
 }
@@ -328,7 +329,7 @@ export async function testSessionReset(): Promise<void> {
  */
 export function printMemorySummary(): void {
   if (snapshots.length < 2) {
-    console.log('[MemoryMonitor] Not enough snapshots to summarize');
+    logger.debug('[MemoryMonitor] Not enough snapshots to summarize');
     return;
   }
   
@@ -370,7 +371,7 @@ let monitorInterval: ReturnType<typeof setInterval> | null = null;
 
 export function startPeriodicMonitoring(intervalMs: number = 10000): void {
   if (monitorInterval) {
-    console.warn('[MemoryMonitor] Already monitoring');
+    logger.warn('[MemoryMonitor] Already monitoring');
     return;
   }
   
@@ -386,7 +387,7 @@ export function stopPeriodicMonitoring(): void {
   if (monitorInterval) {
     clearInterval(monitorInterval);
     monitorInterval = null;
-    console.log('[MemoryMonitor] Stopped periodic monitoring');
+    logger.debug('[MemoryMonitor] Stopped periodic monitoring');
   }
 }
 
@@ -409,6 +410,6 @@ if (typeof window !== 'undefined') {
     printMemorySummary,
   };
   
-  console.log('[MemoryMonitor] Debug commands available at window.__memoryMonitor');
-  console.log('[MemoryMonitor] Run window.__memoryMonitor.testSessionReset() to test cleanup');
+  logger.debug('[MemoryMonitor] Debug commands available at window.__memoryMonitor');
+  logger.debug('[MemoryMonitor] Run window.__memoryMonitor.testSessionReset() to test cleanup');
 }

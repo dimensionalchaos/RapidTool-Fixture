@@ -846,7 +846,8 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
 
   // Note: Offset mesh preview effects moved to useOffsetMeshPreview hook
 
-  // TODO: Implement drag-and-drop for fixture components when library panel is ready
+  // FUTURE: Implement drag-and-drop for fixture components from ComponentLibrary
+  // This requires: 1) Raycaster intersection with baseplate, 2) Component preview on hover, 3) Snap-to-grid
   const handlePointerMove = useCallback((_event: unknown) => {
     // Reserved for future drag-and-drop functionality
   }, []);

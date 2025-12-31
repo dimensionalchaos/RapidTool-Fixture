@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { ProcessedFile } from "@/modules/FileImport/types";
 import ThreeDScene from './3DScene';
+import { Canvas3DErrorBoundary } from './ErrorBoundary';
 import { useTheme } from 'next-themes';
 import { 
   initPerformanceSettings, 
@@ -123,38 +124,40 @@ const ThreeDViewer: React.FC<ThreeDViewerProps> = ({
 
   return (
     <div className="w-full h-full relative" onContextMenu={(e) => e.preventDefault()}>
-      <Canvas
-        orthographic
-        camera={{
-          position: [8, 8, 8], // Default isometric orthographic view
-          zoom: 38,
-          near: 0.1,
-          far: 5000
-        }}
-        dpr={perfSettings.pixelRatio}
-        frameloop={perfSettings.frameRateLimit ? 'demand' : 'always'}
-        gl={{
-          antialias: perfSettings.antialias,
-          alpha: true,
-          powerPreference: perfSettings.pixelRatio < 1.5 ? "low-power" : "high-performance"
-        }}
-        shadows={perfSettings.shadowsEnabled}
-        style={{ background: viewerBackground }}
-        onContextMenu={(e) => e.preventDefault()}
-      >
-        <ThreeDScene
-          importedParts={displayParts}
-          selectedPartId={selectedPartId}
-          onPartSelected={setSelectedPartId}
-          onModelColorAssigned={onModelColorAssigned}
-          partVisibility={partVisibility}
-          baseplateVisible={baseplateVisible}
-          isDarkMode={resolvedTheme === 'dark'}
-          selectedSupportId={selectedSupportId}
-          onSupportSelect={onSupportSelect}
-          performanceSettings={perfSettings}
-        />
-      </Canvas>
+      <Canvas3DErrorBoundary name="3DViewer">
+        <Canvas
+          orthographic
+          camera={{
+            position: [8, 8, 8], // Default isometric orthographic view
+            zoom: 38,
+            near: 0.1,
+            far: 5000
+          }}
+          dpr={perfSettings.pixelRatio}
+          frameloop={perfSettings.frameRateLimit ? 'demand' : 'always'}
+          gl={{
+            antialias: perfSettings.antialias,
+            alpha: true,
+            powerPreference: perfSettings.pixelRatio < 1.5 ? "low-power" : "high-performance"
+          }}
+          shadows={perfSettings.shadowsEnabled}
+          style={{ background: viewerBackground }}
+          onContextMenu={(e) => e.preventDefault()}
+        >
+          <ThreeDScene
+            importedParts={displayParts}
+            selectedPartId={selectedPartId}
+            onPartSelected={setSelectedPartId}
+            onModelColorAssigned={onModelColorAssigned}
+            partVisibility={partVisibility}
+            baseplateVisible={baseplateVisible}
+            isDarkMode={resolvedTheme === 'dark'}
+            selectedSupportId={selectedSupportId}
+            onSupportSelect={onSupportSelect}
+            performanceSettings={perfSettings}
+          />
+        </Canvas>
+      </Canvas3DErrorBoundary>
 
       {/* Processing overlay */}
       {isProcessing && (

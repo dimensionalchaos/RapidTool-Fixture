@@ -119,11 +119,13 @@ const CSGOperations: React.FC<CSGOperationsProps> = ({
           );
           break;
         case 'union':
-          // TODO: Implement union operation
+          // FUTURE: Implement union CSG operation using Manifold3D
+          // This would combine multiple meshes into a single watertight mesh
           result = operation.targetMesh.clone();
           break;
         case 'intersect':
-          // TODO: Implement intersection operation
+          // FUTURE: Implement intersection CSG operation using Manifold3D
+          // This would extract the overlapping region between meshes
           result = operation.targetMesh.clone();
           break;
         default:

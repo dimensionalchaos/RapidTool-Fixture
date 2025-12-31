@@ -63,14 +63,15 @@ const FixtureDesigner: React.FC<FixtureDesignerProps> = ({ currentFile, onFileLo
     mouseRef.current.y = -((event.clientY - rect.getBoundingClientRect().top) / rect.offsetHeight) * 2 + 1;
 
     raycasterRef.current.setFromCamera(mouseRef.current, new THREE.Camera());
-    // TODO: Implement raycasting to find intersection point on baseplate
+    // FUTURE: Implement raycasting to find intersection point on baseplate
+    // Requires access to the Three.js camera from the parent Canvas context
   }, [isDragMode, selectedComponent]);
 
   // Handle mouse click for component placement
   const handleMouseClick = useCallback((event: MouseEvent) => {
     if (!isDragMode || !selectedComponent) return;
 
-    // TODO: Get intersection point with baseplate
+    // FUTURE: Get intersection point with baseplate using raycaster results
     const intersectionPoint = new THREE.Vector3(0, 0, 0); // Placeholder
 
     // Create new mesh from component

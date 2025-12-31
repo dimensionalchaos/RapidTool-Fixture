@@ -8,8 +8,11 @@ import Login from './pages/Login';
 import AppShell, { AppShellHandle } from './layout/AppShell';
 import FileImport from './modules/FileImport';
 import FixtureDesigner from './components/FixtureDesigner';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { ProcessedFile } from './modules/FileImport/types';
+import { createLogger } from './utils/logger';
 
+const logger = createLogger('App');
 const queryClient = new QueryClient();
 
 const App = () => {
@@ -32,7 +35,7 @@ const App = () => {
   }, []);
 
   const handleLogin = (credentials: { username: string; password: string }) => {
-    console.log('Login with:', credentials);
+    logger.info('User logged in:', credentials.username);
     setIsLoggedIn(true);
   };
 
@@ -56,25 +59,28 @@ const App = () => {
 
   if (!isLoggedIn) {
     return (
+      <ErrorBoundary name="App">
+        <QueryClientProvider client={queryClient}>
+          <ThemeProvider attribute='class' defaultTheme='light' enableSystem>
+            <TooltipProvider>
+              <Toaster />
+              <Sonner />
+              <Login onLogin={handleLogin} />
+            </TooltipProvider>
+          </ThemeProvider>
+        </QueryClientProvider>
+      </ErrorBoundary>
+    );
+  }
+
+  return (
+    <ErrorBoundary name="App">
       <QueryClientProvider client={queryClient}>
         <ThemeProvider attribute='class' defaultTheme='light' enableSystem>
           <TooltipProvider>
             <Toaster />
             <Sonner />
-            <Login onLogin={handleLogin} />
-          </TooltipProvider>
-        </ThemeProvider>
-      </QueryClientProvider>
-    );
-  }
-
-  return (
-    <QueryClientProvider client={queryClient}>
-      <ThemeProvider attribute='class' defaultTheme='light' enableSystem>
-        <TooltipProvider>
-          <Toaster />
-          <Sonner />
-          <AppShell
+            <AppShell
             ref={appShellRef}
             onLogout={handleLogout}
             onToggleDesignMode={handleToggleDesignMode}
@@ -99,6 +105,7 @@ const App = () => {
         </TooltipProvider>
       </ThemeProvider>
     </QueryClientProvider>
+  </ErrorBoundary>
   );
 };
 
