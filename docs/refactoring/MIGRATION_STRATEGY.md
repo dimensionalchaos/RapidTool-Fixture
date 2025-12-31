@@ -4,6 +4,19 @@
 
 AppShell.tsx currently has 47 useState calls and 80+ event dispatches. This document tracks the incremental migration to Zustand stores.
 
+## Migration Status
+
+| Phase | Status | States Migrated |
+|-------|--------|-----------------|
+| 7a - Selection | ✅ Complete | 6 |
+| 7c - Workflow | ✅ Complete | 3 |
+| 7h - UI | ✅ Complete | 2 |
+| 7f - Dialog | ✅ Complete | 2 |
+| 7e - Processing | ⏸️ Deferred | 0 |
+| 7b - Fixture Data | ⏸️ Deferred | 0 |
+
+**Total migrated: 13 useState calls → Zustand stores**
+
 ## Migration Phases
 
 ### Phase 7a: Selection State (Low Risk)
