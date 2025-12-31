@@ -278,17 +278,79 @@ export function collectBaseplateGeometry(
   }
   
   // Single baseplate handling
+  // IMPORTANT: Baseplate geometry needs to be transformed to world space because:
+  // 1. Labels and clamp supports are positioned in world coordinates
+  // 2. The BasePlate component may have internal geometry offsets (geometryOffsetX/Z)
+  //    for asymmetric expansion when hull points extend beyond configured bounds
+  // 3. The mesh's matrixWorld includes the mesh position (basePlate.position)
   if (ctx.baseplateWithHoles) {
     // Single baseplate with holes cut (CSG result)
+    // This geometry is in local space, need to transform to world space
     console.log('[Export] Using baseplateWithHoles geometry');
-    geometry = ctx.baseplateWithHoles;
+    geometry = ctx.baseplateWithHoles.clone();
+    
+    // Debug: Log geometry bounds before transform
+    geometry.computeBoundingBox();
+    const beforeBox = geometry.boundingBox!;
+    const beforeCenter = new THREE.Vector3();
+    beforeBox.getCenter(beforeCenter);
+    console.log('[Export] Baseplate geometry BEFORE transform:', {
+      center: { x: beforeCenter.x.toFixed(2), y: beforeCenter.y.toFixed(2), z: beforeCenter.z.toFixed(2) },
+      min: { x: beforeBox.min.x.toFixed(2), y: beforeBox.min.y.toFixed(2), z: beforeBox.min.z.toFixed(2) },
+      max: { x: beforeBox.max.x.toFixed(2), y: beforeBox.max.y.toFixed(2), z: beforeBox.max.z.toFixed(2) }
+    });
+    
+    // Apply mesh position transform to convert from local to world space
+    if (ctx.basePlateMeshRef.current) {
+      ctx.basePlateMeshRef.current.updateMatrixWorld(true);
+      const matrixWorld = ctx.basePlateMeshRef.current.matrixWorld;
+      const pos = new THREE.Vector3();
+      pos.setFromMatrixPosition(matrixWorld);
+      console.log('[Export] Applying matrixWorld from mesh ref, position:', { x: pos.x.toFixed(2), y: pos.y.toFixed(2), z: pos.z.toFixed(2) });
+      geometry.applyMatrix4(matrixWorld);
+      console.log('[Export] Applied baseplate mesh matrixWorld to baseplateWithHoles');
+    } else if (ctx.basePlate?.position) {
+      // Mesh not available (unmounted after cavity), use config position
+      const pos = ctx.basePlate.position;
+      console.log('[Export] Mesh ref not available, using basePlate.position:', { x: pos.x, y: pos.y, z: pos.z });
+      const positionMatrix = new THREE.Matrix4().makeTranslation(pos.x, pos.y, pos.z);
+      geometry.applyMatrix4(positionMatrix);
+      console.log('[Export] Applied basePlate.position transform to baseplateWithHoles');
+    } else {
+      console.warn('[Export] No transform applied to baseplateWithHoles - mesh ref null and no basePlate.position!');
+    }
+    
+    // Debug: Log geometry bounds after transform
+    geometry.computeBoundingBox();
+    const afterBox = geometry.boundingBox!;
+    const afterCenter = new THREE.Vector3();
+    afterBox.getCenter(afterCenter);
+    console.log('[Export] Baseplate geometry AFTER transform:', {
+      center: { x: afterCenter.x.toFixed(2), y: afterCenter.y.toFixed(2), z: afterCenter.z.toFixed(2) },
+      min: { x: afterBox.min.x.toFixed(2), y: afterBox.min.y.toFixed(2), z: afterBox.min.z.toFixed(2) },
+      max: { x: afterBox.max.x.toFixed(2), y: afterBox.max.y.toFixed(2), z: afterBox.max.z.toFixed(2) }
+    });
   } else if (ctx.basePlateMeshRef.current?.geometry) {
     console.log('[Export] Using baseplate geometry from ref');
-    geometry = ctx.basePlateMeshRef.current.geometry;
+    geometry = ctx.basePlateMeshRef.current.geometry.clone();
+    ctx.basePlateMeshRef.current.updateMatrixWorld(true);
+    geometry.applyMatrix4(ctx.basePlateMeshRef.current.matrixWorld);
+    console.log('[Export] Applied baseplate mesh matrixWorld to geometry from ref');
   } else if (ctx.originalBaseplateGeoRef.current) {
+    // originalBaseplateGeoRef is cached from useHoleCSG (local space with geometry offset)
+    // Need to apply mesh position to convert to world space
     console.log('[Export] Using baseplate geometry from originalBaseplateGeoRef');
-    geometry = ctx.originalBaseplateGeoRef.current;
+    geometry = ctx.originalBaseplateGeoRef.current.clone();
+    
+    if (ctx.basePlate?.position) {
+      const pos = ctx.basePlate.position;
+      console.log('[Export] Applying basePlate.position to originalBaseplateGeoRef:', { x: pos.x, y: pos.y, z: pos.z });
+      const positionMatrix = new THREE.Matrix4().makeTranslation(pos.x, pos.y, pos.z);
+      geometry.applyMatrix4(positionMatrix);
+      console.log('[Export] Applied basePlate.position transform to originalBaseplateGeoRef');
+    }
   } else if (ctx.basePlate) {
+    // Fallback: create from config - this is in local/origin space
     console.log('[Export] Creating baseplate geometry from config');
     geometry = createBaseplateGeometryFromConfig(ctx.basePlate);
   }
@@ -396,6 +458,16 @@ export async function buildClampSupportWithCutouts(
     .setPosition(clampPosition.x, baseTopY, clampPosition.z);
   clampSupportGeometry.applyMatrix4(transformMatrix);
   
+  // Debug: Log clamp support bounds
+  clampSupportGeometry.computeBoundingBox();
+  const clampBox = clampSupportGeometry.boundingBox!;
+  const clampCenter = new THREE.Vector3();
+  clampBox.getCenter(clampCenter);
+  console.log(`[Export] Clamp support ${clampId} positioned at:`, {
+    inputPosition: { x: clampPosition.x.toFixed(2), z: clampPosition.z.toFixed(2) },
+    center: { x: clampCenter.x.toFixed(2), y: clampCenter.y.toFixed(2), z: clampCenter.z.toFixed(2) }
+  });
+  
   // Prepare for CSG
   prepareGeometryForCSG(clampSupportGeometry);
   
@@ -444,6 +516,20 @@ export async function buildLabelGeometries(
       onProgress?.(`Building label "${label.text}"...`);
       const labelGeometry = await buildLabelGeometry(label);
       if (labelGeometry) {
+        // Debug: Log label geometry bounds
+        labelGeometry.computeBoundingBox();
+        const labelBox = labelGeometry.boundingBox!;
+        const labelCenter = new THREE.Vector3();
+        labelBox.getCenter(labelCenter);
+        const labelPos = label.position;
+        console.log(`[Export] Label "${label.text}" positioned at:`, {
+          inputPosition: { 
+            x: (labelPos instanceof THREE.Vector3 ? labelPos.x : labelPos.x).toFixed(2),
+            y: (labelPos instanceof THREE.Vector3 ? labelPos.y : labelPos.y).toFixed(2),
+            z: (labelPos instanceof THREE.Vector3 ? labelPos.z : labelPos.z).toFixed(2)
+          },
+          geometryCenter: { x: labelCenter.x.toFixed(2), y: labelCenter.y.toFixed(2), z: labelCenter.z.toFixed(2) }
+        });
         geometries.push(labelGeometry);
       }
     } catch (err) {
