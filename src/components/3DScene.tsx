@@ -1603,7 +1603,16 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
                 }
               : undefined
           }
-          onSectionDoubleClick={(isMultiSectionDrawingMode || holePlacementMode.active) ? undefined : (sectionId) => {
+          onSectionDoubleClick={(
+            isMultiSectionDrawingMode || 
+            holePlacementMode.active ||
+            placing.active ||
+            clampPlacementMode.active ||
+            waitingForSectionSelection ||
+            waitingForClampSectionSelection ||
+            waitingForLabelSectionSelection ||
+            waitingForHoleSectionSelection
+          ) ? undefined : (sectionId) => {
             // Double click - enter edit mode for moving this section
             // First, notify all other controls to deactivate
             window.dispatchEvent(new CustomEvent('pivot-control-activated', { detail: { sectionId } }));
