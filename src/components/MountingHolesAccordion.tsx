@@ -69,10 +69,10 @@ const MountingHolesAccordion: React.FC<MountingHolesAccordionProps> = ({
     
     let updatedHole: PlacedHole;
     
-    if (property === 'positionX' || property === 'positionZ') {
+    if (property === 'positionX' || property === 'positionY') {
       const newPosition = new THREE.Vector2(
         property === 'positionX' ? value : Number(hole.position?.x) || 0,
-        property === 'positionZ' ? value : Number(hole.position?.y) || 0
+        property === 'positionY' ? value : Number(hole.position?.y) || 0
       );
       updatedHole = { ...hole, position: newPosition };
     } else {
@@ -80,6 +80,9 @@ const MountingHolesAccordion: React.FC<MountingHolesAccordionProps> = ({
     }
     
     onUpdateHole(updatedHole);
+    
+    // Dispatch event to update 3D scene and trigger CSG recalculation
+    window.dispatchEvent(new CustomEvent('hole-updated', { detail: updatedHole }));
   }, [onUpdateHole]);
 
   // Handle move button click - enters edit mode with gizmo
@@ -223,11 +226,11 @@ const MountingHolesAccordion: React.FC<MountingHolesAccordionProps> = ({
                           />
                         </div>
                         <div className="space-y-1">
-                          <Label className="text-[8px] text-green-500 font-mono">Z</Label>
+                          <Label className="text-[8px] text-green-500 font-mono">Y</Label>
                           <Input
                             type="number"
                             value={(Number(hole.position?.y) || 0).toFixed(1)}
-                            onChange={(e) => handleHolePropertyChange(hole, 'positionZ', parseFloat(e.target.value) || 0)}
+                            onChange={(e) => handleHolePropertyChange(hole, 'positionY', parseFloat(e.target.value) || 0)}
                             className="h-6 !text-[10px] font-mono"
                             step="0.5"
                           />

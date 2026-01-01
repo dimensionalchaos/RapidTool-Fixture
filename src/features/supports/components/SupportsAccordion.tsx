@@ -118,7 +118,7 @@ const SupportsAccordion: React.FC<SupportsAccordionProps> = ({
               />
             </div>
             <div className="space-y-1">
-              <Label className="text-[8px] text-green-500 font-mono">Z</Label>
+              <Label className="text-[8px] text-green-500 font-mono">Y</Label>
               <Input
                 type="number"
                 value={support.center.y.toFixed(1)}

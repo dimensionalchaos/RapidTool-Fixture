@@ -9,6 +9,7 @@ import {
   getPerformanceSettings, 
   PerformanceSettings 
 } from '@/utils/performanceSettings';
+import NavigationTooltip from './NavigationTooltip';
 
 interface ThreeDViewerProps {
   currentFile: ProcessedFile | null;
@@ -185,6 +186,9 @@ const ThreeDViewer: React.FC<ThreeDViewerProps> = ({
           </div>
         </div>
       )}
+
+      {/* Navigation help tooltip */}
+      <NavigationTooltip />
     </div>
   );
 };

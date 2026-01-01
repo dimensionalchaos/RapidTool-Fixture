@@ -53,6 +53,8 @@ interface PartPropertiesAccordionProps {
   onRemoveBaseplate?: () => void;
   onUpdateBaseplate?: (updates: { padding?: number; height?: number }) => void;
   onRemoveBaseplateSection?: (sectionId: string) => void;
+  onUpdateBaseplateSection?: (sectionId: string, updates: { minX?: number; maxX?: number; minZ?: number; maxZ?: number }) => void;
+  onSelectBaseplateSection?: (sectionId: string | null) => void;
   onAddBaseplateSection?: () => void;
   selectedBasePlateSectionId?: string | null;
   supports?: AnySupport[];
@@ -250,6 +252,8 @@ const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({
   onRemoveBaseplate,
   onUpdateBaseplate,
   onRemoveBaseplateSection,
+  onUpdateBaseplateSection,
+  onSelectBaseplateSection,
   onAddBaseplateSection,
   selectedBasePlateSectionId = null,
   supports = [],
@@ -431,6 +435,8 @@ const PartPropertiesAccordion: React.FC<PartPropertiesAccordionProps> = ({
         visible={baseplateVisible}
         onVisibilityChange={onBaseplateVisibilityChange}
         onRemoveSection={onRemoveBaseplateSection}
+        onUpdateSection={onUpdateBaseplateSection}
+        onSelectSection={onSelectBaseplateSection}
         onAddSections={onAddBaseplateSection}
         selectedSectionId={selectedBasePlateSectionId}
       />

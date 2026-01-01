@@ -96,7 +96,7 @@ const PositionInput: React.FC<{
 
   return (
     <div className="space-y-1">
-      <Label className={`text-[8px] font-mono ${color}`}>{axis.toUpperCase()}</Label>
+      <Label className={`text-[8px] font-mono ${color}`}>{axis === 'z' ? 'Y' : axis.toUpperCase()}</Label>
       <Input
         type="number"
         value={value.toFixed(1)}

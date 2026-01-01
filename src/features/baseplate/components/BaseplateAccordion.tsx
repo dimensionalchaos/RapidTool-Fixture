@@ -3,9 +3,10 @@
  *
  * Properties panel accordion for baseplate configuration.
  * Provides controls for padding, height, and visibility.
+ * Supports editing individual sections for multi-section baseplates.
  */
 
-import React, { useCallback, useRef, useEffect } from 'react';
+import React, { useCallback, useRef, useEffect, useState } from 'react';
 import {
   AccordionContent,
   AccordionItem,
@@ -14,7 +15,7 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Grid3X3, Square, Hexagon, Trash2, Maximize2, Move, Eye, EyeOff, LayoutGrid, PenTool } from 'lucide-react';
+import { Grid3X3, Square, Hexagon, Trash2, Maximize2, Move, Eye, EyeOff, LayoutGrid, PenTool, ChevronDown, ChevronRight, Crosshair } from 'lucide-react';
 import { IconButton } from '@/components/ui/icon-button';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -32,6 +33,14 @@ interface BaseplateConfig {
   sections?: BasePlateSection[];
 }
 
+/** Updates to a section's bounds */
+interface SectionBoundsUpdate {
+  minX?: number;
+  maxX?: number;
+  minZ?: number;
+  maxZ?: number;
+}
+
 interface BaseplateAccordionProps {
   /** Current baseplate configuration */
   baseplate: BaseplateConfig | null;
@@ -45,6 +54,10 @@ interface BaseplateAccordionProps {
   onVisibilityChange?: (visible: boolean) => void;
   /** Handler for removing individual section from multi-section baseplate */
   onRemoveSection?: (sectionId: string) => void;
+  /** Handler for updating individual section bounds */
+  onUpdateSection?: (sectionId: string, updates: SectionBoundsUpdate) => void;
+  /** Handler for selecting a section (for 3D highlighting) */
+  onSelectSection?: (sectionId: string | null) => void;
   /** Handler for starting to add more sections to multi-section baseplate */
   onAddSections?: () => void;
   /** ID of the selected section for highlighting */
@@ -207,46 +220,199 @@ const BaseplateHeader: React.FC<BaseplateHeaderProps> = ({
   );
 };
 
+/** Compact input for section dimension editing */
+interface SectionDimensionInputProps {
+  label: string;
+  value: number;
+  onChange: (value: number) => void;
+  min?: number;
+}
+
+const SectionDimensionInput: React.FC<SectionDimensionInputProps> = ({
+  label,
+  value,
+  onChange,
+  min = -10000,
+}) => {
+  const handleChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const newValue = parseFloat(e.target.value);
+    if (!isNaN(newValue)) {
+      onChange(newValue);
+    }
+  }, [onChange]);
+
+  return (
+    <div className="flex items-center gap-1">
+      <span className="text-[8px] font-tech text-muted-foreground w-8">{label}</span>
+      <Input
+        type="number"
+        value={value.toFixed(1)}
+        onChange={handleChange}
+        className="h-5 w-16 !text-[9px] font-mono px-1"
+        step="0.5"
+        min={min}
+      />
+    </div>
+  );
+};
+
 interface SectionListItemProps {
   section: BasePlateSection;
   index: number;
   isSelected: boolean;
+  isExpanded: boolean;
+  onToggleExpand: () => void;
+  onSelect: () => void;
   onRemove?: (sectionId: string) => void;
+  onUpdate?: (sectionId: string, updates: SectionBoundsUpdate) => void;
 }
 
 const SectionListItem: React.FC<SectionListItemProps> = React.memo(({
   section,
   index,
   isSelected,
+  isExpanded,
+  onToggleExpand,
+  onSelect,
   onRemove,
+  onUpdate,
 }) => {
   const width = Math.abs(section.maxX - section.minX);
   const depth = Math.abs(section.maxZ - section.minZ);
+  const centerX = (section.minX + section.maxX) / 2;
+  const centerZ = (section.minZ + section.maxZ) / 2;
+
+  // Update handlers that maintain center position when changing size
+  const handleWidthChange = useCallback((newWidth: number) => {
+    if (newWidth <= 0) return;
+    const halfWidth = newWidth / 2;
+    onUpdate?.(section.id, {
+      minX: centerX - halfWidth,
+      maxX: centerX + halfWidth,
+    });
+  }, [section.id, centerX, onUpdate]);
+
+  const handleDepthChange = useCallback((newDepth: number) => {
+    if (newDepth <= 0) return;
+    const halfDepth = newDepth / 2;
+    onUpdate?.(section.id, {
+      minZ: centerZ - halfDepth,
+      maxZ: centerZ + halfDepth,
+    });
+  }, [section.id, centerZ, onUpdate]);
+
+  // Update handlers for position (moves the whole section)
+  const handleCenterXChange = useCallback((newCenterX: number) => {
+    const halfWidth = width / 2;
+    onUpdate?.(section.id, {
+      minX: newCenterX - halfWidth,
+      maxX: newCenterX + halfWidth,
+    });
+  }, [section.id, width, onUpdate]);
+
+  const handleCenterZChange = useCallback((newCenterZ: number) => {
+    const halfDepth = depth / 2;
+    onUpdate?.(section.id, {
+      minZ: newCenterZ - halfDepth,
+      maxZ: newCenterZ + halfDepth,
+    });
+  }, [section.id, depth, onUpdate]);
 
   return (
     <div
       className={cn(
-        "flex items-center justify-between p-2 rounded border transition-all",
+        "rounded border transition-all",
         isSelected
           ? "border-primary bg-primary/10 ring-1 ring-primary/30"
           : "bg-muted/30 border-border/30"
       )}
     >
-      <div className="flex items-center gap-2">
-        <div className="w-5 h-5 rounded bg-primary/20 flex items-center justify-center">
-          <span className="text-[9px] font-tech text-primary">{index + 1}</span>
+      {/* Header row - always visible */}
+      <div 
+        className="flex items-center justify-between p-2 cursor-pointer"
+        onClick={onSelect}
+      >
+        <div className="flex items-center gap-2">
+          <div className="w-5 h-5 rounded bg-primary/20 flex items-center justify-center">
+            <span className="text-[9px] font-tech text-primary">{index + 1}</span>
+          </div>
+          <div className="text-[9px] font-tech text-muted-foreground">
+            {width.toFixed(1)} × {depth.toFixed(1)} mm
+          </div>
         </div>
-        <div className="text-[9px] font-tech text-muted-foreground">
-          {width.toFixed(1)} × {depth.toFixed(1)} mm
+        <div className="flex items-center gap-0.5">
+          {onRemove && (
+            <IconButton
+              onClick={(e) => {
+                e.stopPropagation();
+                onRemove(section.id);
+              }}
+              title="Remove section"
+              icon={<Trash2 className="w-3 h-3" />}
+              variant="ghost"
+            />
+          )}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleExpand();
+            }}
+            className="w-5 h-5 flex items-center justify-center text-muted-foreground hover:text-foreground"
+          >
+            {isExpanded ? (
+              <ChevronDown className="w-3 h-3" />
+            ) : (
+              <ChevronRight className="w-3 h-3" />
+            )}
+          </button>
         </div>
       </div>
-      {onRemove && (
-        <IconButton
-          onClick={() => onRemove(section.id)}
-          title="Remove section"
-          icon={<Trash2 className="w-3 h-3" />}
-          variant="ghost"
-        />
+
+      {/* Expanded content - editable dimensions */}
+      {isExpanded && (
+        <div className="px-2 pb-2 pt-1 border-t border-border/30 space-y-2">
+          {/* Size controls */}
+          <div className="space-y-1">
+            <Label className="text-[8px] font-tech text-muted-foreground flex items-center gap-1">
+              <Maximize2 className="w-2.5 h-2.5" />
+              Size
+            </Label>
+            <div className="flex gap-2">
+              <SectionDimensionInput
+                label="W"
+                value={width}
+                onChange={handleWidthChange}
+                min={10}
+              />
+              <SectionDimensionInput
+                label="D"
+                value={depth}
+                onChange={handleDepthChange}
+                min={10}
+              />
+            </div>
+          </div>
+
+          {/* Position controls */}
+          <div className="space-y-1">
+            <Label className="text-[8px] font-tech text-muted-foreground flex items-center gap-1">
+              <Crosshair className="w-2.5 h-2.5" />
+              Center Position
+            </Label>
+            <div className="flex gap-2">
+              <SectionDimensionInput
+                label="X"
+                value={centerX}
+                onChange={handleCenterXChange}
+              />
+              <SectionDimensionInput
+                label="Y"
+                value={centerZ}
+                onChange={handleCenterZChange}
+              />
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -257,11 +423,27 @@ SectionListItem.displayName = 'SectionListItem';
 interface SectionListProps {
   sections: BasePlateSection[];
   onRemoveSection?: (sectionId: string) => void;
+  onUpdateSection?: (sectionId: string, updates: SectionBoundsUpdate) => void;
+  onSelectSection?: (sectionId: string | null) => void;
   selectedSectionId?: string | null;
 }
 
-const SectionList: React.FC<SectionListProps> = ({ sections, onRemoveSection, selectedSectionId }) => {
+const SectionList: React.FC<SectionListProps> = ({ 
+  sections, 
+  onRemoveSection, 
+  onUpdateSection,
+  onSelectSection,
+  selectedSectionId 
+}) => {
   const sectionRefs = useRef<Map<string, HTMLDivElement | null>>(new Map());
+  const [expandedSectionId, setExpandedSectionId] = useState<string | null>(null);
+
+  // Auto-expand selected section
+  useEffect(() => {
+    if (selectedSectionId) {
+      setExpandedSectionId(selectedSectionId);
+    }
+  }, [selectedSectionId]);
 
   // Auto-scroll to selected section
   useEffect(() => {
@@ -275,6 +457,14 @@ const SectionList: React.FC<SectionListProps> = ({ sections, onRemoveSection, se
     return () => clearTimeout(timer);
   }, [selectedSectionId]);
 
+  const handleToggleExpand = useCallback((sectionId: string) => {
+    setExpandedSectionId(prev => prev === sectionId ? null : sectionId);
+  }, []);
+
+  const handleSelectSection = useCallback((sectionId: string) => {
+    onSelectSection?.(sectionId);
+  }, [onSelectSection]);
+
   if (!sections?.length) return null;
 
   return (
@@ -283,7 +473,7 @@ const SectionList: React.FC<SectionListProps> = ({ sections, onRemoveSection, se
         <LayoutGrid className="w-2.5 h-2.5" />
         Sections ({sections.length})
       </Label>
-      <div className="space-y-1 max-h-40 overflow-y-auto">
+      <div className="space-y-1 max-h-60 overflow-y-auto">
         {sections.map((section, index) => (
           <div
             key={section.id}
@@ -293,7 +483,11 @@ const SectionList: React.FC<SectionListProps> = ({ sections, onRemoveSection, se
               section={section}
               index={index}
               isSelected={selectedSectionId === section.id}
+              isExpanded={expandedSectionId === section.id}
+              onToggleExpand={() => handleToggleExpand(section.id)}
+              onSelect={() => handleSelectSection(section.id)}
               onRemove={onRemoveSection}
+              onUpdate={onUpdateSection}
             />
           </div>
         ))}
@@ -315,6 +509,8 @@ const BaseplateAccordion: React.FC<BaseplateAccordionProps> = ({
   visible = true,
   onVisibilityChange,
   onRemoveSection,
+  onUpdateSection,
+  onSelectSection,
   onAddSections,
   selectedSectionId = null,
 }) => {
@@ -371,6 +567,8 @@ const BaseplateAccordion: React.FC<BaseplateAccordionProps> = ({
                   <SectionList
                     sections={baseplate.sections}
                     onRemoveSection={onRemoveSection}
+                    onUpdateSection={onUpdateSection}
+                    onSelectSection={onSelectSection}
                     selectedSectionId={selectedSectionId}
                   />
                   

@@ -43,6 +43,8 @@ interface ExportStepContentProps {
   isMultiSection?: boolean;
   /** Number of sections in multi-section mode */
   sectionCount?: number;
+  /** Project name for default export filename */
+  projectName?: string;
   /** Callback when export is triggered */
   onExport?: (config: ExportConfig) => void;
   /** Whether export is in progress */
@@ -71,6 +73,7 @@ const ExportStepContent: React.FC<ExportStepContentProps> = ({
   hasCavityCutout = false,
   isMultiSection = false,
   sectionCount = 1,
+  projectName = 'Fixture',
   onExport,
   isExporting = false,
   meshValid = true,
@@ -80,7 +83,7 @@ const ExportStepContent: React.FC<ExportStepContentProps> = ({
   const [binary, setBinary] = useState(true);
   const [splitParts, setSplitParts] = useState(true); // Default to split for multi-section
   const [showFilenameDialog, setShowFilenameDialog] = useState(false);
-  const [filename, setFilename] = useState('Fixture');
+  const [filename, setFilename] = useState(projectName);
   const [filenameError, setFilenameError] = useState<string | null>(null);
   
   // Export progress state
@@ -118,6 +121,11 @@ const ExportStepContent: React.FC<ExportStepContentProps> = ({
     window.addEventListener('open-export-dialog', handleOpenExportDialog);
     return () => window.removeEventListener('open-export-dialog', handleOpenExportDialog);
   }, [hasFixture, hasCavityCutout]);
+
+  // Update filename when project name changes
+  useEffect(() => {
+    setFilename(projectName);
+  }, [projectName]);
 
   // Validate filename
   const validateFilename = useCallback((name: string): boolean => {

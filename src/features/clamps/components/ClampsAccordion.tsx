@@ -89,21 +89,21 @@ const ClampProperties: React.FC<ClampPropertiesProps> = ({ clamp, onUpdate }) =>
             />
           </div>
           <div className="space-y-1">
-            <Label className="text-[8px] text-green-500 font-mono">Y</Label>
+            <Label className="text-[8px] text-blue-500 font-mono">Y</Label>
             <Input
               type="number"
-              value={clamp.position.y.toFixed(1)}
-              onChange={(e) => handlePositionChange('y', parseFloat(e.target.value) || 0)}
+              value={clamp.position.z.toFixed(1)}
+              onChange={(e) => handlePositionChange('z', parseFloat(e.target.value) || 0)}
               className="h-6 !text-[10px] font-mono"
               step="0.5"
             />
           </div>
           <div className="space-y-1">
-            <Label className="text-[8px] text-blue-500 font-mono">Z</Label>
+            <Label className="text-[8px] text-green-500 font-mono">Z</Label>
             <Input
               type="number"
-              value={clamp.position.z.toFixed(1)}
-              onChange={(e) => handlePositionChange('z', parseFloat(e.target.value) || 0)}
+              value={clamp.position.y.toFixed(1)}
+              onChange={(e) => handlePositionChange('y', parseFloat(e.target.value) || 0)}
               className="h-6 !text-[10px] font-mono"
               step="0.5"
             />

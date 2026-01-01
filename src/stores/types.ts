@@ -121,11 +121,11 @@ export interface BaseplateSection {
 /** Baseplate configuration */
 export interface BaseplateConfig {
   id: string;
-  type: 'auto' | 'manual' | 'multi-section';
-  padding: number;
-  height: number;
+  type: 'rectangular' | 'convex-hull' | 'perforated-panel' | 'metal-wooden-plate' | 'multi-section';
+  padding?: number;
+  height?: number;
   depth?: number;
-  sections: BaseplateSection[];
+  sections?: BaseplateSection[];
 }
 
 // CavitySettings imported from @rapidtool/cad-core

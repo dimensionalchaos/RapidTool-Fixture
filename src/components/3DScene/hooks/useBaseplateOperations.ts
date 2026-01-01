@@ -439,33 +439,93 @@ export function useBaseplateOperations({
       setBasePlate(null);
     };
 
-    const handleSectionRemoved = (e: CustomEvent<{ sectionId: string; sections: BasePlateSection[] }>) => {
-      if (!basePlate || basePlate.type !== 'multi-section') return;
-      
-      // Update baseplate with remaining sections
-      setBasePlate({
-        ...basePlate,
-        sections: e.detail.sections,
-        // Recalculate overall bounds
-        width: Math.max(...e.detail.sections.map(s => s.maxX)) - Math.min(...e.detail.sections.map(s => s.minX)),
-        height: Math.max(...e.detail.sections.map(s => s.maxZ)) - Math.min(...e.detail.sections.map(s => s.minZ)),
-      });
-    };
-
     window.addEventListener('baseplate-deselected', handleDeselectBaseplate as EventListener);
     window.addEventListener('cancel-baseplate', handleCancelBaseplate as EventListener);
     window.addEventListener('update-baseplate', handleUpdateBaseplate as EventListener);
     window.addEventListener('remove-baseplate', handleRemoveBaseplate as EventListener);
-    window.addEventListener('baseplate-section-removed', handleSectionRemoved as EventListener);
 
     return () => {
       window.removeEventListener('baseplate-deselected', handleDeselectBaseplate as EventListener);
       window.removeEventListener('cancel-baseplate', handleCancelBaseplate as EventListener);
       window.removeEventListener('update-baseplate', handleUpdateBaseplate as EventListener);
       window.removeEventListener('remove-baseplate', handleRemoveBaseplate as EventListener);
-      window.removeEventListener('baseplate-section-removed', handleSectionRemoved as EventListener);
     };
   }, [basePlate, importedParts, selectedPartId, setBasePlate, setModelTransform, modelMeshRefs]);
+
+  // ========================================================================
+  // Handle section removal and updates (separate effect with functional updates)
+  // ========================================================================
+  React.useEffect(() => {
+    const handleSectionRemoved = (e: CustomEvent<{ sectionId: string; sections: BasePlateSection[] }>) => {
+      // Use functional update to avoid stale closure issues
+      setBasePlate(prev => {
+        if (!prev || prev.type !== 'multi-section') return prev;
+        
+        const sections = e.detail.sections;
+        if (!sections || sections.length === 0) {
+          return prev;
+        }
+        
+        return {
+          ...prev,
+          sections,
+          // Recalculate overall bounds
+          width: Math.max(...sections.map(s => s.maxX)) - Math.min(...sections.map(s => s.minX)),
+          height: Math.max(...sections.map(s => s.maxZ)) - Math.min(...sections.map(s => s.minZ)),
+        };
+      });
+    };
+
+    // Handle section bounds update (from properties panel)
+    const handleSectionUpdated = (e: CustomEvent<{ 
+      basePlateId: string; 
+      sectionId: string; 
+      newBounds: { minX: number; maxX: number; minZ: number; maxZ: number };
+      source?: string;
+    }>) => {
+      const { sectionId, newBounds, source } = e.detail;
+      
+      // Use functional update to avoid stale closure issues
+      setBasePlate(prev => {
+        if (!prev || prev.type !== 'multi-section' || !prev.sections) return prev;
+        
+        // Update the section with new bounds
+        // If from properties panel, also update original* values to prevent auto-resize snap-back
+        const updatedSections = prev.sections.map(s => {
+          if (s.id !== sectionId) return s;
+          
+          const updated = { ...s, ...newBounds };
+          
+          // When user manually changes bounds from properties panel, treat this as the new "original"
+          // This prevents the auto-resize effect from snapping back to old values
+          if (source === 'properties-panel') {
+            updated.originalWidth = newBounds.maxX - newBounds.minX;
+            updated.originalDepth = newBounds.maxZ - newBounds.minZ;
+            updated.originalCenterX = (newBounds.minX + newBounds.maxX) / 2;
+            updated.originalCenterZ = (newBounds.minZ + newBounds.maxZ) / 2;
+          }
+          
+          return updated;
+        });
+        
+        return {
+          ...prev,
+          sections: updatedSections,
+          // Recalculate overall bounds
+          width: Math.max(...updatedSections.map(s => s.maxX)) - Math.min(...updatedSections.map(s => s.minX)),
+          height: Math.max(...updatedSections.map(s => s.maxZ)) - Math.min(...updatedSections.map(s => s.minZ)),
+        };
+      });
+    };
+
+    window.addEventListener('baseplate-section-removed', handleSectionRemoved as EventListener);
+    window.addEventListener('baseplate-section-updated', handleSectionUpdated as EventListener);
+
+    return () => {
+      window.removeEventListener('baseplate-section-removed', handleSectionRemoved as EventListener);
+      window.removeEventListener('baseplate-section-updated', handleSectionUpdated as EventListener);
+    };
+  }, [setBasePlate]); // Only depends on setBasePlate which is stable
 
   // ========================================================================
   // Handle multi-section baseplate drawing mode
@@ -537,9 +597,10 @@ export function useBaseplateOperations({
     // Allow update if there are imported parts OR clamps with support info
     if (importedParts.length === 0 && placedClamps.length === 0) return;
     
-    // Only update for non-convex-hull types
+    // Only update for rectangular-type baseplates
     // Convex-hull recalculates its geometry from modelGeometry/modelMatrixWorld props automatically
-    if (basePlate.type === 'convex-hull') return;
+    // Multi-section baseplates have their own bounds calculated from sections
+    if (basePlate.type === 'convex-hull' || basePlate.type === 'multi-section') return;
     
     // Skip during hole drag to prevent updates during gizmo manipulation
     if (isDraggingHoleRef.current) return;

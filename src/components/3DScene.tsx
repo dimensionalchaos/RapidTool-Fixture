@@ -1618,28 +1618,26 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
               detail: { basePlateId: basePlate.id }
             }));
           }}
-          onSectionClick={
-            // Only allow section selection when actively placing features
-            (waitingForSectionSelection || waitingForClampSectionSelection || waitingForLabelSectionSelection || waitingForHoleSectionSelection || clampPlacementMode.active || holePlacementMode.active)
-              ? (sectionId) => {
-                  // Single click - select section for feature placement
-                  console.log('[SectionSelection] Section clicked:', sectionId);
-                  if (basePlate?.type === 'multi-section' && basePlate.sections) {
-                    const section = basePlate.sections.find(s => s.id === sectionId);
-                    console.log('[SectionSelection] Section state:', JSON.stringify({
-                      id: section?.id,
-                      minX: section?.minX,
-                      maxX: section?.maxX,
-                      minZ: section?.minZ,
-                      maxZ: section?.maxZ,
-                      originalWidth: section?.originalWidth,
-                      originalDepth: section?.originalDepth
-                    }));
-                  }
-                  setSelectedBasePlateSectionId(sectionId);
-                }
-              : undefined
-          }
+          onSectionClick={(sectionId) => {
+            // Single click - select section for highlighting in properties panel
+            // Also used for feature placement when in placement mode
+            console.log('[SectionSelection] Section clicked:', sectionId);
+            if (basePlate?.type === 'multi-section' && basePlate.sections) {
+              const section = basePlate.sections.find(s => s.id === sectionId);
+              console.log('[SectionSelection] Section state:', JSON.stringify({
+                id: section?.id,
+                minX: section?.minX,
+                maxX: section?.maxX,
+                minZ: section?.minZ,
+                maxZ: section?.maxZ,
+                originalWidth: section?.originalWidth,
+                originalDepth: section?.originalDepth
+              }));
+            }
+            // Clear part selection when selecting a baseplate section
+            onPartSelected(null);
+            setSelectedBasePlateSectionId(sectionId);
+          }}
           onSectionDoubleClick={(
             isMultiSectionDrawingMode || 
             holePlacementMode.active ||

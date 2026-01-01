@@ -68,6 +68,8 @@ interface LabelsStepContentProps {
   onUpdateLabel?: (labelId: string, updates: Partial<LabelConfig>) => void;
   onDeleteLabel?: (labelId: string) => void;
   onSelectLabel?: (labelId: string | null) => void;
+  /** Project name for default label text */
+  projectName?: string;
   /** Current baseplate configuration (for multi-section support) */
   currentBaseplate?: { 
     id: string; 
@@ -279,12 +281,16 @@ const LabelsStepContent: React.FC<LabelsStepContentProps> = ({
   onUpdateLabel,
   onDeleteLabel,
   onSelectLabel,
+  projectName = 'Untitled',
   currentBaseplate = null,
   selectedSectionId = null,
   onSectionSelect,
 }) => {
+  // Generate default label text from project name
+  const defaultLabelText = `${projectName} V1.0`;
+  
   // Form state
-  const [labelText, setLabelText] = useState(DEFAULT_LABEL_CONFIG.text);
+  const [labelText, setLabelText] = useState(defaultLabelText);
   const [fontSize, setFontSize] = useState(DEFAULT_LABEL_CONFIG.fontSize);
   const [depth, setDepth] = useState(DEFAULT_DEPTH);
   const [font, setFont] = useState<LabelFont>(DEFAULT_LABEL_CONFIG.font);
@@ -308,6 +314,13 @@ const LabelsStepContent: React.FC<LabelsStepContentProps> = ({
     setDepth(selectedLabel.depth);
     setFont(selectedLabel.font || 'helvetiker');
   }, [selectedLabel]);
+
+  // Update default label text when project name changes (only when no label is selected)
+  useEffect(() => {
+    if (!selectedLabel) {
+      setLabelText(`${projectName} V1.0`);
+    }
+  }, [projectName, selectedLabel]);
 
   // Event listeners
   useLabelSelectionListener(onSelectLabel);

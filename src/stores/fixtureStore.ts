@@ -19,6 +19,9 @@ import type {
 } from './types';
 
 export interface FixtureState {
+  /** Project name (displayed in title bar, used for export and labels) */
+  projectName: string;
+  
   /** Imported parts */
   parts: ProcessedFile[];
   
@@ -48,6 +51,9 @@ export interface FixtureState {
 }
 
 export interface FixtureActions {
+  // Project name
+  setProjectName: (name: string) => void;
+  
   // Parts
   addPart: (part: ProcessedFile) => void;
   removePart: (id: string) => void;
@@ -80,7 +86,7 @@ export interface FixtureActions {
   updateHole: (id: string, data: Partial<PlacedHole>) => void;
   
   // Baseplate
-  setBaseplate: (config: BaseplateConfig | null) => void;
+  setBaseplate: (configOrUpdater: BaseplateConfig | null | ((prev: BaseplateConfig | null) => BaseplateConfig | null)) => void;
   updateBaseplate: (data: Partial<BaseplateConfig>) => void;
   addBaseplateSection: (section: BaseplateSection) => void;
   updateBaseplateSection: (id: string, data: Partial<BaseplateSection>) => void;
@@ -96,6 +102,7 @@ export interface FixtureActions {
 export type FixtureStore = FixtureState & FixtureActions;
 
 const INITIAL_STATE: FixtureState = {
+  projectName: 'Untitled',
   parts: [],
   partVisibility: {},
   partColors: {},
@@ -112,6 +119,13 @@ export const useFixtureStore = create<FixtureStore>()(
     subscribeWithSelector(
       immer((set, get) => ({
         ...INITIAL_STATE,
+
+        // Project name
+        setProjectName: (name) => {
+          set((state) => {
+            state.projectName = name;
+          });
+        },
 
         // Parts
         addPart: (part) => {
@@ -269,9 +283,14 @@ export const useFixtureStore = create<FixtureStore>()(
         },
 
         // Baseplate
-        setBaseplate: (config) => {
+        setBaseplate: (configOrUpdater) => {
           set((state) => {
-            state.baseplate = config;
+            // Support both direct value and functional update
+            if (typeof configOrUpdater === 'function') {
+              state.baseplate = configOrUpdater(state.baseplate);
+            } else {
+              state.baseplate = configOrUpdater;
+            }
           });
         },
         
@@ -286,6 +305,9 @@ export const useFixtureStore = create<FixtureStore>()(
         addBaseplateSection: (section) => {
           set((state) => {
             if (state.baseplate) {
+              if (!state.baseplate.sections) {
+                state.baseplate.sections = [];
+              }
               state.baseplate.sections.push(section);
             }
           });
@@ -293,7 +315,7 @@ export const useFixtureStore = create<FixtureStore>()(
         
         updateBaseplateSection: (id, data) => {
           set((state) => {
-            if (state.baseplate) {
+            if (state.baseplate && state.baseplate.sections) {
               const idx = state.baseplate.sections.findIndex((s) => s.id === id);
               if (idx !== -1) {
                 Object.assign(state.baseplate.sections[idx], data);
@@ -304,7 +326,7 @@ export const useFixtureStore = create<FixtureStore>()(
         
         removeBaseplateSection: (id) => {
           set((state) => {
-            if (state.baseplate) {
+            if (state.baseplate && state.baseplate.sections) {
               state.baseplate.sections = state.baseplate.sections.filter((s) => s.id !== id);
             }
           });
@@ -339,6 +361,8 @@ export const useFixtureStore = create<FixtureStore>()(
         
         loadSnapshot: (snapshot) => {
           set((state) => {
+            if (snapshot.projectName !== undefined) state.projectName = snapshot.projectName;
+            if (snapshot.parts) state.parts = snapshot.parts;
             if (snapshot.partVisibility) state.partVisibility = snapshot.partVisibility;
             if (snapshot.partColors) state.partColors = snapshot.partColors;
             if (snapshot.supports) state.supports = snapshot.supports;
@@ -356,6 +380,7 @@ export const useFixtureStore = create<FixtureStore>()(
 );
 
 // Selectors
+export const selectProjectName = (state: FixtureStore) => state.projectName;
 export const selectParts = (state: FixtureStore) => state.parts;
 export const selectSupports = (state: FixtureStore) => state.supports;
 export const selectClamps = (state: FixtureStore) => state.clamps;

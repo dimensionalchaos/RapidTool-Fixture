@@ -16,6 +16,21 @@ import type {
 } from '@/stores/types';
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Project Name
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Hook for project name
+ * Used for title bar display, default label text, and export filename
+ */
+export function useProjectName() {
+  const projectName = useFixtureStore((state) => state.projectName);
+  const setProjectName = useFixtureStore((state) => state.setProjectName);
+  
+  return [projectName, setProjectName] as const;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Parts
 // ─────────────────────────────────────────────────────────────────────────────
 

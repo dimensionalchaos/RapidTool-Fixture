@@ -67,3 +67,22 @@ export const IconIsoLeftFace: React.FC<IconProps> = ({ className }) => (
     <line x1="12" y1="12" x2="12" y2="20" />
   </svg>
 );
+
+/**
+ * Isometric corner view icon - all three faces visible with gradient shading
+ * Used for isometric/3D perspective view
+ */
+export const IconIsoCorner: React.FC<IconProps> = ({ className }) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
+    {/* top face - lightest */}
+    <polygon points="12,4 19,8 12,12 5,8" fill="currentColor" fillOpacity="0.3" />
+    {/* left face - medium */}
+    <polygon points="5,8 12,12 12,20 5,16" fill="currentColor" fillOpacity="0.5" />
+    {/* right face - darkest */}
+    <polygon points="19,8 12,12 12,20 19,16" fill="currentColor" fillOpacity="0.7" />
+    {/* edges */}
+    <polyline points="5,8 12,12 19,8" />
+    <polyline points="5,16 12,20 19,16" />
+    <line x1="12" y1="12" x2="12" y2="20" />
+  </svg>
+);
