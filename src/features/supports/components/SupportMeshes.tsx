@@ -553,109 +553,189 @@ const createPolygonFilletGeometry = (polygon: [number, number][], cornerRadius: 
 };
 
 // Create a fillet for rectangular supports
+/**
+ * Create a fillet for rectangular supports using polygon-based approach.
+ * This uses the same logic as createPolygonFilletGeometry which works correctly
+ * for clamp and custom polygon supports.
+ */
 const createRectangularFilletGeometry = (width: number, depthVal: number, cornerRadius: number = 0, filletRadius: number = FILLET_RADIUS, segments: number = FILLET_SEGMENTS): THREE.BufferGeometry => {
   const hw = width / 2;
   const hd = depthVal / 2;
   const r = Math.max(0, Math.min(cornerRadius, hw - 0.01, hd - 0.01));
   
+  // Create a rectangular polygon in CW order (when viewed from above)
+  // CW order: going around clockwise when Y is up
+  const polygon: [number, number][] = [
+    [-hw, -hd],  // bottom-left
+    [-hw, hd],   // top-left  
+    [hw, hd],    // top-right
+    [hw, -hd],   // bottom-right
+  ];
+  
+  // Use the same polygon-based fillet logic that works for clamp supports
+  return createPolygonFilletGeometry(polygon, r, filletRadius, segments);
+};
+
+/**
+ * Create a polygon-based bottom cap geometry for sealing supports during CSG operations.
+ * This creates a flat cap at Y=0 that matches the fillet's outer perimeter exactly.
+ * Used by both rectangular and custom polygon supports for consistent manifold geometry.
+ */
+const createPolygonBottomCapGeometry = (
+  polygon: [number, number][],
+  cornerRadius: number,
+  filletRadius: number
+): THREE.BufferGeometry | null => {
+  if (!polygon || polygon.length < 3) return null;
+  
+  // CRITICAL: Use SAME polygon ordering as fillet (CW, no reversal)
+  const workingPolygon = ensureClockwiseWindingXZ(polygon);
+  const isCW = true;
+  
+  const getEdgeNormal = (p1: [number, number], p2: [number, number]): [number, number] => {
+    return computeEdgeNormal(p1, p2, isCW);
+  };
+  
+  const n = workingPolygon.length;
+  const edgeNormals: [number, number][] = [];
+  for (let i = 0; i < n; i++) {
+    const p1 = workingPolygon[i];
+    const p2 = workingPolygon[(i + 1) % n];
+    edgeNormals.push(getEdgeNormal(p1, p2));
+  }
+  
+  // Compute corner data (same as fillet geometry)
+  const cornerData: { vx: number, vz: number, insetStart: [number, number], insetEnd: [number, number], r: number }[] = [];
+  
+  for (let i = 0; i < n; i++) {
+    const prev = workingPolygon[(i - 1 + n) % n];
+    const curr = workingPolygon[i];
+    const next = workingPolygon[(i + 1) % n];
+    
+    const toPrev = [prev[0] - curr[0], prev[1] - curr[1]];
+    const toNext = [next[0] - curr[0], next[1] - curr[1]];
+    const lenPrev = Math.sqrt(toPrev[0] ** 2 + toPrev[1] ** 2);
+    const lenNext = Math.sqrt(toNext[0] ** 2 + toNext[1] ** 2);
+    
+    if (lenPrev < 0.01 || lenNext < 0.01) {
+      cornerData.push({ vx: curr[0], vz: curr[1], insetStart: curr, insetEnd: curr, r: 0 });
+      continue;
+    }
+    
+    const dirPrev = [toPrev[0] / lenPrev, toPrev[1] / lenPrev];
+    const dirNext = [toNext[0] / lenNext, toNext[1] / lenNext];
+    const r = Math.min(cornerRadius, lenPrev / 2, lenNext / 2);
+    
+    if (r > 0.01) {
+      const insetStart: [number, number] = [curr[0] + dirPrev[0] * r, curr[1] + dirPrev[1] * r];
+      const insetEnd: [number, number] = [curr[0] + dirNext[0] * r, curr[1] + dirNext[1] * r];
+      cornerData.push({ vx: curr[0], vz: curr[1], insetStart, insetEnd, r });
+    } else {
+      cornerData.push({ vx: curr[0], vz: curr[1], insetStart: curr, insetEnd: curr, r: 0 });
+    }
+  }
+  
+  // Build outer perimeter at Y=0 (matching fillet's outer edge)
+  const perimeterPoints: [number, number][] = [];
+  const cornerSegs = 8;
+  
+  for (let i = 0; i < n; i++) {
+    const currCorner = cornerData[i];
+    const nextCorner = cornerData[(i + 1) % n];
+    const normal = edgeNormals[i];
+    
+    // Edge from currCorner.insetEnd to nextCorner.insetStart, offset by filletRadius
+    const edgeStartX = currCorner.insetEnd[0] + normal[0] * filletRadius;
+    const edgeStartZ = currCorner.insetEnd[1] + normal[1] * filletRadius;
+    const edgeEndX = nextCorner.insetStart[0] + normal[0] * filletRadius;
+    const edgeEndZ = nextCorner.insetStart[1] + normal[1] * filletRadius;
+    
+    perimeterPoints.push([edgeStartX, edgeStartZ]);
+    perimeterPoints.push([edgeEndX, edgeEndZ]);
+    
+    // Add corner arc at nextCorner
+    const prevNormal = edgeNormals[i];
+    const nextNormal = edgeNormals[(i + 1) % n];
+    
+    if (nextCorner.r < 0.01) {
+      // Sharp corner - add arc sweep
+      const startAngle = Math.atan2(prevNormal[1], prevNormal[0]);
+      const endAngle = Math.atan2(nextNormal[1], nextNormal[0]);
+      let angleDiff = endAngle - startAngle;
+      
+      if (isCW) {
+        if (angleDiff > 0) angleDiff -= 2 * Math.PI;
+      } else {
+        if (angleDiff < 0) angleDiff += 2 * Math.PI;
+      }
+      
+      if (Math.abs(angleDiff) > 0.01 && Math.abs(angleDiff) < 2 * Math.PI - 0.01) {
+        for (let j = 1; j < cornerSegs; j++) {
+          const t = j / cornerSegs;
+          const theta = startAngle + t * angleDiff;
+          perimeterPoints.push([
+            nextCorner.vx + filletRadius * Math.cos(theta),
+            nextCorner.vz + filletRadius * Math.sin(theta)
+          ]);
+        }
+      }
+    } else {
+      // Rounded corner - follow offset Bezier curve
+      for (let j = 1; j < cornerSegs; j++) {
+        const t = j / cornerSegs;
+        const omt = 1 - t;
+        
+        const bx = omt * omt * nextCorner.insetStart[0] + 2 * omt * t * nextCorner.vx + t * t * nextCorner.insetEnd[0];
+        const bz = omt * omt * nextCorner.insetStart[1] + 2 * omt * t * nextCorner.vz + t * t * nextCorner.insetEnd[1];
+        
+        const tx = 2 * omt * (nextCorner.vx - nextCorner.insetStart[0]) + 2 * t * (nextCorner.insetEnd[0] - nextCorner.vx);
+        const tz = 2 * omt * (nextCorner.vz - nextCorner.insetStart[1]) + 2 * t * (nextCorner.insetEnd[1] - nextCorner.vz);
+        const tLen = Math.sqrt(tx * tx + tz * tz);
+        
+        let nx: number, nz: number;
+        if (tLen > 0.001) {
+          nx = -tz / tLen;
+          nz = tx / tLen;
+        } else {
+          nx = prevNormal[0] * (1 - t) + nextNormal[0] * t;
+          nz = prevNormal[1] * (1 - t) + nextNormal[1] * t;
+          const nLen = Math.sqrt(nx * nx + nz * nz);
+          if (nLen > 0.001) { nx /= nLen; nz /= nLen; }
+        }
+        
+        perimeterPoints.push([bx + nx * filletRadius, bz + nz * filletRadius]);
+      }
+    }
+  }
+  
+  // Create triangulated cap using fan triangulation from centroid
   const positions: number[] = [];
   const indices: number[] = [];
   
-  // Helper to add a fillet strip along a straight edge
-  // The fillet curves from the baseplate (y=0) up to the wall (y=filletRadius)
-  const addFilletStrip = (x1: number, z1: number, x2: number, z2: number, outwardX: number, outwardZ: number) => {
-    const length = Math.sqrt((x2 - x1) ** 2 + (z2 - z1) ** 2);
-    if (length < 0.01) return;
-    const stripSegments = Math.max(2, Math.ceil(length / 5));
-    
-    const baseIdx = positions.length / 3;
-    
-    // i=0: at baseplate outer edge (outDist=filletRadius, y=0)
-    // i=segments: at the wall (outDist=0, y=filletRadius)
-    for (let i = 0; i <= segments; i++) {
-      const t = i / segments;
-      const angle = Math.PI + t * (Math.PI / 2); // from 180 to 270 degrees
-      const outDist = filletRadius + filletRadius * Math.cos(angle); // filletRadius to 0
-      const y = filletRadius * Math.sin(angle) + filletRadius; // 0 to filletRadius
-      
-      for (let j = 0; j <= stripSegments; j++) {
-        const s = j / stripSegments;
-        const px = x1 + s * (x2 - x1) + outwardX * outDist;
-        const pz = z1 + s * (z2 - z1) + outwardZ * outDist;
-        
-        positions.push(px, y, pz);
-      }
-    }
-    
-    for (let i = 0; i < segments; i++) {
-      for (let j = 0; j < stripSegments; j++) {
-        const a = baseIdx + i * (stripSegments + 1) + j;
-        const b = a + stripSegments + 1;
-        const c = a + 1;
-        const d = b + 1;
-        
-        // Reversed winding for outward normals
-        indices.push(a, c, b);
-        indices.push(c, d, b);
-      }
-    }
-  };
+  let centroidX = 0, centroidZ = 0;
+  for (const [x, z] of perimeterPoints) {
+    centroidX += x;
+    centroidZ += z;
+  }
+  centroidX /= perimeterPoints.length;
+  centroidZ /= perimeterPoints.length;
   
-  // Helper to add a quarter-torus corner fillet
-  const addCornerFillet = (cx: number, cz: number, startAngle: number) => {
-    const cornerR = Math.max(r, 0.01);
-    const baseIdx = positions.length / 3;
-    const cornerSegs = 8;
-    
-    // i=0: at baseplate outer edge (outDist=cornerR+filletRadius, y=0)
-    // i=segments: at the corner wall (outDist=cornerR, y=filletRadius)
-    for (let i = 0; i <= segments; i++) {
-      const t = i / segments;
-      const filletAngle = Math.PI + t * (Math.PI / 2); // 180 to 270 degrees
-      const outDist = cornerR + filletRadius + filletRadius * Math.cos(filletAngle); // cornerR+filletRadius to cornerR
-      const y = filletRadius * Math.sin(filletAngle) + filletRadius; // 0 to filletRadius
-      
-      for (let j = 0; j <= cornerSegs; j++) {
-        const theta = startAngle + (j / cornerSegs) * (Math.PI / 2);
-        const cosT = Math.cos(theta);
-        const sinT = Math.sin(theta);
-        
-        positions.push(cx + outDist * cosT, y, cz + outDist * sinT);
-      }
-    }
-    
-    for (let i = 0; i < segments; i++) {
-      for (let j = 0; j < cornerSegs; j++) {
-        const a = baseIdx + i * (cornerSegs + 1) + j;
-        const b = a + cornerSegs + 1;
-        const c = a + 1;
-        const d = b + 1;
-        
-        // Reversed winding for outward normals
-        indices.push(a, c, b);
-        indices.push(c, d, b);
-      }
-    }
-  };
+  positions.push(centroidX, 0, centroidZ);
+  for (const [x, z] of perimeterPoints) {
+    positions.push(x, 0, z);
+  }
   
-  // Add the four edge fillets
-  addFilletStrip(-hw + r, -hd, hw - r, -hd, 0, -1);
-  addFilletStrip(hw - r, hd, -hw + r, hd, 0, 1);
-  addFilletStrip(-hw, hd - r, -hw, -hd + r, -1, 0);
-  addFilletStrip(hw, -hd + r, hw, hd - r, 1, 0);
+  // Downward-facing cap winding
+  for (let i = 0; i < perimeterPoints.length; i++) {
+    const next = (i + 1) % perimeterPoints.length;
+    indices.push(0, next + 1, i + 1);
+  }
   
-  // Add the four corner fillets
-  addCornerFillet(hw - r, -hd + r, -Math.PI / 2);
-  addCornerFillet(hw - r, hd - r, 0);
-  addCornerFillet(-hw + r, hd - r, Math.PI / 2);
-  addCornerFillet(-hw + r, -hd + r, Math.PI);
-  
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  geometry.setIndex(indices);
-  geometry.computeVertexNormals();
-  
-  return geometry;
+  const cap = new THREE.BufferGeometry();
+  cap.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  cap.setIndex(indices);
+  cap.computeVertexNormals();
+  return cap;
 };
 
 /**
@@ -678,38 +758,17 @@ const createBottomCapGeometry = (
     return cap;
   } else if (type === 'rectangular') {
     const { width, depth, cornerRadius = 0 } = support;
-    // Add fillet radius to dimensions
-    const capWidth = width + filletRadius * 2;
-    const capDepth = depth + filletRadius * 2;
-    const capCornerRadius = cornerRadius + filletRadius;
-    
-    if (capCornerRadius <= 0.01) {
-      const cap = new THREE.PlaneGeometry(capWidth, capDepth);
-      // PlaneGeometry starts in XY plane with normal +Z
-      // rotateX(+PI/2) rotates normal from +Z to -Y (facing downward)
-      cap.rotateX(Math.PI / 2);
-      return cap;
-    } else {
-      // Create rounded rectangle cap
-      const hw = capWidth / 2;
-      const hd = capDepth / 2;
-      const r = Math.min(capCornerRadius, hw, hd);
-      const shape = new THREE.Shape();
-      shape.moveTo(-hw + r, -hd);
-      shape.lineTo(hw - r, -hd);
-      shape.quadraticCurveTo(hw, -hd, hw, -hd + r);
-      shape.lineTo(hw, hd - r);
-      shape.quadraticCurveTo(hw, hd, hw - r, hd);
-      shape.lineTo(-hw + r, hd);
-      shape.quadraticCurveTo(-hw, hd, -hw, hd - r);
-      shape.lineTo(-hw, -hd + r);
-      shape.quadraticCurveTo(-hw, -hd, -hw + r, -hd);
-      const cap = new THREE.ShapeGeometry(shape, 32);
-      // ShapeGeometry is in XY plane with normal +Z
-      // rotateX(+PI/2) rotates normal from +Z to -Y (facing downward)
-      cap.rotateX(Math.PI / 2);
-      return cap;
-    }
+    // Create a rectangular polygon in CW order and use the same cap logic as 'custom' type
+    const hw = width / 2;
+    const hd = depth / 2;
+    const polygon: [number, number][] = [
+      [-hw, -hd],  // bottom-left
+      [-hw, hd],   // top-left  
+      [hw, hd],    // top-right
+      [hw, -hd],   // bottom-right
+    ];
+    // Use the same polygon-based cap that works for clamp/custom supports
+    return createPolygonBottomCapGeometry(polygon, cornerRadius, filletRadius);
   } else if (type === 'conical') {
     const { baseRadius } = support;
     // For conical, outer radius at base = baseRadius + filletRadius
@@ -721,194 +780,8 @@ const createBottomCapGeometry = (
     return cap;
   } else if (type === 'custom') {
     const { polygon, cornerRadius = 0 } = support;
-    if (!polygon || polygon.length < 3) return null;
-    
-    // CRITICAL: Use SAME polygon ordering as fillet (CW, no reversal)
-    // This ensures the bottom cap perimeter matches the fillet's outer edge at y=0
-    const workingPolygon = ensureClockwiseWindingXZ(polygon);
-    const isCW = true;  // We've normalized to CW
-    
-    // Use shared utility for computing edge normals
-    const getEdgeNormal = (p1: [number, number], p2: [number, number]): [number, number] => {
-      return computeEdgeNormal(p1, p2, isCW);
-    };
-    
-    const n = workingPolygon.length;
-    const edgeNormals: [number, number][] = [];
-    for (let i = 0; i < n; i++) {
-      const p1 = workingPolygon[i];
-      const p2 = workingPolygon[(i + 1) % n];
-      edgeNormals.push(getEdgeNormal(p1, p2));
-    }
-    
-    // Compute corner data (same as fillet geometry)
-    const cornerData: { vx: number, vz: number, cx: number, cz: number, insetStart: [number, number], insetEnd: [number, number], r: number }[] = [];
-    
-    for (let i = 0; i < n; i++) {
-      const prev = workingPolygon[(i - 1 + n) % n];
-      const curr = workingPolygon[i];
-      const next = workingPolygon[(i + 1) % n];
-      
-      const toPrev = [prev[0] - curr[0], prev[1] - curr[1]];
-      const toNext = [next[0] - curr[0], next[1] - curr[1]];
-      const lenPrev = Math.sqrt(toPrev[0] ** 2 + toPrev[1] ** 2);
-      const lenNext = Math.sqrt(toNext[0] ** 2 + toNext[1] ** 2);
-      
-      if (lenPrev < 0.01 || lenNext < 0.01) {
-        cornerData.push({ vx: curr[0], vz: curr[1], cx: curr[0], cz: curr[1], insetStart: curr, insetEnd: curr, r: 0 });
-        continue;
-      }
-      
-      const dirPrev = [toPrev[0] / lenPrev, toPrev[1] / lenPrev];
-      const dirNext = [toNext[0] / lenNext, toNext[1] / lenNext];
-      
-      const r = Math.min(cornerRadius, lenPrev / 2, lenNext / 2);
-      
-      if (r > 0.01) {
-        const insetStart: [number, number] = [curr[0] + dirPrev[0] * r, curr[1] + dirPrev[1] * r];
-        const insetEnd: [number, number] = [curr[0] + dirNext[0] * r, curr[1] + dirNext[1] * r];
-        
-        const bisectorX = dirPrev[0] + dirNext[0];
-        const bisectorZ = dirPrev[1] + dirNext[1];
-        const bisectorLen = Math.sqrt(bisectorX * bisectorX + bisectorZ * bisectorZ);
-        
-        const halfAngle = Math.acos(Math.max(-1, Math.min(1, -(dirPrev[0] * dirNext[0] + dirPrev[1] * dirNext[1])))) / 2;
-        const distToCenter = halfAngle > 0.01 ? r / Math.sin(halfAngle) : r;
-        
-        let cx = curr[0];
-        let cz = curr[1];
-        if (bisectorLen > 0.01) {
-          cx = curr[0] + (bisectorX / bisectorLen) * distToCenter;
-          cz = curr[1] + (bisectorZ / bisectorLen) * distToCenter;
-        }
-        
-        cornerData.push({ vx: curr[0], vz: curr[1], cx, cz, insetStart, insetEnd, r });
-      } else {
-        cornerData.push({ vx: curr[0], vz: curr[1], cx: curr[0], cz: curr[1], insetStart: curr, insetEnd: curr, r: 0 });
-      }
-    }
-    
-    // Build the outer perimeter of the cap at Y=0
-    // This matches the fillet's outer edge (at the bottom where y=0)
-    // For each edge: offset the edge outward by filletRadius
-    // For each corner: if r=0, add arc sweep; if r>0, add offset Bezier arc
-    const perimeterPoints: [number, number][] = [];
-    const cornerSegs = 8;
-    
-    for (let i = 0; i < n; i++) {
-      const currCorner = cornerData[i];
-      const nextCorner = cornerData[(i + 1) % n];
-      const normal = edgeNormals[i];
-      
-      // Edge from currCorner.insetEnd to nextCorner.insetStart, offset by filletRadius
-      const edgeStartX = currCorner.insetEnd[0] + normal[0] * filletRadius;
-      const edgeStartZ = currCorner.insetEnd[1] + normal[1] * filletRadius;
-      const edgeEndX = nextCorner.insetStart[0] + normal[0] * filletRadius;
-      const edgeEndZ = nextCorner.insetStart[1] + normal[1] * filletRadius;
-      
-      // Add edge start point
-      perimeterPoints.push([edgeStartX, edgeStartZ]);
-      // Add edge end point (corner will add its arc starting from here)
-      perimeterPoints.push([edgeEndX, edgeEndZ]);
-      
-      // Add corner arc at nextCorner
-      const prevNormal = edgeNormals[i];
-      const nextNormal = edgeNormals[(i + 1) % n];
-      
-      if (nextCorner.r < 0.01) {
-        // Sharp corner - add arc sweep from prevNormal direction to nextNormal direction
-        const startAngle = Math.atan2(prevNormal[1], prevNormal[0]);
-        const endAngle = Math.atan2(nextNormal[1], nextNormal[0]);
-        let angleDiff = endAngle - startAngle;
-        
-        if (isCW) {
-          if (angleDiff > 0) angleDiff -= 2 * Math.PI;
-        } else {
-          if (angleDiff < 0) angleDiff += 2 * Math.PI;
-        }
-        
-        if (Math.abs(angleDiff) > 0.01 && Math.abs(angleDiff) < 2 * Math.PI - 0.01) {
-          for (let j = 1; j < cornerSegs; j++) {
-            const t = j / cornerSegs;
-            const theta = startAngle + t * angleDiff;
-            perimeterPoints.push([
-              nextCorner.vx + filletRadius * Math.cos(theta),
-              nextCorner.vz + filletRadius * Math.sin(theta)
-            ]);
-          }
-        }
-      } else {
-        // Rounded corner - follow offset Bezier curve
-        for (let j = 1; j < cornerSegs; j++) {
-          const t = j / cornerSegs;
-          const omt = 1 - t;
-          
-          // Bezier point (same as fillet)
-          const bx = omt * omt * nextCorner.insetStart[0] + 2 * omt * t * nextCorner.vx + t * t * nextCorner.insetEnd[0];
-          const bz = omt * omt * nextCorner.insetStart[1] + 2 * omt * t * nextCorner.vz + t * t * nextCorner.insetEnd[1];
-          
-          // Bezier tangent
-          const tx = 2 * omt * (nextCorner.vx - nextCorner.insetStart[0]) + 2 * t * (nextCorner.insetEnd[0] - nextCorner.vx);
-          const tz = 2 * omt * (nextCorner.vz - nextCorner.insetStart[1]) + 2 * t * (nextCorner.insetEnd[1] - nextCorner.vz);
-          const tLen = Math.sqrt(tx * tx + tz * tz);
-          
-          let nx: number, nz: number;
-          if (tLen > 0.001) {
-            if (isCW) {
-              nx = -tz / tLen;
-              nz = tx / tLen;
-            } else {
-              nx = tz / tLen;
-              nz = -tx / tLen;
-            }
-          } else {
-            nx = prevNormal[0] * (1 - t) + nextNormal[0] * t;
-            nz = prevNormal[1] * (1 - t) + nextNormal[1] * t;
-            const nLen = Math.sqrt(nx * nx + nz * nz);
-            if (nLen > 0.001) { nx /= nLen; nz /= nLen; }
-          }
-          
-          perimeterPoints.push([bx + nx * filletRadius, bz + nz * filletRadius]);
-        }
-      }
-    }
-    
-    // Create triangulated cap using fan triangulation from centroid
-    const positions: number[] = [];
-    const indices: number[] = [];
-    
-    // Calculate centroid
-    let centroidX = 0, centroidZ = 0;
-    for (const [x, z] of perimeterPoints) {
-      centroidX += x;
-      centroidZ += z;
-    }
-    centroidX /= perimeterPoints.length;
-    centroidZ /= perimeterPoints.length;
-    
-    // Add center vertex at Y=0 (bottom of fillet)
-    positions.push(centroidX, 0, centroidZ);
-    
-    // Add perimeter vertices
-    for (const [x, z] of perimeterPoints) {
-      positions.push(x, 0, z);
-    }
-    
-    // Fan triangulation - normal should point downward (-Y)
-    // For CW polygon, reverse the winding to get downward-facing normal (-Y).
-    // Use (0, next+1, i+1) for correct downward-facing faces.
-    for (let i = 0; i < perimeterPoints.length; i++) {
-      const next = (i + 1) % perimeterPoints.length;
-      // Center is at index 0, vertices start at index 1
-      // Reversed fan winding for downward-facing normal
-      indices.push(0, next + 1, i + 1);
-    }
-    
-    const cap = new THREE.BufferGeometry();
-    cap.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-    cap.setIndex(indices);
-    cap.computeVertexNormals();
-    return cap;
+    // Use the shared polygon-based cap function
+    return createPolygonBottomCapGeometry(polygon, cornerRadius, filletRadius);
   }
   
   return null;
