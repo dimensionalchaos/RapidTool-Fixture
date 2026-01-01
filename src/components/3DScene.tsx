@@ -114,6 +114,7 @@ interface ThreeDSceneProps {
   selectedSupportId?: string | null;
   onSupportSelect?: (supportId: string | null) => void;
   performanceSettings?: PerformanceSettings;
+  isCavityApplied?: boolean;
 }
 
 // Use extracted utility function (see src/components/3DScene/utils/geometryUtils.ts)
@@ -163,6 +164,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   selectedSupportId,
   onSupportSelect,
   performanceSettings,
+  isCavityApplied = false,
 }) => {
   const { camera, size, gl, scene } = useThree();
   const controlsRef = useRef<OrbitControlsImpl | null>(null);
@@ -1836,9 +1838,31 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
                 onBoundsChange={(bounds) => {
                   setPartBounds(prev => new Map(prev).set(part.id, bounds));
                 }}
-                disableDoubleClick={placing.active || !isVisible || clampPlacementMode.active}
+                disableDoubleClick={
+                  // Disable double-click for transform gizmo during any placement mode
+                  placing.active || 
+                  !isVisible || 
+                  clampPlacementMode.active || 
+                  holePlacementMode.active ||
+                  isMultiSectionDrawingMode ||
+                  waitingForSectionSelection ||
+                  waitingForClampSectionSelection ||
+                  waitingForLabelSectionSelection ||
+                  waitingForHoleSectionSelection
+                }
                 onDoubleClick={() => {
-                  if (isVisible && !clampPlacementMode.active) {
+                  // Only allow double-click to activate transform gizmo when NOT in any placement mode
+                  const isAnyPlacementActive = 
+                    clampPlacementMode.active || 
+                    holePlacementMode.active ||
+                    placing.active ||
+                    isMultiSectionDrawingMode ||
+                    waitingForSectionSelection ||
+                    waitingForClampSectionSelection ||
+                    waitingForLabelSectionSelection ||
+                    waitingForHoleSectionSelection;
+                  
+                  if (isVisible && !isAnyPlacementActive) {
                     // Clear baseplate section selection when selecting a part
                     setSelectedBasePlateSectionId(null);
                     setEditingBasePlateSectionId(null);
@@ -1884,6 +1908,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
           setIsDraggingAnyItem(false);
         }}
         triggerHoleCSG={() => setHoleCSGTrigger(t => t + 1)}
+        isCavityApplied={isCavityApplied}
       />
 
       {/* Labels rendering - extracted to LabelsRenderer */}

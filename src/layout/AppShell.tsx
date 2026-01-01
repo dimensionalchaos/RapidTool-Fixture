@@ -1915,6 +1915,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
               }}
               selectedSupportId={selectedSupportId}
               onSupportSelect={setSelectedSupportId}
+              isCavityApplied={isCavityApplied}
             />
 
             {/* Floating Tips Overlay */}

@@ -38,6 +38,8 @@ export interface SupportsRendererProps {
   onDragEnd: () => void;
   /** Callback to trigger hole CSG recalculation */
   triggerHoleCSG: () => void;
+  /** Whether cavity has been applied - prevents transform control activation */
+  isCavityApplied?: boolean;
 }
 
 /**
@@ -58,8 +60,27 @@ export const SupportsRenderer: React.FC<SupportsRendererProps> = ({
   onDragStart,
   onDragEnd,
   triggerHoleCSG,
+  isCavityApplied = false,
 }) => {
   const selectedSupport = selectedSupportId ? supports.find(s => s.id === selectedSupportId) : null;
+
+  // When cavity is applied, don't allow support selection/transform
+  const handleSupportDoubleClick = (supportId: string) => {
+    if (isCavityApplied) {
+      // Cavity applied - show message instead of selecting
+      window.dispatchEvent(new CustomEvent('show-toast', {
+        detail: {
+          title: 'Cavity Applied',
+          description: 'Reset the cavity first to modify supports.',
+          variant: 'warning'
+        }
+      }));
+      return;
+    }
+    // Notify part gizmos to close
+    window.dispatchEvent(new CustomEvent('pivot-control-activated', { detail: { supportId } }));
+    onSupportSelect?.(supportId);
+  };
 
   return (
     <>
@@ -74,7 +95,7 @@ export const SupportsRenderer: React.FC<SupportsRendererProps> = ({
               if (modifiedGeometry) {
                 // Render the modified geometry - it's already in world space from the CSG operation
                 // Use amber/orange color to indicate the support has been cut
-                const isSelected = selectedSupportId === s.id;
+                const isSelected = selectedSupportId === s.id && !isCavityApplied;
                 const cutSupportColor = 0xf59e0b; // Amber-500 - indicates support has been cut
                 const cutSupportSelectedColor = 0xfbbf24; // Amber-400 - lighter when selected
               
@@ -84,8 +105,7 @@ export const SupportsRenderer: React.FC<SupportsRendererProps> = ({
                     geometry={modifiedGeometry}
                     onDoubleClick={(e) => {
                       e.stopPropagation();
-                      window.dispatchEvent(new CustomEvent('pivot-control-activated', { detail: { supportId: s.id } }));
-                      onSupportSelect?.(s.id);
+                      handleSupportDoubleClick(s.id);
                     }}
                   >
                     <meshStandardMaterial 
@@ -105,20 +125,16 @@ export const SupportsRenderer: React.FC<SupportsRendererProps> = ({
                   key={s.id} 
                   support={s} 
                   baseTopY={baseTopY}
-                  selected={selectedSupportId === s.id}
-                  onDoubleClick={(supportId) => {
-                    // Notify part gizmos to close
-                    window.dispatchEvent(new CustomEvent('pivot-control-activated', { detail: { supportId } }));
-                    onSupportSelect?.(supportId);
-                  }}
+                  selected={selectedSupportId === s.id && !isCavityApplied}
+                  onDoubleClick={handleSupportDoubleClick}
                 />
               );
             });
           })()
         : supportsTrimPreview.map((mesh, idx) => <primitive key={`${mesh.uuid}-${idx}`} object={mesh} />)}
       
-      {/* Support transform controls - XY plane only */}
-      {selectedSupport && !placingActive && (
+      {/* Support transform controls - XY plane only, disabled when cavity is applied */}
+      {selectedSupport && !placingActive && !isCavityApplied && (
         <SupportTransformControls
           support={selectedSupport}
           baseTopY={baseTopY}

@@ -15,6 +15,13 @@ import type {
   ExportProgressCallback,
   ClampExportData 
 } from '../types';
+import {
+  logDebug,
+  logWarn,
+  logError,
+  logGeometryTransform,
+  formatPosition,
+} from './debugUtils';
 
 // Constants matching MultiSectionBasePlate.tsx
 const CORNER_RADIUS_FACTOR = 0.08;
@@ -78,7 +85,7 @@ export function createMultiSectionGeometriesFromConfig(
   const sectionData: SectionGeometryData[] = [];
   
   if (config.type !== 'multi-section' || !config.sections) {
-    console.warn('[Export] createMultiSectionGeometriesFromConfig called for non-multi-section baseplate');
+    logWarn('createMultiSectionGeometriesFromConfig called for non-multi-section baseplate');
     return { geometries, sectionData };
   }
   
@@ -89,7 +96,7 @@ export function createMultiSectionGeometriesFromConfig(
     if (!Number.isFinite(section.minX) || !Number.isFinite(section.maxX) ||
         !Number.isFinite(section.minZ) || !Number.isFinite(section.maxZ) ||
         section.maxX <= section.minX || section.maxZ <= section.minZ) {
-      console.warn(`[Export] Skipping invalid section ${section.id}:`, section);
+      logWarn(`Skipping invalid section ${section.id}`, section as unknown as Record<string, unknown>);
       return;
     }
     
@@ -117,7 +124,10 @@ export function createMultiSectionGeometriesFromConfig(
       },
     });
     
-    console.log(`[Export] Created section ${section.id} from config: ${width.toFixed(1)}x${height.toFixed(1)} at (${centerX.toFixed(1)}, ${centerZ.toFixed(1)})`);
+    logDebug(`Created section ${section.id} from config`, {
+      size: `${width.toFixed(1)}x${height.toFixed(1)}`,
+      center: `(${centerX.toFixed(1)}, ${centerZ.toFixed(1)})`,
+    });
   });
   
   return { geometries, sectionData };
@@ -135,7 +145,7 @@ export function createBaseplateGeometryFromConfig(
 ): THREE.BufferGeometry | null {
   // Multi-section baseplates should use multiSectionBasePlateGroupRef instead
   if (config.type === 'multi-section') {
-    console.warn('[Export] createBaseplateGeometryFromConfig called for multi-section baseplate - this should use multiSectionBasePlateGroupRef');
+    logWarn('createBaseplateGeometryFromConfig called for multi-section baseplate - use multiSectionBasePlateGroupRef');
     return null;
   }
   
@@ -145,10 +155,7 @@ export function createBaseplateGeometryFromConfig(
     const height = config.height ?? 200;
     
     // Create a rounded rectangle shape similar to BasePlate component
-    // Note: Geometry is created centered at origin (local space)
-    // Position will be applied by caller using basePlate.position
-    const cornerRadiusFactor = 0.08;
-    const cornerRadius = Math.min(width, height) * cornerRadiusFactor;
+    const cornerRadius = Math.min(width, height) * CORNER_RADIUS_FACTOR;
     const shape = new THREE.Shape();
     const hw = width / 2;
     const hh = height / 2;
@@ -165,8 +172,7 @@ export function createBaseplateGeometryFromConfig(
     shape.quadraticCurveTo(-hw, -hh, -hw + r, -hh);
     
     // For a 45-degree chamfer
-    const chamferSizeFactor = 0.15;
-    const chamferSize = Math.min(1.0, depth * chamferSizeFactor);
+    const chamferSize = Math.min(1.0, depth * CHAMFER_SIZE_FACTOR);
     const extrudeDepth = Math.max(0.1, depth - 2 * chamferSize);
     
     const geometry = new THREE.ExtrudeGeometry(shape, {
@@ -181,16 +187,13 @@ export function createBaseplateGeometryFromConfig(
     geometry.rotateX(-Math.PI / 2);
     geometry.translate(0, chamferSize, 0);
     
-    // NOTE: Do NOT apply position here - caller will apply basePlate.position
-    // This keeps the function consistent with other geometry sources
-    
     geometry.computeBoundingBox();
     geometry.computeVertexNormals();
     
-    console.log('[Export] Created baseplate geometry from config (local space):', { width, height, depth });
+    logDebug('Created baseplate geometry from config (local space)', { width, height, depth });
     return geometry;
   } catch (err) {
-    console.error('[Export] Failed to create baseplate geometry from config:', err);
+    logError('Failed to create baseplate geometry from config', err);
     return null;
   }
 }
@@ -228,198 +231,183 @@ export function collectBaseplateGeometry(
   
   // Multi-section baseplates: always use the group reference (ignore baseplateWithHoles)
   if (isMultiSection) {
-    if (ctx.multiSectionBasePlateGroupRef.current && ctx.basePlate?.sections) {
-      console.log('[Export] Collecting multi-section baseplate geometries');
-      const sections = ctx.basePlate.sections;
-      let sectionIndex = 0;
-      
-      ctx.multiSectionBasePlateGroupRef.current.traverse((child) => {
-        if (child instanceof THREE.Mesh && child.geometry) {
-          const section = sections[sectionIndex];
-          if (section) {
-            // Clone geometry and apply world transform
-            const clonedGeom = child.geometry.clone();
-            child.updateMatrixWorld(true);
-            clonedGeom.applyMatrix4(child.matrixWorld);
-            
-            multiSectionGeometries.push(clonedGeom);
-            sectionData.push({
-              id: section.id,
-              index: sectionIndex,
-              geometry: clonedGeom,
-              bounds: {
-                minX: section.minX,
-                maxX: section.maxX,
-                minZ: section.minZ,
-                maxZ: section.maxZ,
-              },
-            });
-            console.log(`[Export] Collected section ${section.id} (${sectionIndex}): bounds [${section.minX.toFixed(1)}, ${section.maxX.toFixed(1)}] x [${section.minZ.toFixed(1)}, ${section.maxZ.toFixed(1)}]`);
-          }
-          sectionIndex++;
-        }
-      });
-      
-      if (multiSectionGeometries.length === 0) {
-        console.warn('[Export] Multi-section baseplate group has no mesh children!');
-      }
-    } else if (ctx.basePlate?.sections) {
-      // Multi-section but ref not available (component unmounted, e.g., merged fixture shown)
-      // Fall back to creating geometries from config
-      console.log('[Export] Multi-section baseplate ref not available, creating from config');
-      const fallback = createMultiSectionGeometriesFromConfig(ctx.basePlate);
-      multiSectionGeometries.push(...fallback.geometries);
-      sectionData.push(...fallback.sectionData);
-    } else {
-      // Multi-section but no sections defined - this is an error condition
-      console.error('[Export] Multi-section baseplate but no sections defined!');
-    }
-    // Don't fall through to other branches for multi-section - return what we have
-    return { geometry: null, isMultiSection, multiSectionGeometries, sectionData };
+    return collectMultiSectionGeometry(ctx, multiSectionGeometries, sectionData);
   }
   
   // Single baseplate handling
-  // IMPORTANT: Baseplate geometry needs to be transformed to world space because:
-  // 1. Labels and clamp supports are positioned in world coordinates
-  // 2. The BasePlate component may have internal geometry offsets (geometryOffsetX/Z)
-  //    for asymmetric expansion when hull points extend beyond configured bounds
-  // 3. The mesh's matrixWorld includes the mesh position (basePlate.position)
+  geometry = collectSingleBaseplateGeometry(ctx);
+  
+  return { geometry, isMultiSection, multiSectionGeometries, sectionData };
+}
+
+/**
+ * Collects multi-section baseplate geometries
+ */
+function collectMultiSectionGeometry(
+  ctx: GeometryCollectionContext,
+  multiSectionGeometries: THREE.BufferGeometry[],
+  sectionData: SectionGeometryData[]
+): { 
+  geometry: THREE.BufferGeometry | null; 
+  isMultiSection: boolean; 
+  multiSectionGeometries: THREE.BufferGeometry[];
+  sectionData: SectionGeometryData[];
+} {
+  if (ctx.multiSectionBasePlateGroupRef.current && ctx.basePlate?.sections) {
+    logDebug('Collecting multi-section baseplate geometries');
+    const sections = ctx.basePlate.sections;
+    let sectionIndex = 0;
+    
+    ctx.multiSectionBasePlateGroupRef.current.traverse((child) => {
+      if (child instanceof THREE.Mesh && child.geometry) {
+        const section = sections[sectionIndex];
+        if (section) {
+          const clonedGeom = child.geometry.clone();
+          child.updateMatrixWorld(true);
+          clonedGeom.applyMatrix4(child.matrixWorld);
+          
+          multiSectionGeometries.push(clonedGeom);
+          sectionData.push({
+            id: section.id,
+            index: sectionIndex,
+            geometry: clonedGeom,
+            bounds: {
+              minX: section.minX,
+              maxX: section.maxX,
+              minZ: section.minZ,
+              maxZ: section.maxZ,
+            },
+          });
+          logDebug(`Collected section ${section.id}`, {
+            index: sectionIndex,
+            bounds: `[${section.minX.toFixed(1)}, ${section.maxX.toFixed(1)}] x [${section.minZ.toFixed(1)}, ${section.maxZ.toFixed(1)}]`,
+          });
+        }
+        sectionIndex++;
+      }
+    });
+    
+    if (multiSectionGeometries.length === 0) {
+      logWarn('Multi-section baseplate group has no mesh children!');
+    }
+  } else if (ctx.basePlate?.sections) {
+    logDebug('Multi-section baseplate ref not available, creating from config');
+    const fallback = createMultiSectionGeometriesFromConfig(ctx.basePlate);
+    multiSectionGeometries.push(...fallback.geometries);
+    sectionData.push(...fallback.sectionData);
+  } else {
+    logError('Multi-section baseplate but no sections defined!');
+  }
+  
+  return { geometry: null, isMultiSection: true, multiSectionGeometries, sectionData };
+}
+
+/**
+ * Applies world transform to geometry and logs the transformation
+ */
+function applyWorldTransform(
+  geometry: THREE.BufferGeometry,
+  transform: THREE.Matrix4,
+  label: string
+): void {
+  logGeometryTransform(label, geometry, 'before');
+  geometry.applyMatrix4(transform);
+  logGeometryTransform(label, geometry, 'after');
+}
+
+/**
+ * Gets transform matrix from mesh ref or position
+ */
+function getBaseplateTransform(
+  meshRef: React.RefObject<THREE.Mesh | null>,
+  fallbackPosition?: { x: number; y: number; z: number }
+): THREE.Matrix4 | null {
+  if (meshRef.current) {
+    meshRef.current.updateMatrixWorld(true);
+    const pos = new THREE.Vector3();
+    pos.setFromMatrixPosition(meshRef.current.matrixWorld);
+    logDebug('Using matrixWorld from mesh ref', formatPosition(pos) as unknown as Record<string, unknown>);
+    return meshRef.current.matrixWorld.clone();
+  }
+  
+  if (fallbackPosition) {
+    logDebug('Using basePlate.position (mesh ref not available)', formatPosition(fallbackPosition) as unknown as Record<string, unknown>);
+    return new THREE.Matrix4().makeTranslation(
+      fallbackPosition.x,
+      fallbackPosition.y,
+      fallbackPosition.z
+    );
+  }
+  
+  return null;
+}
+
+/**
+ * Collects single baseplate geometry from various sources
+ */
+function collectSingleBaseplateGeometry(
+  ctx: GeometryCollectionContext
+): THREE.BufferGeometry | null {
+  let geometry: THREE.BufferGeometry | null = null;
+  
+  // Priority 1: baseplateWithHoles (CSG result)
   if (ctx.baseplateWithHoles) {
-    // Single baseplate with holes cut (CSG result)
-    // This geometry is in local space, need to transform to world space
-    console.log('[Export] Using baseplateWithHoles geometry');
+    logDebug('Using baseplateWithHoles geometry');
     geometry = ctx.baseplateWithHoles.clone();
     
-    // Debug: Log geometry bounds before transform
-    geometry.computeBoundingBox();
-    const beforeBox = geometry.boundingBox!;
-    const beforeCenter = new THREE.Vector3();
-    beforeBox.getCenter(beforeCenter);
-    console.log('[Export] Baseplate geometry BEFORE transform:', {
-      center: { x: beforeCenter.x.toFixed(2), y: beforeCenter.y.toFixed(2), z: beforeCenter.z.toFixed(2) },
-      min: { x: beforeBox.min.x.toFixed(2), y: beforeBox.min.y.toFixed(2), z: beforeBox.min.z.toFixed(2) },
-      max: { x: beforeBox.max.x.toFixed(2), y: beforeBox.max.y.toFixed(2), z: beforeBox.max.z.toFixed(2) }
-    });
-    
-    // Apply mesh position transform to convert from local to world space
-    if (ctx.basePlateMeshRef.current) {
-      ctx.basePlateMeshRef.current.updateMatrixWorld(true);
-      const matrixWorld = ctx.basePlateMeshRef.current.matrixWorld;
-      const pos = new THREE.Vector3();
-      pos.setFromMatrixPosition(matrixWorld);
-      console.log('[Export] Applying matrixWorld from mesh ref, position:', { x: pos.x.toFixed(2), y: pos.y.toFixed(2), z: pos.z.toFixed(2) });
-      geometry.applyMatrix4(matrixWorld);
-      console.log('[Export] Applied baseplate mesh matrixWorld to baseplateWithHoles');
-    } else if (ctx.basePlate?.position) {
-      // Mesh not available (unmounted after cavity), use config position
-      const pos = ctx.basePlate.position;
-      console.log('[Export] Mesh ref not available, using basePlate.position:', { x: pos.x, y: pos.y, z: pos.z });
-      const positionMatrix = new THREE.Matrix4().makeTranslation(pos.x, pos.y, pos.z);
-      geometry.applyMatrix4(positionMatrix);
-      console.log('[Export] Applied basePlate.position transform to baseplateWithHoles');
+    const transform = getBaseplateTransform(ctx.basePlateMeshRef, ctx.basePlate?.position);
+    if (transform) {
+      applyWorldTransform(geometry, transform, 'Baseplate (with holes)');
     } else {
-      console.warn('[Export] No transform applied to baseplateWithHoles - mesh ref null and no basePlate.position!');
+      logWarn('No transform applied to baseplateWithHoles - mesh ref null and no basePlate.position!');
     }
-    
-    // Debug: Log geometry bounds after transform
-    geometry.computeBoundingBox();
-    const afterBox = geometry.boundingBox!;
-    const afterCenter = new THREE.Vector3();
-    afterBox.getCenter(afterCenter);
-    console.log('[Export] Baseplate geometry AFTER transform:', {
-      center: { x: afterCenter.x.toFixed(2), y: afterCenter.y.toFixed(2), z: afterCenter.z.toFixed(2) },
-      min: { x: afterBox.min.x.toFixed(2), y: afterBox.min.y.toFixed(2), z: afterBox.min.z.toFixed(2) },
-      max: { x: afterBox.max.x.toFixed(2), y: afterBox.max.y.toFixed(2), z: afterBox.max.z.toFixed(2) }
-    });
-  } else if (ctx.basePlateMeshRef.current?.geometry) {
-    // Baseplate mesh is still mounted - use its geometry with world transform
-    console.log('[Export] Using baseplate geometry from ref (no holes)');
+    return geometry;
+  }
+  
+  // Priority 2: basePlateMeshRef geometry
+  if (ctx.basePlateMeshRef.current?.geometry) {
+    logDebug('Using baseplate geometry from ref (no holes)');
     geometry = ctx.basePlateMeshRef.current.geometry.clone();
+    
     ctx.basePlateMeshRef.current.updateMatrixWorld(true);
-    
-    // Debug: Log geometry bounds before transform
-    geometry.computeBoundingBox();
-    const beforeBox = geometry.boundingBox!;
-    const beforeCenter = new THREE.Vector3();
-    beforeBox.getCenter(beforeCenter);
-    console.log('[Export] Baseplate geometry BEFORE transform:', {
-      center: { x: beforeCenter.x.toFixed(2), y: beforeCenter.y.toFixed(2), z: beforeCenter.z.toFixed(2) },
-      min: { x: beforeBox.min.x.toFixed(2), y: beforeBox.min.y.toFixed(2), z: beforeBox.min.z.toFixed(2) },
-      max: { x: beforeBox.max.x.toFixed(2), y: beforeBox.max.y.toFixed(2), z: beforeBox.max.z.toFixed(2) }
-    });
-    
-    const matrixWorld = ctx.basePlateMeshRef.current.matrixWorld;
-    const pos = new THREE.Vector3();
-    pos.setFromMatrixPosition(matrixWorld);
-    console.log('[Export] Applying matrixWorld from mesh ref, position:', { x: pos.x.toFixed(2), y: pos.y.toFixed(2), z: pos.z.toFixed(2) });
-    geometry.applyMatrix4(matrixWorld);
-    console.log('[Export] Applied baseplate mesh matrixWorld to geometry from ref');
-    
-    // Debug: Log geometry bounds after transform
-    geometry.computeBoundingBox();
-    const afterBox = geometry.boundingBox!;
-    const afterCenter = new THREE.Vector3();
-    afterBox.getCenter(afterCenter);
-    console.log('[Export] Baseplate geometry AFTER transform:', {
-      center: { x: afterCenter.x.toFixed(2), y: afterCenter.y.toFixed(2), z: afterCenter.z.toFixed(2) },
-      min: { x: afterBox.min.x.toFixed(2), y: afterBox.min.y.toFixed(2), z: afterBox.max.z.toFixed(2) },
-      max: { x: afterBox.max.x.toFixed(2), y: afterBox.max.y.toFixed(2), z: afterBox.max.z.toFixed(2) }
-    });
-  } else if (ctx.originalBaseplateGeoRef.current) {
-    // originalBaseplateGeoRef is cached from useHoleCSG (local space with geometry offset)
-    // Need to apply mesh position to convert to world space
-    console.log('[Export] Using baseplate geometry from originalBaseplateGeoRef');
+    applyWorldTransform(geometry, ctx.basePlateMeshRef.current.matrixWorld, 'Baseplate (from ref)');
+    return geometry;
+  }
+  
+  // Priority 3: originalBaseplateGeoRef
+  if (ctx.originalBaseplateGeoRef.current) {
+    logDebug('Using baseplate geometry from originalBaseplateGeoRef');
     geometry = ctx.originalBaseplateGeoRef.current.clone();
     
     if (ctx.basePlate?.position) {
-      const pos = ctx.basePlate.position;
-      console.log('[Export] Applying basePlate.position to originalBaseplateGeoRef:', { x: pos.x, y: pos.y, z: pos.z });
-      const positionMatrix = new THREE.Matrix4().makeTranslation(pos.x, pos.y, pos.z);
-      geometry.applyMatrix4(positionMatrix);
-      console.log('[Export] Applied basePlate.position transform to originalBaseplateGeoRef');
+      const transform = new THREE.Matrix4().makeTranslation(
+        ctx.basePlate.position.x,
+        ctx.basePlate.position.y,
+        ctx.basePlate.position.z
+      );
+      applyWorldTransform(geometry, transform, 'Baseplate (from originalRef)');
     }
-  } else if (ctx.basePlate) {
-    // Fallback: create from config - this is in local/origin space
-    // MUST apply basePlate.position to convert to world space
-    console.log('[Export] Creating baseplate geometry from config (fallback)');
+    return geometry;
+  }
+  
+  // Priority 4: Create from config (fallback)
+  if (ctx.basePlate) {
+    logDebug('Creating baseplate geometry from config (fallback)');
     geometry = createBaseplateGeometryFromConfig(ctx.basePlate);
     
-    // Apply mesh position transform to convert from local to world space
-    if (ctx.basePlate.position) {
-      const pos = ctx.basePlate.position;
-      
-      // Debug: Log geometry bounds before transform
-      geometry.computeBoundingBox();
-      const beforeBox = geometry.boundingBox!;
-      const beforeCenter = new THREE.Vector3();
-      beforeBox.getCenter(beforeCenter);
-      console.log('[Export] Baseplate geometry BEFORE transform:', {
-        center: { x: beforeCenter.x.toFixed(2), y: beforeCenter.y.toFixed(2), z: beforeCenter.z.toFixed(2) },
-        min: { x: beforeBox.min.x.toFixed(2), y: beforeBox.min.y.toFixed(2), z: beforeBox.min.z.toFixed(2) },
-        max: { x: beforeBox.max.x.toFixed(2), y: beforeBox.max.y.toFixed(2), z: beforeBox.max.z.toFixed(2) }
-      });
-      
-      console.log('[Export] Applying basePlate.position to config-created geometry:', { x: pos.x, y: pos.y, z: pos.z });
-      const positionMatrix = new THREE.Matrix4().makeTranslation(pos.x, pos.y, pos.z);
-      geometry.applyMatrix4(positionMatrix);
-      console.log('[Export] Applied basePlate.position transform to config-created geometry');
-      
-      // Debug: Log geometry bounds after transform
-      geometry.computeBoundingBox();
-      const afterBox = geometry.boundingBox!;
-      const afterCenter = new THREE.Vector3();
-      afterBox.getCenter(afterCenter);
-      console.log('[Export] Baseplate geometry AFTER transform:', {
-        center: { x: afterCenter.x.toFixed(2), y: afterCenter.y.toFixed(2), z: afterCenter.z.toFixed(2) },
-        min: { x: afterBox.min.x.toFixed(2), y: afterBox.min.y.toFixed(2), z: afterBox.min.z.toFixed(2) },
-        max: { x: afterBox.max.x.toFixed(2), y: afterBox.max.y.toFixed(2), z: afterBox.max.z.toFixed(2) }
-      });
-    } else {
-      console.warn('[Export] No basePlate.position available for config-created geometry!');
+    if (geometry && ctx.basePlate.position) {
+      const transform = new THREE.Matrix4().makeTranslation(
+        ctx.basePlate.position.x,
+        ctx.basePlate.position.y,
+        ctx.basePlate.position.z
+      );
+      applyWorldTransform(geometry, transform, 'Baseplate (from config)');
+    } else if (geometry) {
+      logWarn('No basePlate.position available for config-created geometry!');
     }
   }
   
-  return { geometry, isMultiSection, multiSectionGeometries, sectionData };
+  return geometry;
 }
 
 /**
@@ -431,7 +419,7 @@ export function collectSupportGeometries(
   const geometries: THREE.BufferGeometry[] = [];
   
   if (modifiedSupportGeometries.size > 0) {
-    console.log(`[Export] Collecting ${modifiedSupportGeometries.size} modified support geometries`);
+    logDebug(`Collecting ${modifiedSupportGeometries.size} modified support geometries`);
     modifiedSupportGeometries.forEach((geom) => {
       if (geom) {
         geometries.push(geom);
@@ -454,7 +442,7 @@ export async function buildClampSupportWithCutouts(
   onProgress?: (message: string) => void
 ): Promise<THREE.BufferGeometry | null> {
   if (!clampData.supportInfo) {
-    console.log(`[Export] Skipping clamp ${clampId} - no support info`);
+    logDebug(`Skipping clamp ${clampId} - no support info`);
     return null;
   }
   
@@ -467,13 +455,13 @@ export async function buildClampSupportWithCutouts(
   // Build geometry at origin using the full fillet implementation
   let clampSupportGeometry = buildClampSupportGeometryAtOrigin(polygon, supportHeight, 2);
   if (!clampSupportGeometry) {
-    console.warn(`[Export] Failed to build clamp support geometry for ${clampId}`);
+    logWarn(`Failed to build clamp support geometry for ${clampId}`);
     return null;
   }
   
   // Apply cutouts (holes) CSG subtraction if cutouts geometry exists
   if (clampData.fixtureCutoutsGeometry && clampData.fixturePointTopCenter) {
-    console.log(`[Export] Applying cutouts CSG for clamp ${clampId}`);
+    logDebug(`Applying cutouts CSG for clamp ${clampId}`);
     onProgress?.(`Applying cutouts for clamp ${clampId}...`);
     
     // Clone and transform cutouts geometry
@@ -508,10 +496,10 @@ export async function buildClampSupportWithCutouts(
       
       if (csgResult) {
         clampSupportGeometry = csgResult;
-        console.log(`[Export] Cutouts CSG completed for clamp ${clampId}`);
+        logDebug(`Cutouts CSG completed for clamp ${clampId}`);
       }
     } catch (err) {
-      console.warn(`[Export] Cutouts CSG failed for clamp ${clampId}, using support without holes:`, err);
+      logWarn(`Cutouts CSG failed for clamp ${clampId}, using support without holes`, err);
     }
   }
   
@@ -522,20 +510,15 @@ export async function buildClampSupportWithCutouts(
     .setPosition(clampPosition.x, baseTopY, clampPosition.z);
   clampSupportGeometry.applyMatrix4(transformMatrix);
   
-  // Debug: Log clamp support bounds
-  clampSupportGeometry.computeBoundingBox();
-  const clampBox = clampSupportGeometry.boundingBox!;
-  const clampCenter = new THREE.Vector3();
-  clampBox.getCenter(clampCenter);
-  console.log(`[Export] Clamp support ${clampId} positioned at:`, {
-    inputPosition: { x: clampPosition.x.toFixed(2), z: clampPosition.z.toFixed(2) },
-    center: { x: clampCenter.x.toFixed(2), y: clampCenter.y.toFixed(2), z: clampCenter.z.toFixed(2) }
+  // Log clamp support position
+  logDebug(`Added clamp support for ${clampId}`, {
+    height: `${supportHeight.toFixed(2)}mm`,
+    position: formatPosition(clampPosition) as unknown as Record<string, unknown>,
   });
   
   // Prepare for CSG
   prepareGeometryForCSG(clampSupportGeometry);
   
-  console.log(`[Export] Added clamp support for ${clampId}, height: ${supportHeight.toFixed(2)}mm`);
   return clampSupportGeometry;
 }
 
@@ -573,31 +556,20 @@ export async function buildLabelGeometries(
   
   if (labels.length === 0) return geometries;
   
-  console.log(`[Export] Building ${labels.length} label geometries`);
+  logDebug(`Building ${labels.length} label geometries`);
   
   for (const label of labels) {
     try {
       onProgress?.(`Building label "${label.text}"...`);
       const labelGeometry = await buildLabelGeometry(label);
       if (labelGeometry) {
-        // Debug: Log label geometry bounds
-        labelGeometry.computeBoundingBox();
-        const labelBox = labelGeometry.boundingBox!;
-        const labelCenter = new THREE.Vector3();
-        labelBox.getCenter(labelCenter);
-        const labelPos = label.position;
-        console.log(`[Export] Label "${label.text}" positioned at:`, {
-          inputPosition: { 
-            x: (labelPos instanceof THREE.Vector3 ? labelPos.x : labelPos.x).toFixed(2),
-            y: (labelPos instanceof THREE.Vector3 ? labelPos.y : labelPos.y).toFixed(2),
-            z: (labelPos instanceof THREE.Vector3 ? labelPos.z : labelPos.z).toFixed(2)
-          },
-          geometryCenter: { x: labelCenter.x.toFixed(2), y: labelCenter.y.toFixed(2), z: labelCenter.z.toFixed(2) }
+        logDebug(`Built label "${label.text}"`, {
+          position: formatPosition(label.position) as unknown as Record<string, unknown>,
         });
         geometries.push(labelGeometry);
       }
     } catch (err) {
-      console.warn(`[Export] Failed to build label geometry for "${label.text}":`, err);
+      logWarn(`Failed to build label geometry for "${label.text}"`, err);
     }
   }
   
@@ -628,7 +600,7 @@ export async function collectAllGeometries(
   const clampSupportGeometries: THREE.BufferGeometry[] = [];
   
   if (ctx.placedClamps.length > 0) {
-    console.log(`[Export] Building ${ctx.placedClamps.length} clamp support geometries with cutouts`);
+    logDebug(`Building ${ctx.placedClamps.length} clamp support geometries with cutouts`);
     emitProgress('preparing', 6, `Building ${ctx.placedClamps.length} clamp support geometries...`);
     
     for (const clamp of ctx.placedClamps) {
@@ -665,7 +637,7 @@ export async function collectAllGeometries(
   const sectionGeometries = new Map<string, import('../types').SectionExportData>();
   
   if (isMultiSection && sectionData.length > 0) {
-    console.log(`[Export] Building per-section export data for ${sectionData.length} sections`);
+    logDebug(`Building per-section export data for ${sectionData.length} sections`);
     
     // Build a lookup map from support ID to sectionId
     const supportSectionMap = new Map<string, string>();
@@ -674,7 +646,7 @@ export async function collectAllGeometries(
         supportSectionMap.set(support.id, support.sectionId);
       }
     }
-    console.log(`[Export] Support section mapping: ${supportSectionMap.size} supports have sectionId`);
+    logDebug(`Support section mapping: ${supportSectionMap.size} supports have sectionId`);
     
     for (const section of sectionData) {
       // Find supports that belong to this section by sectionId
@@ -684,7 +656,6 @@ export async function collectAllGeometries(
       ctx.modifiedSupportGeometries.forEach((geom, supportId) => {
         const supportSectionId = supportSectionMap.get(supportId);
         if (supportSectionId === section.id) {
-          console.log(`[Export] Support ${supportId} assigned to section ${section.id} by sectionId`);
           sectionSupports.push(geom.clone());
         }
       });
@@ -717,7 +688,6 @@ export async function collectAllGeometries(
         
         // Check if label has sectionId matching this section
         if (label.sectionId === section.id) {
-          console.log(`[Export] Label "${label.text}" assigned to section ${section.id} by sectionId`);
           sectionLabels.push(labelGeom.clone());
         } else if (!label.sectionId) {
           // Fallback to bounds-based filtering for labels without sectionId
@@ -748,7 +718,10 @@ export async function collectAllGeometries(
         bounds: section.bounds,
       });
       
-      console.log(`[Export] Section ${section.id}: ${sectionSupports.length} supports, ${sectionLabels.length} labels`);
+      logDebug(`Section ${section.id}`, { 
+        supports: sectionSupports.length, 
+        labels: sectionLabels.length 
+      });
     }
   }
   

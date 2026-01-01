@@ -26,15 +26,19 @@ export { default as SupportsAccordion } from './components/SupportsAccordion';
 export { default as SupportsPanel } from './components/SupportsPanel';
 export { default as SupportEditOverlay } from './components/SupportEditOverlay';
 
-// Utils
+// Utils - Metrics
 export { 
   computeSupportMetrics,
   getSupportFootprintBounds,
   getSupportFootprintPoints,
   type FootprintBounds 
 } from './utils/metrics';
+
+// Utils - Auto Placement
 export { autoPlaceSupports, type AutoPlacementStrategy } from './utils/autoPlacement';
 export { placeOverhangSupports } from './utils/overhangAnalysis';
+
+// Utils - Polygon
 export {
   polygonSignedArea2D,
   isPolygonClockwiseXZ,
@@ -46,3 +50,19 @@ export {
   simplifyPolygonVertices,
   validateAndPreparePolygon,
 } from './utils/polygonUtils';
+
+// Utils - Geometry
+export {
+  FILLET_RADIUS,
+  FILLET_SEGMENTS,
+  createCylindricalFilletGeometry,
+  createConicalFilletGeometry,
+  createRectangularFilletGeometry,
+  createPolygonFilletGeometry,
+  createBottomCapGeometry,
+  createTopCapGeometry,
+  createPolygonBottomCapGeometry,
+  getConicalFilletHeight,
+  removeBottomCapFaces,
+  normalizeGeometryForMerge,
+} from './utils/geometryUtils';

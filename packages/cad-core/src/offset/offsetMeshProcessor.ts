@@ -324,8 +324,8 @@ export async function createOffsetMesh(
   if (!vertices || vertices.length === 0) {
     throw new Error('No vertices provided');
   }
-  if (options.offsetDistance <= 0) {
-    throw new Error('Offset distance must be positive');
+  if (options.offsetDistance < 0) {
+    throw new Error('Offset distance cannot be negative');
   }
   if (options.pixelsPerUnit <= 0) {
     throw new Error('Pixels per unit must be positive');

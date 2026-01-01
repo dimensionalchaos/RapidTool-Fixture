@@ -64,7 +64,7 @@ const BaseplatesStepContent: React.FC<BaseplatesStepContentProps> = ({
   const [selectedType, setSelectedType] = useState<'rectangular' | 'convex-hull' | 'multi-section'>(
     (currentBaseplate?.type as 'rectangular' | 'convex-hull' | 'multi-section') || 'rectangular'
   );
-  const [padding, setPadding] = useState(currentBaseplate?.padding || 10);
+  const [padding, setPadding] = useState(currentBaseplate?.padding || 4);
   const [height, setHeight] = useState(currentBaseplate?.height || 4);
 
   // For multi-section, combine existing sections with newly drawn ones

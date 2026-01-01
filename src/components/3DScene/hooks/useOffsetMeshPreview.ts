@@ -190,9 +190,27 @@ export function useOffsetMeshPreview({
           // Yield to browser before heavy computation
           await new Promise(resolve => setTimeout(resolve, 0));
 
-          // Generate the offset mesh with user settings
+          const offsetDistance = settings.offsetDistance ?? 0.5;
+          
+          // Zero offset is fully supported - the heightmap projection will use the
+          // part mesh directly without Minkowski sum expansion. This creates
+          // directional/extractable cutting volumes that match the exact part shape.
+          const isZeroOffset = offsetDistance <= 0.001;
+          
+          if (isZeroOffset) {
+            console.log(`[3DScene] Zero offset mode: using part mesh directly for heightmap projection (no Minkowski sum)`);
+          }
+          
+          let finalGeometry: THREE.BufferGeometry;
+          let finalTriangleCount: number;
+          let processingTime = 0;
+          
+          // === HEIGHTMAP-BASED OFFSET MESH GENERATION ===
+          // Always use heightmap projection for directional cutting capability
+          // For zero offset, the heightmap projects the part mesh directly without Minkowski expansion
+          // This ensures extractable cavities that match the exact part shape
           const result = await createOffsetMesh(vertices, {
-            offsetDistance: settings.offsetDistance ?? 0.5,
+            offsetDistance: offsetDistance,
             pixelsPerUnit: Math.min(safePPU, 2000 / span),
             rotationXZ: settings.rotationXZ ?? 0,
             rotationYZ: settings.rotationYZ ?? 0,
@@ -200,11 +218,12 @@ export function useOffsetMeshPreview({
             progressCallback: (current, total, stage) => {
               // Dispatch progress event for UI updates (scale to part progress)
               const partProgress = (processedParts + (current / total)) / totalParts;
+              const stageLabel = isZeroOffset ? `${stage} (exact fit)` : stage;
               window.dispatchEvent(new CustomEvent('offset-mesh-preview-progress', {
                 detail: { 
                   current: Math.round(partProgress * 100), 
                   total: 100, 
-                  stage: `Part ${processedParts + 1}/${totalParts}: ${stage}` 
+                  stage: `Part ${processedParts + 1}/${totalParts}: ${stageLabel}` 
                 }
               }));
             },
@@ -213,147 +232,154 @@ export function useOffsetMeshPreview({
           // Yield to browser after heavy computation
           await new Promise(resolve => setTimeout(resolve, 0));
 
-          if (result.geometry) {
-            let finalGeometry = result.geometry;
-            let finalTriangleCount = result.metadata.triangleCount;
-            
-            // Process offset mesh based on settings
-            const shouldDecimate = settings.enableDecimation !== false && result.metadata.triangleCount > OFFSET_MESH_DECIMATION_TARGET;
-            const shouldSmooth = settings.enableSmoothing !== false;
-            
-            if (shouldDecimate || shouldSmooth) {
-              let currentGeometry = result.geometry;
-              
-              // === Step 1: Decimation (if enabled and needed) ===
-              if (shouldDecimate) {
-                window.dispatchEvent(new CustomEvent('offset-mesh-preview-progress', {
-                  detail: { 
-                    current: Math.round((processedParts + 0.7) / totalParts * 100), 
-                    total: 100, 
-                    stage: `Part ${processedParts + 1}/${totalParts}: Decimating mesh...` 
-                  }
-                }));
-                
-                // Yield to browser before decimation
-                await new Promise(resolve => setTimeout(resolve, 0));
-                
-                // decimateMesh expects non-indexed geometry, so convert if needed
-                let geometryToDecimate = currentGeometry;
-                if (currentGeometry.index) {
-                  geometryToDecimate = currentGeometry.toNonIndexed();
-                  currentGeometry.dispose();
-                  currentGeometry = geometryToDecimate;
-                }
-                
-                const decimationResult = await decimateMesh(
-                  geometryToDecimate,
-                  OFFSET_MESH_DECIMATION_TARGET
-                );
-                
-                if (decimationResult.success && decimationResult.geometry) {
-                  currentGeometry.dispose();
-                  currentGeometry = decimationResult.geometry;
-                  finalTriangleCount = Math.round(decimationResult.finalTriangles);
-                }
-              }
-              
-              // === Step 2: Smoothing (if enabled) ===
-              if (shouldSmooth) {
-                const iterations = settings.smoothingIterations ?? 10;
-                const strength = settings.smoothingStrength ?? 0;
-                const quality = settings.smoothingQuality ?? true;
-                const debugColors = settings.debugSmoothingColors ?? false;
-                const tiltXZ = settings.rotationXZ ?? 0;
-                const tiltYZ = settings.rotationYZ ?? 0;
-                
-                const strengthLabel = strength === 0 ? 'Taubin' : strength === 1 ? 'Laplacian' : `${(strength * 100).toFixed(0)}%`;
-                
-                window.dispatchEvent(new CustomEvent('offset-mesh-preview-progress', {
-                  detail: { 
-                    current: Math.round((processedParts + 0.85) / totalParts * 100), 
-                    total: 100, 
-                    stage: `Part ${processedParts + 1}/${totalParts}: Smoothing mesh (${iterations} iter, ${strengthLabel})...` 
-                  }
-                }));
-                
-                // Yield to browser before smoothing
-                await new Promise(resolve => setTimeout(resolve, 0));
-                
-                // Use blended Taubin/Laplacian smoothing based on trCAD approach
-                // Pass tilt angles so smoothing can classify vertices correctly
-                const smoothingResult = await laplacianSmooth(
-                  currentGeometry,
-                  {
-                    iterations,
-                    strength,
-                    quality,
-                    debugColors,
-                    tiltXZ,
-                    tiltYZ,
-                  }
-                );
-                
-                if (smoothingResult.success && smoothingResult.geometry) {
-                  currentGeometry.dispose();
-                  currentGeometry = smoothingResult.geometry;
-                  // Update triangle count after smoothing (smoothing outputs non-indexed)
-                  finalTriangleCount = Math.round(currentGeometry.getAttribute('position').count / 3);
-                }
-              }
-              
-              finalGeometry = currentGeometry;
-            }
-            
-            // Check if geometry has vertex colors (from debug mode)
-            const hasVertexColors = finalGeometry.hasAttribute('color');
-            
-            // Create preview material - use vertex colors for debug, or translucent blue normally
-            const previewMaterial = hasVertexColors
-              ? new THREE.MeshBasicMaterial({
-                  vertexColors: true,
-                  transparent: true,
-                  opacity: settings.previewOpacity ?? 0.8, // Higher opacity for debug colors
-                  side: THREE.DoubleSide,
-                  depthWrite: false,
-                })
-              : new THREE.MeshStandardMaterial({
-                  color: 0x3b82f6, // Blue-500 for visibility
-                  transparent: true,
-                  opacity: settings.previewOpacity ?? 0.3,
-                  side: THREE.DoubleSide,
-                  depthWrite: false,
-                  roughness: 0.5,
-                  metalness: 0.1,
-                });
-            
-            if (hasVertexColors) {
-              console.log('[3DScene] Debug colors enabled - vertex classification visualization:');
-              console.log('  RED: WALL vertices (smoothed in X-Z)');
-              console.log('  GREEN: TOP_SURFACE_BOUNDARY vertices (smoothed in X-Z)');
-              console.log('  BLUE: TOP_SURFACE_INTERIOR vertices (NOT smoothed)');
-              console.log('  YELLOW: BOTTOM_SURFACE vertices (NOT smoothed)');
-            }
-
-            const previewMesh = new THREE.Mesh(finalGeometry, previewMaterial);
-            
-            // The offset mesh is already in world space (we applied the transform before processing)
-            // No need to apply transform again
-            previewMesh.name = `offset-mesh-preview-${part.id}`;
-            
-            console.log(`[3DScene] Offset mesh generated for part ${part.id}: ${finalTriangleCount} triangles in ${result.metadata.processingTime.toFixed(0)}ms`);
-            
-            newOffsetMeshes.set(part.id, previewMesh);
-            
-            // INCREMENTAL UPDATE: Show this offset mesh immediately as it's ready
-            // This provides visual feedback while other parts are still processing
-            setOffsetMeshPreviews(prev => {
-              const updated = new Map(prev);
-              updated.set(part.id, previewMesh);
-              return updated;
-            });
-          } else {
+          if (!result.geometry) {
             console.warn(`[3DScene] Offset mesh generation returned no geometry for part ${part.id}`);
+            worldGeometry.dispose();
+            processedParts++;
+            continue;
           }
+          
+          finalGeometry = result.geometry;
+          finalTriangleCount = result.metadata.triangleCount;
+          processingTime = result.metadata.processingTime;
+          
+          // Process offset mesh based on settings
+          const shouldDecimate = settings.enableDecimation !== false && result.metadata.triangleCount > OFFSET_MESH_DECIMATION_TARGET;
+          const shouldSmooth = settings.enableSmoothing !== false;
+          
+          if (shouldDecimate || shouldSmooth) {
+            let currentGeometry = result.geometry;
+            
+            // === Step 1: Decimation (if enabled and needed) ===
+            if (shouldDecimate) {
+              window.dispatchEvent(new CustomEvent('offset-mesh-preview-progress', {
+                detail: { 
+                  current: Math.round((processedParts + 0.7) / totalParts * 100), 
+                  total: 100, 
+                  stage: `Part ${processedParts + 1}/${totalParts}: Decimating mesh...` 
+                }
+              }));
+              
+              // Yield to browser before decimation
+              await new Promise(resolve => setTimeout(resolve, 0));
+              
+              // decimateMesh expects non-indexed geometry, so convert if needed
+              let geometryToDecimate = currentGeometry;
+              if (currentGeometry.index) {
+                geometryToDecimate = currentGeometry.toNonIndexed();
+                currentGeometry.dispose();
+                currentGeometry = geometryToDecimate;
+              }
+              
+              const decimationResult = await decimateMesh(
+                geometryToDecimate,
+                OFFSET_MESH_DECIMATION_TARGET
+              );
+              
+              if (decimationResult.success && decimationResult.geometry) {
+                currentGeometry.dispose();
+                currentGeometry = decimationResult.geometry;
+                finalTriangleCount = Math.round(decimationResult.finalTriangles);
+              }
+            }
+            
+            // === Step 2: Smoothing (if enabled) ===
+            if (shouldSmooth) {
+              const iterations = settings.smoothingIterations ?? 10;
+              const strength = settings.smoothingStrength ?? 0;
+              const quality = settings.smoothingQuality ?? true;
+              const debugColors = settings.debugSmoothingColors ?? false;
+              const tiltXZ = settings.rotationXZ ?? 0;
+              const tiltYZ = settings.rotationYZ ?? 0;
+              
+              const strengthLabel = strength === 0 ? 'Taubin' : strength === 1 ? 'Laplacian' : `${(strength * 100).toFixed(0)}%`;
+              
+              window.dispatchEvent(new CustomEvent('offset-mesh-preview-progress', {
+                detail: { 
+                  current: Math.round((processedParts + 0.85) / totalParts * 100), 
+                  total: 100, 
+                  stage: `Part ${processedParts + 1}/${totalParts}: Smoothing mesh (${iterations} iter, ${strengthLabel})...` 
+                }
+              }));
+              
+              // Yield to browser before smoothing
+              await new Promise(resolve => setTimeout(resolve, 0));
+              
+              // Use blended Taubin/Laplacian smoothing based on trCAD approach
+              // Pass tilt angles so smoothing can classify vertices correctly
+              const smoothingResult = await laplacianSmooth(
+                currentGeometry,
+                {
+                  iterations,
+                  strength,
+                  quality,
+                  debugColors,
+                  tiltXZ,
+                  tiltYZ,
+                }
+              );
+              
+              if (smoothingResult.success && smoothingResult.geometry) {
+                currentGeometry.dispose();
+                currentGeometry = smoothingResult.geometry;
+                // Update triangle count after smoothing (smoothing outputs non-indexed)
+                finalTriangleCount = Math.round(currentGeometry.getAttribute('position').count / 3);
+              }
+            }
+            
+            finalGeometry = currentGeometry;
+          }
+          
+          // === CREATE PREVIEW MESH ===
+          // Check if geometry has vertex colors (from debug mode)
+          const hasVertexColors = finalGeometry.hasAttribute('color');
+          
+          // Create preview material - use vertex colors for debug, or translucent blue normally
+          // Use the same blue color for both zero offset and normal offset modes
+          const previewMaterial = hasVertexColors
+            ? new THREE.MeshBasicMaterial({
+                vertexColors: true,
+                transparent: true,
+                opacity: settings.previewOpacity ?? 0.8, // Higher opacity for debug colors
+                side: THREE.DoubleSide,
+                depthWrite: false,
+              })
+            : new THREE.MeshStandardMaterial({
+                color: 0x3b82f6, // Blue-500 for visibility (same for zero and normal offset)
+                transparent: true,
+                opacity: settings.previewOpacity ?? 0.3,
+                side: THREE.DoubleSide,
+                depthWrite: false,
+                roughness: 0.5,
+                metalness: 0.1,
+              });
+          
+          if (hasVertexColors) {
+            console.log('[3DScene] Debug colors enabled - vertex classification visualization:');
+            console.log('  RED: WALL vertices (smoothed in X-Z)');
+            console.log('  GREEN: TOP_SURFACE_BOUNDARY vertices (smoothed in X-Z)');
+            console.log('  BLUE: TOP_SURFACE_INTERIOR vertices (NOT smoothed)');
+            console.log('  YELLOW: BOTTOM_SURFACE vertices (NOT smoothed)');
+          }
+
+          const previewMesh = new THREE.Mesh(finalGeometry, previewMaterial);
+          
+          // The mesh is already in world space (we applied the transform before processing)
+          // No need to apply transform again
+          previewMesh.name = `offset-mesh-preview-${part.id}`;
+          
+          const modeLabel = isZeroOffset ? 'zero offset' : 'offset';
+          console.log(`[3DScene] Cavity preview mesh (${modeLabel}) generated for part ${part.id}: ${finalTriangleCount} triangles in ${processingTime.toFixed(0)}ms`);
+          
+          newOffsetMeshes.set(part.id, previewMesh);
+          
+          // INCREMENTAL UPDATE: Show this mesh immediately as it's ready
+          // This provides visual feedback while other parts are still processing
+          setOffsetMeshPreviews(prev => {
+            const updated = new Map(prev);
+            updated.set(part.id, previewMesh);
+            return updated;
+          });
 
           // Clean up cloned geometry
           worldGeometry.dispose();

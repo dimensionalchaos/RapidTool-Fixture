@@ -32,6 +32,11 @@ import {
   getTotalTriangleCount,
   disposeGeometries,
 } from '../utils/geometryOptimizer';
+import {
+  logDebug,
+  logWarn,
+  logError,
+} from '../utils/debugUtils';
 
 /**
  * Performs CSG union on baseplate and supports
@@ -50,7 +55,7 @@ async function performBaseplateSupportsUnion(
     return baseplateAndSupports[0];
   }
   
-  console.log(`[Export] Performing CSG union on baseplate + ${baseplateAndSupports.length - 1} supports...`);
+  logDebug(`Performing CSG union on baseplate + ${baseplateAndSupports.length - 1} supports`);
   onProgress?.({ 
     stage: 'manifold', 
     progress: 10, 
@@ -60,8 +65,7 @@ async function performBaseplateSupportsUnion(
   try {
     // Process in batches for better memory management on low-end devices
     const batchSize = config.csgBatchSize;
-    const totalParts = baseplateAndSupports.length;
-    
+
     const geomsForWorker = baseplateAndSupports.map((geom, idx) => ({
       id: idx === 0 ? 'baseplate' : `support-${idx}`,
       geometry: geom
@@ -91,11 +95,11 @@ async function performBaseplateSupportsUnion(
     );
     
     if (result) {
-      console.log('[Export] Baseplate + supports CSG union succeeded - manifold geometry created');
+      logDebug('Baseplate + supports CSG union succeeded - manifold geometry created');
       return result;
     }
   } catch (error) {
-    console.error('[Export] Baseplate + supports CSG union failed:', error);
+    logError('Baseplate + supports CSG union failed', error);
   }
   
   return null;
@@ -114,7 +118,7 @@ async function performFastMerge(
     return null;
   }
   
-  console.log('[Export] Merging final geometries...');
+  logDebug('Merging final geometries');
   onProgress?.({ stage: 'manifold', progress: 45, message: 'Merging final geometries...' });
   
   try {
@@ -163,7 +167,7 @@ async function performFastMerge(
       const welded = mergeVertices(merged, config.vertexMergeTolerance);
       welded.computeVertexNormals();
       
-      console.log(`[Export] Final merge succeeded: ${welded.getAttribute('position').count} vertices`);
+      logDebug(`Final merge succeeded: ${welded.getAttribute('position').count} vertices`);
       
       // Cleanup temporary geometries
       disposeGeometries(normalizedGeometries);
@@ -171,7 +175,7 @@ async function performFastMerge(
       return welded;
     }
   } catch (error) {
-    console.error('[Export] Final merge failed:', error);
+    logError('Final merge failed', error);
   }
   
   return null;
@@ -186,7 +190,7 @@ async function performFinalMeshRepair(
   config: ExportServiceConfig,
   onProgress?: ExportProgressCallback
 ): Promise<THREE.BufferGeometry> {
-  console.log('[Export] Performing final mesh repair and manifold conversion...');
+  logDebug('Performing final mesh repair and manifold conversion');
   onProgress?.({ stage: 'manifold', progress: 85, message: 'Repairing mesh and filling holes...' });
   
   // Yield before heavy operation
@@ -206,11 +210,10 @@ async function performFinalMeshRepair(
     });
     
     if (repairResult.success && repairResult.geometry) {
-      console.log(`[Export] Mesh repair succeeded:`, {
+      logDebug('Mesh repair succeeded', {
         originalTriangles: repairResult.originalTriangles,
         finalTriangles: repairResult.finalTriangles,
         isManifold: repairResult.isManifold,
-        steps: repairResult.repairSteps
       });
       
       // Dispose old geometry if we have a new one
@@ -220,11 +223,11 @@ async function performFinalMeshRepair(
       
       return repairResult.geometry;
     } else {
-      console.warn('[Export] Mesh repair failed, using original geometry:', repairResult.error);
+      logWarn('Mesh repair failed, using original geometry', repairResult.error);
       return geometry;
     }
   } catch (error) {
-    console.error('[Export] Mesh repair error:', error);
+    logError('Mesh repair error', error);
     return geometry;
   }
 }
@@ -238,7 +241,7 @@ async function performFullCSGUnion(
   config: ExportServiceConfig,
   onProgress?: ExportProgressCallback
 ): Promise<THREE.BufferGeometry | null> {
-  console.log('[Export] Falling back to full CSG union...');
+  logDebug('Falling back to full CSG union');
   onProgress?.({ stage: 'manifold', progress: 70, message: 'Trying full CSG union (fallback)...' });
   
   // Yield before heavy operation
@@ -273,11 +276,11 @@ async function performFullCSGUnion(
     );
     
     if (result) {
-      console.log('[Export] CSG union succeeded!');
+      logDebug('CSG union succeeded');
       return result;
     }
   } catch (error) {
-    console.error('[Export] CSG union failed:', error);
+    logError('CSG union failed', error);
   }
   
   return null;
@@ -320,10 +323,10 @@ function generateSTLFiles(
     
     generateSingleSTLFile(exportGeometry, filename, config.options);
     
-    console.log(`[Export] Exported single file: ${filename}`);
+    logDebug(`Exported single file: ${filename}`);
     return { success: true, filename, filesExported: 1 };
   } catch (error) {
-    console.error('[Export] STL generation failed:', error);
+    logError('STL generation failed', error);
     return { 
       success: false, 
       error: error instanceof Error ? error.message : 'STL generation failed' 
@@ -345,7 +348,7 @@ async function processSectionExport(
   sectionGeometries.push(...sectionData.supportGeometries);
   sectionGeometries.push(...sectionData.labelGeometries);
   
-  console.log(`[Export] Processing section ${sectionData.id}: ${sectionGeometries.length} geometries`);
+  logDebug(`Processing section ${sectionData.id}: ${sectionGeometries.length} geometries`);
   
   if (sectionGeometries.length === 1) {
     return sectionGeometries[0];
@@ -385,7 +388,7 @@ async function exportSeparateSections(
   const sections = Array.from(geometryCollection.sectionGeometries.values())
     .sort((a, b) => a.index - b.index);
   
-  console.log(`[Export] Exporting ${sections.length} sections separately`);
+  logDebug(`Exporting ${sections.length} sections separately`);
   
   const exportedFiles: string[] = [];
   
@@ -427,13 +430,13 @@ async function exportSeparateSections(
       generateSingleSTLFile(sectionGeometry, filename, config.options);
       exportedFiles.push(filename);
       
-      console.log(`[Export] Exported section ${sectionNumber}: ${filename}`);
+      logDebug(`Exported section ${sectionNumber}: ${filename}`);
       
       // Small delay between downloads to avoid browser issues
       await new Promise(resolve => setTimeout(resolve, 100));
       
     } catch (error) {
-      console.error(`[Export] Failed to export section ${sectionNumber}:`, error);
+      logError(`Failed to export section ${sectionNumber}`, error);
     }
   }
   
@@ -464,7 +467,7 @@ export async function exportFixture(
 ): Promise<ExportResult> {
   try {
     const startTime = performance.now();
-    console.log(`[Export] Starting export with quality: ${serviceConfig.quality}`);
+    logDebug(`Starting export with quality: ${serviceConfig.quality}`);
     
     // Check if we need to export sections separately
     const shouldSplitSections = 
@@ -473,7 +476,7 @@ export async function exportFixture(
       geometryCollection.sectionGeometries.size > 1;
     
     if (shouldSplitSections) {
-      console.log(`[Export] Exporting ${geometryCollection.sectionGeometries.size} sections separately`);
+      logDebug(`Exporting ${geometryCollection.sectionGeometries.size} sections separately`);
       
       const result = await exportSeparateSections(
         geometryCollection,
@@ -483,7 +486,7 @@ export async function exportFixture(
       );
       
       const totalTime = ((performance.now() - startTime) / 1000).toFixed(2);
-      console.log(`[Export] Completed split export in ${totalTime}s`);
+      logDebug(`Completed split export in ${totalTime}s`);
       
       onProgress?.({ stage: 'complete', progress: 100, message: `Export complete! (${totalTime}s)` });
       
@@ -507,7 +510,7 @@ export async function exportFixture(
     
     // Log initial triangle count
     const initialTriangles = getTotalTriangleCount(baseplateAndSupportsForCSG);
-    console.log(`[Export] Initial triangle count: ${initialTriangles}`);
+    logDebug(`Initial triangle count: ${initialTriangles}`);
     
     // Optimize geometries if decimation is enabled
     if (serviceConfig.targetTriangleCount > 0 && initialTriangles > serviceConfig.targetTriangleCount) {
@@ -538,26 +541,26 @@ export async function exportFixture(
       if (unionResult) {
         geometriesToMerge.push(unionResult);
       } else {
-        console.warn('[Export] CSG union returned null, adding geometries individually');
+        logWarn('CSG union returned null, adding geometries individually');
         geometriesToMerge.push(...baseplateAndSupportsForCSG);
       }
     } else if (baseplateAndSupportsForCSG.length === 1) {
       geometriesToMerge.push(baseplateAndSupportsForCSG[0]);
     } else if (baseplateAndSupportsForCSG.length > 1) {
       // CSG union disabled (fast mode) - just add geometries directly
-      console.log('[Export] Skipping CSG union (fast mode)');
+      logDebug('Skipping CSG union (fast mode)');
       geometriesToMerge.push(...baseplateAndSupportsForCSG);
     }
     
     // Add label geometries (these don't overlap, so just merge)
     geometriesToMerge.push(...geometryCollection.labelGeometries);
     
-    console.log(`[Export] Total geometries to merge: ${geometriesToMerge.length}`);
+    logDebug(`Total geometries to merge: ${geometriesToMerge.length}`);
     
     // If we have no geometries, use fallback
     if (geometriesToMerge.length === 0) {
       if (fallbackGeometry) {
-        console.warn('[Export] No component geometries found, using fallback geometry');
+        logWarn('No component geometries found, using fallback geometry');
         geometriesToMerge.push(fallbackGeometry);
       } else {
         return { success: false, error: 'No geometries available for export' };
@@ -579,7 +582,7 @@ export async function exportFixture(
     // Last resort: use fallback geometry
     if (!exportGeometry) {
       if (fallbackGeometry) {
-        console.warn('[Export] All methods failed, using fallback geometry...');
+        logWarn('All methods failed, using fallback geometry');
         onProgress?.({ stage: 'manifold', progress: 90, message: 'Using cached geometry...' });
         exportGeometry = fallbackGeometry;
       } else {
@@ -606,14 +609,14 @@ export async function exportFixture(
     }
     
     const totalTime = ((performance.now() - startTime) / 1000).toFixed(2);
-    console.log(`[Export] Completed in ${totalTime}s (quality: ${serviceConfig.quality})`);
+    logDebug(`Completed in ${totalTime}s (quality: ${serviceConfig.quality})`);
     
     onProgress?.({ stage: 'complete', progress: 100, message: `Export complete! (${totalTime}s)` });
     
     return result;
     
   } catch (error) {
-    console.error('[Export] Failed:', error);
+    logError('Export failed', error);
     return { 
       success: false, 
       error: error instanceof Error ? error.message : 'Export failed' 

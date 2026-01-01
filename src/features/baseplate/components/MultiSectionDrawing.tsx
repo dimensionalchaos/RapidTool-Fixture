@@ -33,8 +33,8 @@ interface DrawingState {
   currentPoint: THREE.Vector2 | null;
 }
 
-/** Guide line extension beyond the drawn area */
-const GUIDE_LINE_EXTENSION = 50;
+/** Guide line extension - large value to extend across entire scene (matches SupportPlacement) */
+const GUIDE_LINE_EXTENSION = 2000;
 
 /** Dash pattern configuration */
 const DASH_SIZE = 2;
@@ -285,45 +285,56 @@ const MultiSectionDrawing: React.FC<MultiSectionDrawingProps> = ({
 
   if (!active) return null;
 
-  // XY Guide lines component (gray crosshairs)
+  // XY Guide lines component (gray crosshairs extending to view edges)
+  // Matches the style used in SupportPlacement for consistency
   const XYGuides: React.FC<{ point: THREE.Vector2 }> = ({ point }) => {
     const y = planeY + 0.02;
-    const color = 0x6b7280;
-    const extension = GUIDE_LINE_EXTENSION;
+    const color = 0x9CA3AF; // Same gray as SupportPlacement
+    const len = GUIDE_LINE_EXTENSION;
+    const px = point.x;
+    const pz = point.y;
+    
+    // Lines extend from -len to +len through the cursor point (matching SupportPlacement)
+    const positions = new Float32Array([
+      // Horizontal line (along X axis) through Z = pz
+      -len, y, pz, len, y, pz,
+      // Vertical line (along Z axis) through X = px
+      px, y, -len, px, y, len,
+    ]);
+    
+    // Small cross marker at cursor position
+    const cross = new Float32Array([
+      px - 1.5, y, pz - 1.5, px + 1.5, y, pz + 1.5,
+      px - 1.5, y, pz + 1.5, px + 1.5, y, pz - 1.5,
+    ]);
     
     return (
-      <>
-        {/* Horizontal line (along Z axis) */}
-        <lineSegments renderOrder={999}>
+      <group renderOrder={999}>
+        {/* Main guide lines extending to edges */}
+        <lineSegments frustumCulled={false}>
           <bufferGeometry>
             <bufferAttribute
               attach="attributes-position"
-              count={2}
-              array={new Float32Array([
-                point.x, y, point.y - extension,
-                point.x, y, point.y + extension,
-              ])}
+              count={positions.length / 3}
+              array={positions}
               itemSize={3}
             />
           </bufferGeometry>
-          <lineBasicMaterial color={color} depthTest={false} depthWrite={false} transparent opacity={0.5} />
+          <lineBasicMaterial color={color} depthTest={false} depthWrite={false} linewidth={1} />
         </lineSegments>
-        {/* Vertical line (along X axis) */}
-        <lineSegments renderOrder={999}>
+        {/* Cross marker at cursor */}
+        <lineSegments frustumCulled={false}>
           <bufferGeometry>
             <bufferAttribute
               attach="attributes-position"
-              count={2}
-              array={new Float32Array([
-                point.x - extension, y, point.y,
-                point.x + extension, y, point.y,
-              ])}
+              count={cross.length / 3}
+              array={cross}
               itemSize={3}
             />
           </bufferGeometry>
-          <lineBasicMaterial color={color} depthTest={false} depthWrite={false} transparent opacity={0.5} />
+          <lineBasicMaterial color={0x374151} depthTest={false} depthWrite={false} linewidth={1} />
         </lineSegments>
-      </>
+      </group>
     );
   };
 

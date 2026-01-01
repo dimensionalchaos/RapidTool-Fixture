@@ -17,6 +17,7 @@ interface ThreeDViewerProps {
   onModelColorAssigned?: (modelId: string, color: string) => void;
   selectedSupportId?: string | null;
   onSupportSelect?: (supportId: string | null) => void;
+  isCavityApplied?: boolean;
 }
 
 const ThreeDViewer: React.FC<ThreeDViewerProps> = ({
@@ -26,6 +27,7 @@ const ThreeDViewer: React.FC<ThreeDViewerProps> = ({
   onModelColorAssigned,
   selectedSupportId,
   onSupportSelect,
+  isCavityApplied = false,
 }) => {
   // Theme for 3D viewer background
   const { resolvedTheme } = useTheme();
@@ -155,6 +157,7 @@ const ThreeDViewer: React.FC<ThreeDViewerProps> = ({
             selectedSupportId={selectedSupportId}
             onSupportSelect={onSupportSelect}
             performanceSettings={perfSettings}
+            isCavityApplied={isCavityApplied}
           />
         </Canvas>
       </Canvas3DErrorBoundary>
