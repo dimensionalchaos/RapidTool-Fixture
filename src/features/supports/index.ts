@@ -38,6 +38,16 @@ export {
 export { autoPlaceSupports, type AutoPlacementStrategy } from './utils/autoPlacement';
 export { placeOverhangSupports } from './utils/overhangAnalysis';
 
+// Utils - Baseplate Coverage (for multi-section baseplate support filtering)
+export {
+  filterSupportsByBaseplateCoverage,
+  findBestCoveringSectionForSupport,
+  getSupportBoundingBox,
+  getSupportBaseArea,
+  MIN_BASEPLATE_COVERAGE_RATIO,
+  type FilteredSupportsResult,
+} from './utils/baseplateCoverage';
+
 // Utils - Polygon
 export {
   polygonSignedArea2D,

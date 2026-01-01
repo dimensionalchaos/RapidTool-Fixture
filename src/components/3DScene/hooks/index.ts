@@ -79,3 +79,6 @@ export type { UseBaseplateOperationsProps, UseBaseplateOperationsReturn } from '
 
 export { useHoleCSG } from './useHoleCSG';
 export type { UseHoleCSGProps, UseHoleCSGReturn } from './useHoleCSG';
+
+export { useSceneReset } from './useSceneReset';
+export type { UseSceneResetParams } from './useSceneReset';

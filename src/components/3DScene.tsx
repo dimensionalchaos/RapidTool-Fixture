@@ -19,6 +19,7 @@ import {
   getSupportFootprintPoints,
   FootprintBounds,
   autoPlaceSupports,
+  filterSupportsByBaseplateCoverage,
 } from '@/features/supports';
 import {
   CSGEngine, 
@@ -95,6 +96,7 @@ import {
   useSupportTrimPreview,
   useBaseplateOperations,
   useHoleCSG,
+  useSceneReset,
   // Container
   Scene3DProvider,
   useScene3DContext,
@@ -1024,16 +1026,43 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       }
 
       if (result.supports.length > 0) {
-        // Set supports locally in 3DScene
-        setSupports(result.supports);
+        // For multi-section baseplates, filter supports to only include those
+        // with at least 60% coverage on a baseplate section
+        let finalSupports = result.supports;
+        let finalMessage = result.message;
         
-        // Notify AppShell about the batch of new supports (single event to avoid duplicates)
-        window.dispatchEvent(new CustomEvent('supports-auto-placed', { 
-          detail: { 
-            supports: result.supports,
-            message: result.message 
-          } 
-        }));
+        if (basePlate.type === 'multi-section' && basePlate.sections && basePlate.sections.length > 0) {
+          const filterResult = filterSupportsByBaseplateCoverage(
+            result.supports,
+            basePlate.sections
+          );
+          
+          finalSupports = filterResult.accepted;
+          finalMessage = filterResult.message;
+          
+          console.log('[3DScene] Multi-section baseplate filtering:', 
+            `${filterResult.accepted.length} accepted, ${filterResult.rejected.length} rejected (require ≥60% coverage)`);
+          
+          if (filterResult.rejected.length > 0) {
+            console.log('[3DScene] Rejected supports:', 
+              filterResult.rejected.map(s => `${s.id} at (${s.center.x.toFixed(1)}, ${s.center.y.toFixed(1)})`).join(', '));
+          }
+        }
+        
+        if (finalSupports.length > 0) {
+          // Set supports locally in 3DScene
+          setSupports(finalSupports);
+          
+          // Notify AppShell about the batch of new supports (single event to avoid duplicates)
+          window.dispatchEvent(new CustomEvent('supports-auto-placed', { 
+            detail: { 
+              supports: finalSupports,
+              message: finalMessage 
+            } 
+          }));
+        } else {
+          console.warn('[3DScene] All auto-placed supports rejected due to insufficient baseplate coverage');
+        }
       } else {
         console.warn('[3DScene] Auto-placement generated no supports:', result.message);
       }
@@ -1378,148 +1407,67 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     exportQuality: 'high',
   });
 
-  // Handle view reset events
-  React.useEffect(() => {
-    const handleViewReset = (e: CustomEvent) => {
-      if (importedParts.length > 0) {
-        // Reset camera to isometric view position based on model size and units
-        setCurrentOrientation('iso');
-        updateCamera('iso', modelBounds);
-      } else {
-        // Reset camera to default isometric position (no model loaded)
-        setCurrentOrientation('iso');
-        updateCamera('iso', null);
-      }
-
-      // === Clear baseplate and supports ===
-      setBasePlate(null);
-      setSupports([]);
-      setSupportsTrimPreview([]);
-      setPlacing({ active: false, type: null });
-      editingSupportRef.current = null;
-      
-      // Clear modified support geometries with proper disposal
-      setModifiedSupportGeometries(prev => {
-        prev.forEach(geo => geo?.dispose());
-        return new Map();
-      });
-      
-      // === Clear clamps ===
-      setPlacedClamps([]);
-      setSelectedClampId(null);
-      setClampPlacementMode({ active: false, clampModelId: null, clampCategory: null });
-      setWaitingForClampSectionSelection(false);
-      setClampMinOffsets(new Map());
-      setClampDebugPoints(null);
-      setDebugPerimeter(null);
-      setDebugClampSilhouette(null);
-      isDraggingClampRef.current = false;
-      clampDebugPointsRef.current = null;
-      partSilhouetteRef.current = null;
-      
-      // Dispose clamp support geometries
-      setClampSupportInfos(prev => {
-        prev.forEach(info => {
-          info.geometry?.dispose();
-        });
-        return new Map();
-      });
-      
-      // Clear loaded clamp data with proper Three.js disposal
-      loadedClampDataRef.current.forEach(clampData => {
-        clampData.geometry?.dispose();
-        if (clampData.material) {
-          if (Array.isArray(clampData.material)) {
-            clampData.material.forEach(m => m.dispose());
-          } else {
-            clampData.material.dispose();
-          }
-        }
-      });
-      loadedClampDataRef.current.clear();
-      
-      // === Clear labels ===
-      setLabels([]);
-      setSelectedLabelId(null);
-      setWaitingForLabelSectionSelection(false);
-      setPendingLabelConfig(null);
-      isDraggingLabelRef.current = false;
-      
-      // === Clear mounting holes ===
-      setMountingHoles([]);
-      setSelectedHoleId(null);
-      setEditingHoleId(null);
-      setHolePlacementMode({ active: false, config: null, depth: 0 });
-      setWaitingForHoleSectionSelection(false);
-      setPendingHoleConfig(null);
-      setIsDraggingHole(false);
-      isDraggingHoleRef.current = false;
-      
-      // Clear baseplate with holes geometry
-      setBaseplateWithHoles(prev => {
-        prev?.dispose();
-        return null;
-      });
-      
-      // Clear original baseplate geometry ref
-      if (originalBaseplateGeoRef.current) {
-        originalBaseplateGeoRef.current.dispose();
-        originalBaseplateGeoRef.current = null;
-      }
-      
-      // === Clear merged fixture mesh ===
-      setMergedFixtureMesh((prev) => {
-        if (prev) {
-          prev.geometry?.dispose();
-          if (prev.material) {
-            if (Array.isArray(prev.material)) {
-              prev.material.forEach(m => m.dispose());
-            } else {
-              prev.material.dispose();
-            }
-          }
-        }
-        return null;
-      });
-      
-      // === Clear all offset mesh previews ===
-      setOffsetMeshPreviews(prev => {
-        prev.forEach(mesh => {
-          mesh.geometry?.dispose();
-          if (mesh.material) {
-            if (Array.isArray(mesh.material)) {
-              mesh.material.forEach(m => m.dispose());
-            } else {
-              mesh.material.dispose();
-            }
-          }
-        });
-        return new Map();
-      });
-      
-      // === Clear selection and editing states ===
-      setSelectedBasePlateSectionId(null);
-      setEditingBasePlateSectionId(null);
-      
-      // === Clear multi-section drawing mode ===
-      setIsMultiSectionDrawingMode(false);
-      setDrawnSections([]);
-      setWaitingForSectionSelection(false);
-      
-      // === Force garbage collection hint ===
-      // Note: Can't force GC in JS, but nullifying refs helps
-      if (typeof window !== 'undefined' && (window as any).gc) {
-        try {
-          (window as any).gc();
-        } catch (e) {
-          // GC not available
-        }
-      }
-    };
-
-    window.addEventListener('viewer-reset', handleViewReset as EventListener);
-    return () => window.removeEventListener('viewer-reset', handleViewReset as EventListener);
-  }, [camera, importedParts.length, updateCamera, modelBounds, setBasePlate, setSupports, setSupportsTrimPreview, setPlacing, setModifiedSupportGeometries, setPlacedClamps, setSelectedClampId, setClampPlacementMode, setWaitingForClampSectionSelection, setClampMinOffsets, setClampDebugPoints, setDebugPerimeter, setDebugClampSilhouette, setClampSupportInfos, setLabels, setSelectedLabelId, setWaitingForLabelSectionSelection, setPendingLabelConfig, setMountingHoles, setSelectedHoleId, setEditingHoleId, setHolePlacementMode, setWaitingForHoleSectionSelection, setPendingHoleConfig, setIsDraggingHole, setBaseplateWithHoles, setMergedFixtureMesh, setOffsetMeshPreviews, setSelectedBasePlateSectionId, setEditingBasePlateSectionId, setIsMultiSectionDrawingMode, setDrawnSections, setWaitingForSectionSelection]);
+  // Handle view reset events - delegated to useSceneReset hook
+  useSceneReset({
+    // Camera
+    importedPartsLength: importedParts.length,
+    modelBounds,
+    setCurrentOrientation,
+    updateCamera,
+    
+    // Baseplate
+    setBasePlate,
+    setSelectedBasePlateSectionId,
+    setEditingBasePlateSectionId,
+    setIsMultiSectionDrawingMode,
+    setDrawnSections,
+    setWaitingForSectionSelection,
+    
+    // Supports
+    setSupports,
+    setSupportsTrimPreview,
+    setPlacing,
+    setModifiedSupportGeometries,
+    editingSupportRef,
+    
+    // Clamps
+    setPlacedClamps,
+    setSelectedClampId,
+    setClampPlacementMode,
+    setWaitingForClampSectionSelection,
+    setClampMinOffsets,
+    setClampSupportInfos,
+    setClampDebugPoints,
+    setDebugPerimeter,
+    setDebugClampSilhouette,
+    isDraggingClampRef,
+    loadedClampDataRef,
+    clampDebugPointsRef,
+    partSilhouetteRef,
+    
+    // Labels
+    setLabels,
+    setSelectedLabelId,
+    setWaitingForLabelSectionSelection,
+    setPendingLabelConfig,
+    isDraggingLabelRef,
+    
+    // Holes
+    setMountingHoles,
+    setSelectedHoleId,
+    setEditingHoleId,
+    setHolePlacementMode,
+    setWaitingForHoleSectionSelection,
+    setPendingHoleConfig,
+    setIsDraggingHole,
+    isDraggingHoleRef,
+    setBaseplateWithHoles,
+    originalBaseplateGeoRef,
+    
+    // Scene state
+    setMergedFixtureMesh,
+    setOffsetMeshPreviews,
+  });
 
   // Handle view orientation events
   React.useEffect(() => {

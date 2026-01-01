@@ -1,34 +1,20 @@
-# RapidTool Fixture View - Architecture & Development Guide
+# RapidTool Fixture View - Architecture Guide
 
-> **Purpose:** This document serves as the single source of truth for AI agents and developers working on this codebase. It consolidates all architectural decisions, patterns, and remaining work.
-
-**Last Updated:** December 31, 2025  
-**Version:** 2.0 (Post Phase 7 - Zustand Migration)
-
----
-
-## Table of Contents
-
-1. [Executive Summary](#1-executive-summary)
-2. [Architecture Overview](#2-architecture-overview)
-3. [Package Structure](#3-package-structure)
-4. [State Management](#4-state-management)
-5. [Critical Systems](#5-critical-systems)
-6. [Production Readiness Gaps](#6-production-readiness-gaps)
-7. [Refactoring Roadmap](#7-refactoring-roadmap)
-8. [Development Guidelines](#8-development-guidelines)
-9. [File Reference](#9-file-reference)
+> **Purpose:** Single source of truth for AI agents and developers working on this codebase.
+> 
+> **Last Updated:** January 1, 2026  
+> **Version:** 3.0 (Post-Refactoring)
 
 ---
 
-## 1. Executive Summary
+## 1. Application Overview
 
 ### What This Application Does
 
 RapidTool Fixture View is a **browser-based 3D CAD application** for designing manufacturing fixtures. Users follow a step-wise workflow:
 
 ```
-Import Part → Configure Baseplate → Add Supports → Place Clamps → Add Mounting Holes → Create Cavity → Export
+Import Part → Configure Baseplate → Add Supports → Place Clamps → Add Labels → Drill Holes → Create Cavity → Export
 ```
 
 ### Technology Stack
@@ -37,27 +23,15 @@ Import Part → Configure Baseplate → Add Supports → Place Clamps → Add Mo
 |-------|------------|
 | **UI Framework** | React 18 + TypeScript |
 | **3D Rendering** | Three.js via React Three Fiber |
-| **State Management** | Zustand + Immer |
+| **State Management** | Zustand + Immer (stores) + React hooks (3DScene) |
 | **Styling** | Tailwind CSS + shadcn/ui |
 | **CSG Operations** | Manifold 3D (WASM) |
 | **Build Tool** | Vite |
 | **Monorepo** | npm workspaces |
 
-### Current Statistics
-
-| Metric | Value |
-|--------|-------|
-| Total TypeScript/TSX files | ~309 |
-| Total lines of code | ~2.7M characters |
-| Largest file | `3DScene.tsx` (2,404 lines) |
-| Second largest | `AppShell.tsx` (2,132 lines) |
-| Zustand stores | 11 (6 app-specific, 5 generic in cad-ui) |
-
 ---
 
-## 2. Architecture Overview
-
-### Three-Layer Architecture
+## 2. Architecture Layers
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -94,24 +68,9 @@ Import Part → Configure Baseplate → Add Supports → Place Clamps → Add Mo
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-### Data Flow
-
-```
-User Input → UI Event → Zustand Store Update → React Re-render → 3D Scene Update
-                ↑                                      ↓
-                └────── Custom Events (for 3D operations) ────┘
-```
-
-### Key Design Decisions
-
-1. **Zustand for State** - Phase 7 migrated all 46 useState calls to Zustand stores with backward-compatible hooks
-2. **Custom Events Bridge** - Some operations still use window.dispatchEvent for 3D scene communication
-3. **Feature Modules** - Business logic organized by domain (supports, clamps, holes, etc.)
-4. **Monorepo Packages** - Core logic and UI components extracted to reusable packages
-
 ---
 
-## 3. Package Structure
+## 3. Directory Structure
 
 ### `packages/cad-core/` - Pure Logic (No React)
 
@@ -120,30 +79,24 @@ cad-core/
 ├── src/
 │   ├── mesh/                 # Mesh processing
 │   │   ├── meshAnalysis.ts       # Geometry analysis
-│   │   ├── meshAnalysisService.ts # Service wrapper
 │   │   ├── manifoldMeshService.ts # Manifold integration
 │   │   └── index.ts
 │   ├── offset/               # Cavity generation
 │   │   ├── offsetHeightmap.ts    # Heightmap-based offset
+│   │   ├── offsetMeshProcessor.ts # GPU-based mesh offset
 │   │   ├── types.ts              # CavitySettings, etc.
 │   │   └── index.ts
 │   ├── csg/                  # Boolean operations
-│   │   ├── csgEngine.ts          # Manifold wrapper
-│   │   └── types.ts
+│   │   └── csgEngine.ts          # Manifold wrapper
 │   ├── transform/            # Coordinate systems
-│   │   ├── coordinateUtils.ts    # CAD ↔ Three.js
-│   │   └── index.ts
+│   │   └── coordinateUtils.ts    # CAD ↔ Three.js
 │   ├── parsers/              # File parsers
-│   │   ├── stlParser.ts
-│   │   └── index.ts
-│   ├── workers/              # Worker management
-│   │   ├── workerManager.ts
-│   │   └── index.ts
-│   └── index.ts              # Public API
-└── package.json
+│   │   └── stlParser.ts
+│   └── workers/              # Worker management
+│       └── workerManager.ts
 ```
 
-### `packages/cad-ui/` - React Components
+### `packages/cad-ui/` - Reusable React Components
 
 ```
 cad-ui/
@@ -152,78 +105,182 @@ cad-ui/
 │   │   ├── selectionStore.ts     # Selection state
 │   │   ├── workflowStore.ts      # Workflow steps
 │   │   ├── uiStore.ts            # UI preferences
-│   │   ├── historyStore.ts       # Undo/redo
-│   │   ├── transformStore.ts     # Transform mode
-│   │   └── index.ts
+│   │   └── historyStore.ts       # Undo/redo
 │   ├── viewport/             # 3D viewport
-│   │   ├── ViewCube.tsx
-│   │   └── index.ts
+│   │   └── ViewCube.tsx
 │   ├── navigation/           # Workflow navigation
-│   │   ├── types.ts              # WorkflowStep, ComponentCategory
-│   │   └── index.ts
-│   ├── panels/               # Panel components
-│   ├── primitives/           # Base UI (shadcn)
-│   └── index.ts
-└── package.json
+│   │   └── types.ts              # WorkflowStep, ComponentCategory
+│   └── primitives/           # Base UI (shadcn)
 ```
 
 ### `src/` - Application Code
 
 ```
 src/
-├── features/                 # Feature modules
-│   ├── supports/                 # Support placement
-│   │   ├── components/
-│   │   ├── hooks/
-│   │   ├── utils/
-│   │   └── index.ts
-│   ├── clamps/                   # Clamp placement
-│   ├── holes/                    # Mounting holes
-│   ├── labels/                   # Labels
-│   ├── baseplate/                # Baseplate config
-│   └── export/                   # Export functionality
-├── stores/                   # App-specific stores
-│   ├── fixtureStore.ts           # Parts, supports, clamps, labels, holes
-│   ├── cavityStore.ts            # Cavity operations
-│   ├── placementStore.ts         # Placement modes
-│   ├── processingStore.ts        # File processing state
-│   ├── dialogStore.ts            # Modal dialogs
-│   └── index.ts
-├── hooks/                    # Hook wrappers (backward compatibility)
-│   ├── useSelection.ts           # Selection hooks
-│   ├── useWorkflow.ts            # Workflow hooks
-│   ├── useFixture.ts             # Fixture entity hooks
-│   ├── useCavity.ts              # Cavity hooks
-│   ├── usePlacement.ts           # Placement mode hooks
-│   ├── useProcessing.ts          # Processing hooks
-│   ├── useDialogs.ts             # Dialog hooks
-│   ├── useUI.ts                  # UI hooks
-│   ├── useHistory.ts             # Undo/redo hooks
-│   └── index.ts
+├── features/                 # Feature modules (domain logic)
+│   ├── supports/             # Support placement
+│   ├── clamps/               # Clamp placement  
+│   ├── holes/                # Mounting holes
+│   ├── labels/               # Labels
+│   ├── baseplate/            # Baseplate config
+│   └── export/               # Export functionality
+│
+├── stores/                   # App-specific Zustand stores
+│   ├── fixtureStore.ts       # Parts, supports, clamps, labels, holes
+│   ├── cavityStore.ts        # Cavity operations
+│   ├── placementStore.ts     # Placement modes
+│   └── processingStore.ts    # File processing state
+│
+├── hooks/                    # App-level hook wrappers
+│   ├── useSelection.ts       # Selection hooks
+│   ├── useWorkflow.ts        # Workflow hooks
+│   ├── useFixture.ts         # Fixture entity hooks
+│   └── useCavity.ts          # Cavity hooks
+│
 ├── layout/                   # Layout orchestration
-│   └── AppShell.tsx              # Main orchestration (2,132 lines)
-├── components/               # UI components
-│   ├── 3DScene/                  # 3D scene (decomposed)
-│   │   ├── hooks/                    # Scene-specific hooks
-│   │   ├── renderers/                # Render components
-│   │   ├── handlers/                 # Event handlers
-│   │   └── index.ts
-│   ├── 3DScene.tsx               # Main scene (2,404 lines)
-│   ├── ContextOptionsPanel/      # Step panels
-│   ├── ui/                       # shadcn components
-│   └── ...
-├── utils/                    # Utilities
-│   ├── performanceSettings.ts    # Device detection
-│   ├── memoryMonitor.ts          # Memory management
-│   └── ...
-└── main.tsx                  # Entry point
+│   └── AppShell.tsx          # Main orchestration
+│
+├── components/               # UI & 3D components
+│   ├── 3DScene/              # 3D scene (DECOMPOSED)
+│   │   ├── hooks/            # Scene-specific hooks (see below)
+│   │   ├── renderers/        # Render components
+│   │   └── index.ts          # Public API
+│   ├── 3DScene.tsx           # Main scene component
+│   ├── ContextOptionsPanel/  # Workflow step panels
+│   └── ui/                   # shadcn components
+│
+└── utils/                    # Utilities
+    ├── performanceSettings.ts
+    └── memoryMonitor.ts
 ```
 
 ---
 
-## 4. State Management
+## 4. 3DScene Hook Architecture
 
-### Store Architecture (Post Phase 7)
+The 3DScene component is decomposed into specialized hooks following separation of concerns:
+
+### State Hooks (Local State Management)
+
+| Hook | Purpose |
+|------|---------|
+| `useSupportState` | Support placement state (placing, supports, trim preview) |
+| `useClampState` | Clamp placement state (placedClamps, placement mode) |
+| `useLabelState` | Label state (labels, selection, pending config) |
+| `useHoleState` | Hole state (mountingHoles, placement mode, CSG) |
+| `useBaseplateState` | Baseplate config (sections, drawing mode) |
+| `useSceneState` | General scene state (transforms, bounds, CSG previews) |
+
+### Handler Hooks (Event Processing)
+
+| Hook | Purpose |
+|------|---------|
+| `useSupportHandlers` | Support add/update/delete events |
+| `useClampHandlers` | Clamp placement and update events |
+| `useLabelHandlers` | Label add/update/delete events |
+| `useHoleHandlers` | Hole placement and CSG events |
+| `useBaseplateHandlers` | Baseplate creation and modification |
+
+### Operation Hooks (Complex Operations)
+
+| Hook | Purpose |
+|------|---------|
+| `useCavityOperations` | Cavity subtraction CSG operations |
+| `useOffsetMeshPreview` | Heightmap-based offset mesh generation |
+| `useSupportTrimPreview` | Support trim preview generation |
+| `useBaseplateOperations` | Baseplate expansion calculations |
+| `useHoleCSG` | Hole CSG operations on baseplate |
+| `useSceneReset` | Scene reset with Three.js memory cleanup |
+
+### Control Hooks (Camera & Transform)
+
+| Hook | Purpose |
+|------|---------|
+| `useCameraControls` | Camera positioning and orientation |
+| `useModelTransform` | Part transform with live updates |
+| `usePartManagement` | Part bounds and visibility |
+
+### Pattern Example
+
+```typescript
+// In 3DScene.tsx - orchestration only
+const ThreeDScene: React.FC<Props> = (props) => {
+  // 1. State hooks
+  const supportState = useSupportState();
+  const clampState = useClampState();
+  
+  // 2. Handler hooks (wire events)
+  useSupportHandlers({ ...supportState, ...props });
+  useClampHandlers({ ...clampState, ...props });
+  
+  // 3. Operation hooks
+  useCavityOperations({ ... });
+  useSceneReset({ ... });
+  
+  // 4. Render
+  return (
+    <>
+      <SupportsRenderer supports={supportState.supports} />
+      <ClampsRenderer clamps={clampState.placedClamps} />
+    </>
+  );
+};
+```
+
+---
+
+## 5. State Management
+
+### Technology: Zustand + Immer
+
+We use **Zustand** with **Immer middleware** for global state management:
+
+```typescript
+// Standard store creation pattern
+import { create } from 'zustand';
+import { devtools, subscribeWithSelector } from 'zustand/middleware';
+import { immer } from 'zustand/middleware/immer';
+
+export const useFeatureStore = create<FeatureState & FeatureActions>()(
+  devtools(
+    subscribeWithSelector(
+      immer((set, get) => ({
+        // State
+        items: [],
+        selectedId: null,
+        
+        // Actions - Immer allows direct mutation
+        addItem: (item) => set((state) => {
+          state.items.push(item);  // Direct push OK with Immer
+        }),
+        
+        removeItem: (id) => set((state) => {
+          state.items = state.items.filter(i => i.id !== id);
+        }),
+        
+        updateItem: (id, changes) => set((state) => {
+          const item = state.items.find(i => i.id === id);
+          if (item) Object.assign(item, changes);  // Direct assign OK
+        }),
+      }))
+    ),
+    { name: 'feature-store' }  // DevTools name
+  )
+);
+```
+
+### When to Use Global Store vs Local State
+
+| Scenario | Use | Location |
+|----------|-----|----------|
+| **Persisted entity data** (parts, supports, clamps) | Zustand Store | `src/stores/` |
+| **Cross-component selection** | Zustand Store | `selectionStore` |
+| **3D-only transient state** (drag preview, hover) | React useState | 3DScene hooks |
+| **Placement mode flags** | Zustand Store | `placementStore` |
+| **UI-only state** (accordion open, panel visible) | Zustand Store | `uiStore` |
+| **Three.js refs** (meshes, controls) | useRef | Component |
+
+### Store Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -234,7 +291,7 @@ src/
 │ workflowStore     │ Active step, accordion sync                 │
 │ uiStore           │ Theme, panel states, settings               │
 │ historyStore      │ Undo/redo stacks                            │
-│ transformStore    │ Transform mode (translate/rotate/scale)     │
+│ transformStore    │ Active transform mode (translate/rotate)    │
 └─────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────┐
@@ -245,16 +302,16 @@ src/
 │ cavityStore       │ Cavity settings, processing state           │
 │ placementStore    │ Support/hole/baseplate placement modes      │
 │ processingStore   │ File processing, mesh analysis              │
-│ dialogStore       │ Units dialog, optimization dialog           │
+│ dialogStore       │ Modal dialogs state                         │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
 ### Hook Wrapper Pattern
 
-All stores expose backward-compatible hooks:
+Stores expose backward-compatible hooks:
 
 ```typescript
-// Example: useSelection hooks
+// In src/hooks/useSelection.ts
 export function useSelectedPart() {
   const partId = useSelectionStore(state => state.selectedIds.part);
   const select = useSelectionStore(state => state.select);
@@ -266,38 +323,34 @@ export function useSelectedPart() {
   return [partId, setSelectedPartId] as const;
 }
 
-// Usage (same as old useState pattern)
+// Usage - same interface as useState
 const [selectedPartId, setSelectedPartId] = useSelectedPart();
 ```
 
-### Custom Events Still in Use
+### Custom Events (Cross-Boundary Communication)
 
-These events remain for 3D scene operations:
+These events remain for operations spanning component boundaries:
 
-| Event | Purpose | Location |
-|-------|---------|----------|
+| Event | Purpose | Direction |
+|-------|---------|-----------|
 | `generate-offset-mesh-preview` | Trigger cavity preview | AppShell → 3DScene |
 | `execute-cavity-subtraction` | Apply cavity to baseplate | AppShell → 3DScene |
 | `export-fixture` | Export merged mesh | AppShell → 3DScene |
-| `hole-start-placement` | Start hole placement mode | AppShell → 3DScene |
 | `viewer-reset` | Reset viewer state | Utils → 3DScene |
 | `session-reset` | Reset entire session | Utils → All |
-| `model-transform-updated` | Part position changed | 3DScene → Panels |
-
-**Note:** These are intentional cross-boundary events, not state management issues.
 
 ---
 
-## 5. Critical Systems
+## 6. Critical Systems
 
 ### ⚠️ DO NOT MODIFY WITHOUT UNDERSTANDING
 
-#### 5.1 Coordinate System Transform
+#### 6.1 Coordinate System Transform
 
 **Problem:** CAD uses Z-up, Three.js uses Y-up.
 
 ```typescript
-// CRITICAL: packages/cad-core/src/transform/coordinateUtils.ts
+// packages/cad-core/src/transform/coordinateUtils.ts
 export const toCadPosition = (position) => ({
   x: position.x,
   y: position.z,  // CAD Y = Three.js Z
@@ -311,7 +364,7 @@ export const toCadPosition = (position) => ({
 | Y | Z | Depth |
 | Z | Y | Vertical |
 
-#### 5.2 Euler Order for Rotation
+#### 6.2 Euler Order for Rotation
 
 ```typescript
 // ✅ CORRECT - Use YXZ for clean Y-axis extraction
@@ -319,13 +372,13 @@ tempEuler.setFromQuaternion(quaternion, 'YXZ');
 const spin = tempEuler.y;
 
 // ❌ WRONG - Default order pollutes Y
-tempEuler.setFromQuaternion(quaternion);  // Don't do this!
+tempEuler.setFromQuaternion(quaternion);
 ```
 
-#### 5.3 Transform Anti-Jitter Pattern
+#### 6.3 Transform Anti-Jitter Pattern
 
 ```typescript
-// In all transform controls
+// Required in all transform controls
 const isDraggingRef = useRef(false);
 const dragStartPos = useRef<THREE.Vector3 | null>(null);
 
@@ -345,14 +398,7 @@ const handleDragEnd = () => {
 };
 ```
 
-#### 5.4 Hole CSG Penetration
-
-```typescript
-// CRITICAL: Holes must fully penetrate baseplate
-const PENETRATION_BUFFER = 4;  // mm - extends hole beyond surfaces
-```
-
-#### 5.5 Immer Frozen State
+#### 6.4 Immer Frozen State
 
 Zustand with Immer produces **frozen state**. Never mutate directly:
 
@@ -366,262 +412,94 @@ mutableUpdates.position = { ...mutableUpdates.position };
 mutableUpdates.position.y = newValue;
 ```
 
----
+#### 6.5 Three.js Memory Management
 
-## 6. Production Readiness Gaps
-
-### 🔴 High Priority
-
-| Gap | Impact | Effort | Solution |
-|-----|--------|--------|----------|
-| **Large Files** | Maintainability | High | Decompose 3DScene.tsx (2,404 lines), AppShell.tsx (2,132 lines) |
-| **Console Logs** | Debug noise in prod | Low | Replace with proper logging service |
-| **Error Boundaries** | User sees crashes | Medium | Add React error boundaries around 3D canvas |
-| **No Unit Tests** | Regression risk | High | Add Vitest tests for critical paths |
-
-### 🟡 Medium Priority
-
-| Gap | Impact | Effort | Solution |
-|-----|--------|--------|----------|
-| **TODO Comments** | Incomplete features | Medium | Complete or remove (12 TODOs found) |
-| **Memory Leaks** | Performance degradation | Medium | Implement cleanup in geometry disposal |
-| **No E2E Tests** | Integration risk | High | Add Playwright tests for workflow |
-| **Bundle Size** | Load time | Medium | Analyze and optimize chunks |
-
-### 🟢 Low Priority
-
-| Gap | Impact | Effort | Solution |
-|-----|--------|--------|----------|
-| **Duplicate Utils** | Code bloat | Low | Consolidate transform utilities |
-| **Stub Code** | Confusion | Low | Remove replicad/, unused components |
-| **Type Coverage** | Type safety | Medium | Enable stricter TypeScript |
-
----
-
-## 7. Refactoring Roadmap
-
-### Completed Phases
-
-| Phase | Description | Status |
-|-------|-------------|--------|
-| **7.0** | Install Zustand | ✅ Done |
-| **7.1** | Selection Store | ✅ Done |
-| **7.2** | Workflow Store | ✅ Done |
-| **7.3** | Transform Store | ✅ Done |
-| **7.4** | UI Store | ✅ Done |
-| **7.5** | Store Exports | ✅ Done |
-| **7.6** | AppShell Migration | ✅ Done (46 useState → hooks) |
-
-### Remaining Phases
-
-#### Phase 8: Component Decomposition (Recommended Next)
-
-**Goal:** Reduce 3DScene.tsx from 2,404 lines to ~500 lines
-
-```
-3DScene.tsx (2,404 lines)
-    ↓ Extract
-├── hooks/
-│   ├── useViewer.ts         (existing, 831 lines)
-│   ├── useCavityOps.ts      (existing, 1,035 lines)
-│   ├── useBaseplateOps.ts   (existing, 822 lines)
-│   ├── useClampHandlers.ts  (existing)
-│   └── useSceneEvents.ts    (new - event handlers)
-├── renderers/
-│   ├── PartRenderer.tsx     (new)
-│   ├── SupportRenderer.tsx  (new)
-│   ├── ClampRenderer.tsx    (new)
-│   ├── HoleRenderer.tsx     (new)
-│   └── BaseplateRenderer.tsx (new)
-└── 3DScene.tsx (~500 lines - orchestration only)
-```
-
-**Effort:** 6-8 hours  
-**Risk:** HIGH - requires careful testing
-
-#### Phase 9: Event System Cleanup
-
-**Goal:** Replace remaining custom events with store actions where possible
-
-**Keep:** Cross-boundary 3D operations (cavity, export)  
-**Replace:** UI-to-UI communication events
-
-**Effort:** 4-6 hours  
-**Risk:** MEDIUM
-
-#### Phase 10: Testing Infrastructure
-
-**Goal:** Establish testing foundation
-
-1. Unit tests for cad-core (Vitest)
-2. Component tests for cad-ui (React Testing Library)
-3. E2E tests for workflows (Playwright)
-
-**Effort:** 8-12 hours  
-**Risk:** LOW
-
-#### Phase 11: Production Hardening
-
-1. Error boundaries
-2. Logging service
-3. Performance monitoring
-4. Bundle optimization
-
-**Effort:** 6-8 hours  
-**Risk:** LOW
-
----
-
-## 8. Development Guidelines
-
-### Adding New Features
-
-1. **Create feature module** in `src/features/{feature-name}/`
-2. **Add store slice** if needed in `src/stores/`
-3. **Create hook wrappers** in `src/hooks/`
-4. **Add to workflow** in ContextOptionsPanel
-
-```
-src/features/new-feature/
-├── components/
-│   └── NewFeaturePanel.tsx
-├── hooks/
-│   └── useNewFeature.ts
-├── utils/
-│   └── newFeatureUtils.ts
-├── types.ts
-└── index.ts
-```
-
-### Modifying State
-
-1. **Update store** in `src/stores/` or `packages/cad-ui/src/stores/`
-2. **Update hook wrapper** to maintain backward compatibility
-3. **Test:** Ensure no frozen state mutations
-
-### Working with 3D Scene
-
-1. **Read 09_CRITICAL_SYSTEMS.md** before any transform work
-2. **Use coordinate transforms** for CAD ↔ Three.js
-3. **Implement anti-jitter pattern** for any new transform controls
-4. **Test with complex models** - not just simple cubes
-
-### Code Quality Standards
+Always dispose geometries and materials when removing objects:
 
 ```typescript
-// ✅ DO: Use typed hooks
-const [partId, setPartId] = useSelectedPart();
-
-// ❌ DON'T: Access store directly in components
-const partId = useSelectionStore.getState().selectedIds.part;
-
-// ✅ DO: Handle loading/error states
-if (isProcessing) return <LoadingSpinner />;
-if (error) return <ErrorMessage error={error} />;
-
-// ❌ DON'T: Leave console.logs in production code
-console.log('Debug:', value);  // Remove before commit
+// In useSceneReset.ts - proper cleanup pattern
+setMergedFixtureMesh(prev => {
+  if (prev) {
+    prev.geometry?.dispose();
+    if (Array.isArray(prev.material)) {
+      prev.material.forEach(m => m.dispose());
+    } else {
+      prev.material?.dispose();
+    }
+  }
+  return null;
+});
 ```
 
 ---
 
-## 9. File Reference
+## 7. File Reference
 
 ### Critical Files (Handle with Care)
 
-| File | Lines | Purpose | Risk Level |
-|------|-------|---------|------------|
-| [src/components/3DScene.tsx](../src/components/3DScene.tsx) | 2,404 | Main 3D scene | 🔴 HIGH |
-| [src/layout/AppShell.tsx](../src/layout/AppShell.tsx) | 2,132 | App orchestration | 🔴 HIGH |
-| [packages/cad-core/src/mesh/meshAnalysis.ts](../packages/cad-core/src/mesh/meshAnalysis.ts) | 3,295 | Mesh processing | 🔴 HIGH |
-| [packages/cad-core/src/offset/offsetHeightmap.ts](../packages/cad-core/src/offset/offsetHeightmap.ts) | 1,180 | Cavity generation | 🟡 MED |
+| File | Lines | Purpose | Risk |
+|------|-------|---------|------|
+| `src/components/3DScene.tsx` | ~2,400 | Main 3D scene | 🔴 HIGH |
+| `src/layout/AppShell.tsx` | ~2,100 | App orchestration | 🔴 HIGH |
+| `packages/cad-core/src/mesh/meshAnalysis.ts` | ~3,300 | Mesh processing | 🔴 HIGH |
+| `packages/cad-core/src/offset/offsetHeightmap.ts` | ~1,200 | Cavity generation | 🔴 HIGH |
 
-### Store Files
-
-| File | Purpose |
-|------|---------|
-| [src/stores/fixtureStore.ts](../src/stores/fixtureStore.ts) | Parts, supports, clamps, labels, holes |
-| [src/stores/cavityStore.ts](../src/stores/cavityStore.ts) | Cavity operations |
-| [src/stores/placementStore.ts](../src/stores/placementStore.ts) | Placement modes |
-| [packages/cad-ui/src/stores/selectionStore.ts](../packages/cad-ui/src/stores/selectionStore.ts) | Selection state |
-| [packages/cad-ui/src/stores/workflowStore.ts](../packages/cad-ui/src/stores/workflowStore.ts) | Workflow steps |
-
-### Hook Files
+### 3DScene Hooks
 
 | File | Purpose |
 |------|---------|
-| [src/hooks/useSelection.ts](../src/hooks/useSelection.ts) | Selection hooks |
-| [src/hooks/useWorkflow.ts](../src/hooks/useWorkflow.ts) | Workflow hooks |
-| [src/hooks/useFixture.ts](../src/hooks/useFixture.ts) | Fixture entity hooks |
-| [src/hooks/useCavity.ts](../src/hooks/useCavity.ts) | Cavity hooks |
+| `src/components/3DScene/hooks/useSupportState.ts` | Support state |
+| `src/components/3DScene/hooks/useClampState.ts` | Clamp state |
+| `src/components/3DScene/hooks/useLabelState.ts` | Label state |
+| `src/components/3DScene/hooks/useHoleState.ts` | Hole state |
+| `src/components/3DScene/hooks/useBaseplateState.ts` | Baseplate state |
+| `src/components/3DScene/hooks/useSceneState.ts` | Scene state |
+| `src/components/3DScene/hooks/useSceneReset.ts` | Reset & cleanup |
+| `src/components/3DScene/hooks/useCavityOperations.ts` | Cavity CSG |
+| `src/components/3DScene/hooks/useOffsetMeshPreview.ts` | Offset preview |
 
 ### Feature Modules
 
 | Directory | Purpose |
 |-----------|---------|
-| [src/features/supports/](../src/features/supports/) | Support placement |
-| [src/features/clamps/](../src/features/clamps/) | Clamp placement |
-| [src/features/holes/](../src/features/holes/) | Mounting holes |
-| [src/features/labels/](../src/features/labels/) | Label system |
-| [src/features/export/](../src/features/export/) | Export functionality |
+| `src/features/supports/` | Support placement logic |
+| `src/features/clamps/` | Clamp placement logic |
+| `src/features/holes/` | Mounting hole logic |
+| `src/features/labels/` | Label system |
+| `src/features/baseplate/` | Baseplate configuration |
+| `src/features/export/` | Export functionality |
 
 ---
 
-## Appendix A: Event Reference
+## 8. Appendix: Type Definitions
 
-### Events Dispatched
-
-| Event Name | Payload | From → To |
-|------------|---------|-----------|
-| `generate-offset-mesh-preview` | `{ settings: CavitySettings }` | AppShell → 3DScene |
-| `clear-offset-mesh-preview` | none | AppShell → 3DScene |
-| `execute-cavity-subtraction` | `{ settings: CavitySettings }` | AppShell → 3DScene |
-| `reset-cavity` | none | AppShell → 3DScene |
-| `export-fixture` | `{ config: ExportConfig }` | AppShell → 3DScene |
-| `hole-start-placement` | `{ config: HoleConfig }` | AppShell → 3DScene |
-| `hole-cancel-placement` | none | AppShell → 3DScene |
-| `holes-updated` | `MountingHole[]` | AppShell → 3DScene |
-| `viewer-reset` | none | Utils → 3DScene |
-| `session-reset` | none | Utils → All |
-| `viewer-undo` | state | AppShell → 3DScene |
-| `viewer-redo` | state | AppShell → 3DScene |
-| `model-transform-updated` | transform | 3DScene → Panels |
-| `baseplate-drawing-mode-changed` | mode | AppShell → 3DScene |
-| `part-imported` | ProcessedFile | AppShell → 3DScene |
-
----
-
-## Appendix B: Type Definitions
-
-### Core Types (from cad-core)
+### Core Types
 
 ```typescript
 // CavitySettings - packages/cad-core/src/offset/types.ts
 interface CavitySettings {
   enabled: boolean;
-  offsetDistance: number;
+  offsetDistance: number;      // Clearance (0 = exact fit)
   pixelsPerUnit: number;
   rotationXZ: number;
   rotationYZ: number;
   fillHoles: boolean;
   showPreview: boolean;
-  previewOpacity: number;
-  enableDecimation: boolean;
-  enableSmoothing: boolean;
-  smoothingStrength: number;
-  smoothingIterations: number;
-  smoothingQuality: boolean;
-  debugSmoothingColors: boolean;
-  csgMinVolume: number;
-  csgMinThickness: number;
-  csgMinTriangles: number;
+}
+
+// BasePlateConfig - src/features/baseplate/types.ts
+interface BasePlateConfig {
+  type: 'single' | 'multi-section';
+  dimensions: { width: number; height: number; depth: number };
+  padding: number;
+  sections?: BasePlateSection[];
 }
 ```
 
-### Store Types (from stores)
+### Selection Types
 
 ```typescript
-// Selection - packages/cad-ui/src/stores/selectionStore.ts
+// packages/cad-ui/src/stores/selectionStore.ts
 interface SelectionState {
   selectedIds: {
     part: string | null;
@@ -631,43 +509,8 @@ interface SelectionState {
     hole: string | null;
     baseplate: string | null;
   };
-  transformTarget: { category: string; id: string } | null;
-}
-
-// Workflow - packages/cad-ui/src/stores/workflowStore.ts
-interface WorkflowState {
-  activeStep: WorkflowStep | null;
-  activeAccordion: string | null;
 }
 ```
-
----
-
-## Appendix C: AI Agent Instructions
-
-### When Modifying This Codebase
-
-1. **Read this document first** - especially Critical Systems section
-2. **Check file size** before editing - files >500 lines may need decomposition
-3. **Use hook wrappers** - don't access stores directly in components
-4. **Test coordinate transforms** - CAD uses Z-up, Three.js uses Y-up
-5. **Create mutable copies** before modifying objects from Zustand state
-6. **Run build** after changes: `npm run build`
-
-### Priority Order for Improvements
-
-1. Fix any runtime errors (immediate)
-2. Address TypeScript errors (immediate)
-3. Remove console.logs (low effort)
-4. Complete TODO items or remove them
-5. Decompose large files (when safe)
-6. Add tests (before major refactors)
-
-### Files to Avoid Major Changes
-
-- `meshAnalysis.ts` - Core mesh processing, well-tested
-- `offsetHeightmap.ts` - Cavity algorithm, complex
-- Any file in `packages/cad-core/src/workers/` - Worker communication
 
 ---
 

@@ -248,4 +248,4 @@ rotation.y = THREE.MathUtils.radToDeg(tempEuler.y);
 
 ---
 
-*Last updated: December 2024*
+*Last updated: January 2026*
