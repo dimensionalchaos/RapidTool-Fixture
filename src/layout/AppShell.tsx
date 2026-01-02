@@ -6,6 +6,7 @@ import { ThemeToggle } from "@/components/ThemeToggle";
 import ViewCube from "@/components/ViewCube";
 import VerticalToolbar from "@/components/VerticalToolbar";
 import ThreeDViewer from "@/components/3DViewer";
+import AccountSettings from "@/components/AccountSettings";
 
 import PartPropertiesAccordion from "@/components/PartPropertiesAccordion";
 import ContextOptionsPanel, { WorkflowStep, WORKFLOW_STEPS } from "@/components/ContextOptionsPanel";
@@ -138,6 +139,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
     // UI State
     const [isContextPanelCollapsed, setIsContextPanelCollapsed] = useState(false);
     const [isPropertiesCollapsed, setIsPropertiesCollapsed] = useState(false);
+    const [isAccountSettingsOpen, setIsAccountSettingsOpen] = useState(false);
     const [undoStack, setUndoStack] = useState<any[]>([]);
     const [redoStack, setRedoStack] = useState<any[]>([]);
     const [currentBaseplate, setCurrentBaseplate] = useState<{ id: string; type: string; padding?: number; height?: number; depth?: number; sections?: Array<{ id: string; minX: number; maxX: number; minZ: number; maxZ: number }> } | null>(null);
@@ -1571,8 +1573,12 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
         {/* Main Content */}
         <div className="flex-1 flex overflow-hidden">
           {/* Left Static Vertical Toolbar */}
-          <aside className="w-14 flex-shrink-0 border-r border-border/50 tech-glass flex flex-col justify-center">
-            <VerticalToolbar onToolSelect={handleToolSelect} activeTool={activeStep} />
+          <aside className="w-14 flex-shrink-0 border-r border-border/50 tech-glass">
+            <VerticalToolbar 
+              onToolSelect={handleToolSelect} 
+              activeTool={activeStep}
+              onAccountClick={() => setIsAccountSettingsOpen(true)}
+            />
           </aside>
 
           {/* Collapsible Context Options Panel */}
@@ -1986,6 +1992,13 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
           onCancel={handleCancelOptimization}
           processingResult={processingResult}
           onConfirmResult={handleConfirmProcessingResult}
+        />
+
+        {/* Account Settings Dialog */}
+        <AccountSettings
+          open={isAccountSettingsOpen}
+          onOpenChange={setIsAccountSettingsOpen}
+          onLogout={onLogout}
         />
       </div>
     );
