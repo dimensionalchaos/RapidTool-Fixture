@@ -16,7 +16,7 @@ import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { RotateCcw, Move, RotateCw, Trash2, ArrowDownToLine, Eye, EyeOff } from 'lucide-react';
 import { ProcessedFile } from '@/modules/FileImport/types';
-import PartThumbnail from './PartThumbnail';
+import { PartThumbnail } from '@rapidtool/cad-ui';
 import { IconButton } from '@/components/ui/icon-button';
 import { cn } from '@/lib/utils';
 

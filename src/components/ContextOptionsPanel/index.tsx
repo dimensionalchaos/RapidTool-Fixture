@@ -101,7 +101,7 @@ const WORKFLOW_STEPS: StepConfig[] = [
     helpText: [
       'Add version numbers and identifiers',
       'Position labels on visible surfaces',
-      'Emboss or deboss text as needed'
+      'Embossed text for clear marking'
     ],
     isOptional: true
   },

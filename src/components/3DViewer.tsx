@@ -9,7 +9,7 @@ import {
   getPerformanceSettings, 
   PerformanceSettings 
 } from '@/utils/performanceSettings';
-import NavigationTooltip from './NavigationTooltip';
+import { NavigationHelp } from '@rapidtool/cad-ui';
 
 interface ThreeDViewerProps {
   currentFile: ProcessedFile | null;
@@ -188,7 +188,7 @@ const ThreeDViewer: React.FC<ThreeDViewerProps> = ({
       )}
 
       {/* Navigation help tooltip */}
-      <NavigationTooltip />
+      <NavigationHelp storageKey="fixture-view-nav-tooltip-dismissed" />
     </div>
   );
 };
