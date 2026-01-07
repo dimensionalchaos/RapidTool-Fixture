@@ -70,7 +70,7 @@ export default defineConfig(({ mode }) => ({
   assetsInclude: ['**/*.wasm'],
   build: {
     // Disable source maps in production for security
-    sourcemap: mode !== "production",
+    sourcemap: false,
     rollupOptions: {
       output: {
         manualChunks: {

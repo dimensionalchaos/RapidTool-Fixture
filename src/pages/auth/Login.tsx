@@ -60,7 +60,7 @@ export default function Login() {
 
     try {
       await login(formData.email, formData.password);
-      navigate('/');
+      navigate('/portal');
     } catch (err) {
       console.error('Login error:', err);
     }
@@ -85,7 +85,7 @@ export default function Login() {
         <CardHeader className="space-y-1">
           <CardTitle className="text-2xl font-bold text-center">Welcome Back</CardTitle>
           <CardDescription className="text-center">
-            Sign in to your RapidTool-Fixture account
+            Sign in to your RapidTool account
           </CardDescription>
         </CardHeader>
         
