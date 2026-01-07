@@ -103,18 +103,24 @@ export async function register(req: Request, res: Response): Promise<void> {
  */
 export async function login(req: Request, res: Response): Promise<void> {
   try {
+    console.log('[Login] Request received for:', req.body.email);
+    
     // Validate request body
     const validatedData = loginSchema.parse(req.body);
+    console.log('[Login] Validation passed');
 
     // Get IP address for audit logging
     const ipAddress = req.ip || req.socket.remoteAddress;
+    console.log('[Login] IP address:', ipAddress);
 
     // Login user
+    console.log('[Login] Calling loginUser service...');
     const { user, tokens } = await loginUser(
       validatedData.email,
       validatedData.password,
       ipAddress
     );
+    console.log('[Login] loginUser service completed successfully');
 
     // Set refresh token in HttpOnly cookie
     res.cookie(
@@ -160,9 +166,11 @@ export async function login(req: Request, res: Response): Promise<void> {
     }
 
     console.error('Login error:', error);
+    console.error('Login error stack:', error instanceof Error ? error.stack : 'No stack trace');
     res.status(500).json({
       success: false,
       error: 'Login failed',
+      details: process.env.NODE_ENV === 'development' ? (error instanceof Error ? error.message : String(error)) : undefined,
     });
   }
 }
