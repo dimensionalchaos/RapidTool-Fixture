@@ -16,6 +16,10 @@ import FileImport from './modules/FileImport';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { ProcessedFile } from './modules/FileImport/types';
 
+// --- NEW IMPORTS ---
+import MainPortal from './pages/MainPortal';
+import { MainLayout } from './layout/MainLayout';
+
 const queryClient = new QueryClient();
 
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
@@ -47,17 +51,13 @@ const MainApp = () => {
 
   useEffect(() => {
     console.log('[MainApp] Component mounted, checking authentication');
-    // Only fetch user once on mount if authenticated
     if (isAuthenticated) {
       console.log('[MainApp] User is authenticated, fetching user data');
       fetchCurrentUser().catch((error) => {
         console.error('[MainApp] Failed to fetch user:', error);
-        // Don't block the app if user fetch fails
-        // User is already authenticated via token
       });
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Empty dependency array - only run once on mount
+  }, []);
 
   useEffect(() => {
     const handleSessionReset = () => {
@@ -119,19 +119,37 @@ const App = () => {
             <Toaster />
             <Sonner />
             <Routes>
+              {/* Public Routes */}
               <Route path="/auth/login" element={<LoginPage />} />
               <Route path="/auth/register" element={<RegisterPage />} />
               <Route path="/auth/forgot-password" element={<ForgotPasswordPage />} />
               <Route path="/auth/verify" element={<VerifyEmailPage />} />
               <Route path="/auth/reset-password" element={<ResetPasswordPage />} />
+              
+              {/* --- UPDATED ROOT ROUTE --- */}
+              <Route 
+                path="/" 
+                element={
+                  <ProtectedRoute>
+                    <MainLayout>
+                      <MainPortal />
+                    </MainLayout>
+                  </ProtectedRoute>
+                } 
+              />
+
+              {/* --- EXISTING FIXTURE ROUTE (UNTOUCHED) --- */}
               <Route
-                path="/*"
+                path="/app/fixture"
                 element={
                   <ProtectedRoute>
                     <MainApp />
                   </ProtectedRoute>
                 }
               />
+
+              {/* Catch-all: Redirect back to Portal if logged in, else login page handles itself */}
+              <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </TooltipProvider>
         </ThemeProvider>

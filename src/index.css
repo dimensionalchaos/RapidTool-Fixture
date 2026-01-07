@@ -10,6 +10,13 @@
   font-style: normal;
   font-display: swap;
 }
+@font-face {
+  font-family: 'RealityHyper';
+  src: url('/fonts/realityhyper/RealityHyperRegular.ttf') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
 
 /* Force show number input spinners - must be outside @layer to override Tailwind preflight */
 /* Ensure number inputs have minimum height for spin buttons */
