@@ -6,7 +6,6 @@ import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
 import authRoutes from './routes/auth.routes';
 import { validateAuthConfig } from './config/auth.config';
-import supportRouter from './services/mesh.service';  // adjust path if different
 
 dotenv.config();
 
@@ -14,7 +13,7 @@ dotenv.config();
 validateAuthConfig();
 
 const app = express();
-app.use('/meesh',supportRouter);
+
 // Security middleware
 app.use(helmet());
 app.use(cors({ 

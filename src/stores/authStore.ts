@@ -22,14 +22,10 @@ const hasValidToken = () => {
   const token = localStorage.getItem('accessToken');
   if (!token) return false;
   
-  // Check if token is not a dummy token
   if (token.startsWith('dummy-token-')) {
-    // Dummy tokens are only valid for current session
     return true;
   }
   
-  // For real tokens, we should validate them
-  // For now, just check if they exist
   return true;
 };
 
@@ -53,7 +49,6 @@ export const useAuthStore = create<AuthState>((set) => ({
       set({ isLoading: true, error: null });
       
       try {
-        // Try backend authentication first
         console.log('[AuthStore] Attempting backend authentication...');
         const response = await authAPI.login({ email, password });
         console.log('[AuthStore] Backend login successful:', response);
@@ -64,14 +59,24 @@ export const useAuthStore = create<AuthState>((set) => ({
         });
         console.log('[AuthStore] Auth state updated - isAuthenticated: true');
       } catch (backendError: any) {
-        // If backend is unavailable, use simple client-side auth for development
-        console.warn('[AuthStore] Backend unavailable, using client-side auth');
+        // --- MODIFIED SECTION START ---
         
-        // Simple validation - just check if email and password are provided
+        // Extract the error message from the backend response if it exists
+        const serverErrorMessage = backendError.response?.data?.error || backendError.message;
+        const statusCode = backendError.response?.status;
+
+        // If the backend actually responded with 401 (Unauthorized) or 400, it's a credential issue
+        if (statusCode === 401 || statusCode === 400 || statusCode === 403) {
+          alert(`Login Failed: ${serverErrorMessage}`);
+          throw new Error(serverErrorMessage); 
+        }
+
+        // If we get here, the backend is likely unreachable (Network Error)
+        console.warn('[AuthStore] Backend unavailable, using client-side auth fallback');
+        alert(`Backend unreachable (${serverErrorMessage}). Entering Development Guest Mode.`);
+        
         if (email && password) {
-          // Store a dummy token to mark as authenticated
           localStorage.setItem('accessToken', 'dummy-token-' + Date.now());
-          console.log('[AuthStore] Client-side auth successful, token stored');
           set({ 
             user: { 
               id: 'local-user',
@@ -81,10 +86,10 @@ export const useAuthStore = create<AuthState>((set) => ({
             isAuthenticated: true, 
             isLoading: false 
           });
-          console.log('[AuthStore] Auth state updated - isAuthenticated: true (client-side)');
         } else {
           throw new Error('Email and password required');
         }
+        // --- MODIFIED SECTION END ---
       }
     } catch (error: any) {
       console.error('[AuthStore] Login failed:', error);
@@ -133,15 +138,12 @@ export const useAuthStore = create<AuthState>((set) => ({
 
   fetchCurrentUser: async () => {
     try {
-      // Don't set isLoading to prevent infinite render loops
       const user = await authAPI.getCurrentUser();
       set({ 
         user, 
         isAuthenticated: true
       });
     } catch (error: any) {
-      // Don't log user out if fetch fails - they may still have valid token
-      // Silently fail to prevent blocking the app
       console.warn('[AuthStore] Failed to fetch current user:', error.message);
     }
   },
