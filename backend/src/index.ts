@@ -7,7 +7,6 @@ import dotenv from 'dotenv';
 import authRoutes from './routes/auth.routes';
 import { validateAuthConfig } from './config/auth.config';
 
-
 dotenv.config();
 
 // Validate auth configuration in production
