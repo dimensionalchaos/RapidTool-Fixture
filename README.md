@@ -167,4 +167,4 @@ This is a proprietary project. For questions or support, please contact the deve
 
 ---
 
-**Built with ❤️ by the RapidTool Team**
+**Built with ❤️ by the Fracktal Works Team**
