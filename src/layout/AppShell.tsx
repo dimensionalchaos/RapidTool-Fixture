@@ -843,7 +843,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
     // Handle step change from context panel or toolbar
     const handleStepChange = useCallback((step: WorkflowStep) => {
       // Log memory at step transitions for debugging
-      logMemoryUsage(`Step change: ${activeStep} → ${step}`);
+      //logMemoryUsage(`Step change: ${activeStep} → ${step}`);
       
       setActiveStep(step);
       
@@ -886,10 +886,10 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
 
     const handleResetSession = () => {
       // Log memory before reset
-      logMemoryUsage('Session reset - before');
+      //logMemoryUsage('Session reset - before');
       
       // Terminate all workers to free memory
-      terminateWorkers();
+      //terminateWorkers();
       
       // Reset all session state - like starting fresh
       setProjectName('Untitled');
@@ -917,7 +917,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
       window.dispatchEvent(new Event('supports-cancel-placement'));
       
       // Log memory after reset (delayed to allow GC)
-      setTimeout(() => logMemoryUsage('Session reset - after (delayed)'), 1000);
+      //setTimeout(() => logMemoryUsage('Session reset - after (delayed)'), 1000);
     };
 
     const handleSetOrientation = (orientation: string) => {
