@@ -102,9 +102,11 @@ export async function register(req: Request, res: Response): Promise<void> {
  * Login with email and password
  */
 export async function login(req: Request, res: Response): Promise<void> {
+  console.log('Login request received');
   try {
     // Validate request body
     const validatedData = loginSchema.parse(req.body);
+    console.log('Validated login data:', validatedData);
 
     // Get IP address for audit logging
     const ipAddress = req.ip || req.socket.remoteAddress;
@@ -114,7 +116,7 @@ export async function login(req: Request, res: Response): Promise<void> {
       validatedData.email,
       validatedData.password,
       ipAddress
-    );
+    );   
 
     // Set refresh token in HttpOnly cookie
     res.cookie(
@@ -129,6 +131,7 @@ export async function login(req: Request, res: Response): Promise<void> {
       data: {
         user: {
           id: user.id,
+          name:user.name,
           email: user.email,
           emailVerified: user.emailVerified,
         },

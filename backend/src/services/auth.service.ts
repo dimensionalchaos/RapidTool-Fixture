@@ -16,6 +16,7 @@ import {
 } from '../utils/jwt.util';
 import { authConfig } from '../config/auth.config';
 import { sendVerificationEmail, sendPasswordResetEmail, sendWelcomeEmail } from './email.service';
+import { CONNREFUSED } from 'dns';
 
 const prisma = new PrismaClient();
 
@@ -29,6 +30,7 @@ export interface UserResponse {
   email: string;
   emailVerified: boolean;
   createdAt: Date;
+  name?: string;
 }
 
 /**
@@ -93,10 +95,12 @@ export async function loginUser(
   tokens: AuthTokens;
 }> {
   // Find user
+  
+  const emailLower = email.toLowerCase();
   const user = await prisma.user.findUnique({
-    where: { email },
+    where: { email: emailLower },
   });
-
+  console.log("This is the user object:", user)
   if (!user) {
     throw new Error('Invalid email or password');
   }
@@ -175,6 +179,7 @@ export async function loginUser(
     user: {
       id: user.id,
       email: user.email,
+      name: user.name,
       emailVerified: user.emailVerified,
       createdAt: user.createdAt,
     },
