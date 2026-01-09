@@ -1,5 +1,7 @@
 import React from 'react';
+import { useAuthStore } from "@/stores/authStore"; 
 import { useNavigate } from 'react-router-dom';
+import  { useEffect } from 'react'; 
 import { 
   Calculator, Database, BarChart3, ExternalLink, ShieldCheck 
 } from 'lucide-react';
@@ -18,7 +20,14 @@ export interface Tool {
 
 const MainPortal: React.FC = () => {
   const navigate = useNavigate();
-
+  const { user, fetchCurrentUser } = useAuthStore(); // Add fetchCurrentUser here
+  const displayName = user?.name ? user.name.split(' ')[0] : "User";
+  useEffect(() => {
+  // If user is empty (which happens on refresh), go get the data
+  if (!user) {
+    fetchCurrentUser();
+  }
+}, [user, fetchCurrentUser]);
   const tools: Tool[] = [
     {
       id: '1',
@@ -49,7 +58,7 @@ const MainPortal: React.FC = () => {
       {/* Header Section */}
       <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-8 gap-6">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight mb-0.5">Welcome back, Raja</h1>
+          <h1 className="text-3xl font-bold tracking-tight mb-0.5">Welcome back, {displayName}</h1>
           <p className="text-muted-foreground text-sm font-medium">Pro Plan · Active</p>
         </div>
 
