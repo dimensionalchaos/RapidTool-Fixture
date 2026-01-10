@@ -55,7 +55,9 @@ export async function register(req: Request, res: Response): Promise<void> {
     const { user, verificationToken } = await registerUser(
       validatedData.email,
       validatedData.password,
-      validatedData.name
+      validatedData.name,
+      validatedData.phoneNumber,
+      validatedData.organization
     );
 
     // Verification email sent via email service

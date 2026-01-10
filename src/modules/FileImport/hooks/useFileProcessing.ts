@@ -9,6 +9,8 @@ import { useState, useCallback } from 'react';
 import * as THREE from 'three';
 import { ProcessedFile, FileMetadata, SUPPORTED_FORMATS } from '../types';
 import { parseSTL, validateSTLBuffer } from '@rapidtool/cad-core';
+import { modelImportAPI } from '@/services/api/modelImport';
+import { useAuthStore } from '@/stores/authStore';
 
 // ============================================================================
 // Types
@@ -110,6 +112,7 @@ function createMaterial(): THREE.MeshStandardMaterial {
 export function useFileProcessing(): UseFileProcessingReturn {
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { user } = useAuthStore();
 
   const clearError = useCallback(() => setError(null), []);
 
@@ -173,6 +176,26 @@ export function useFileProcessing(): UseFileProcessingReturn {
       // Generate unique ID for multi-part support
       const id = `part-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
       
+      // Upload to backend if user is authenticated
+      if (user) {
+        try {
+          console.log('[useFileProcessing] Uploading to backend...');
+          const projectId = 'default-project'; // TODO: Get actual project ID from context
+          const importResult = await modelImportAPI.uploadModel(file, projectId);
+          console.log('[useFileProcessing] Upload successful:', importResult);
+          
+          // Store import ID in metadata for future reference
+          metadata.importId = importResult.importId;
+        } catch (uploadError) {
+          console.error('[useFileProcessing] Backend upload failed:', uploadError);
+          // Don't fail the entire operation if backend upload fails
+          // The file is still processed locally
+          if (uploadError instanceof Error && uploadError.message.includes('MODEL_LIMIT_REACHED')) {
+            throw new Error('You have reached your free tier limit of 5 models. Please upgrade to continue.');
+          }
+        }
+      }
+      
       return { id, mesh, metadata };
       
     } catch (err) {
@@ -183,7 +206,7 @@ export function useFileProcessing(): UseFileProcessingReturn {
     } finally {
       setIsProcessing(false);
     }
-  }, []);
+  }, [user]);
 
   return {
     processFile,

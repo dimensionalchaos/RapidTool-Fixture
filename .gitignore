@@ -40,7 +40,17 @@ build
 # Test files
 test-*.js
 test-*.ps1
+test-*.mjs
+test-*.http
 *.test.local.*
+
+# Temporary and backup files
+*-backup-*.prisma
+*-enhanced.prisma
+*-final.prisma
+*-simplified.prisma
+check-*.sql
+verify-*.sql
 
 # OS files
 Thumbs.db

@@ -5,6 +5,8 @@ import morgan from 'morgan';
 import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
 import authRoutes from './routes/auth.routes';
+import modelImportRoutes from './routes/modelImport.routes';
+import exportRoutes from './routes/export.routes';
 import { validateAuthConfig } from './config/auth.config';
 
 dotenv.config();
@@ -30,21 +32,10 @@ app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', uptime: process.uptime() });
 });
 
-// Auth routes
+// Routes
 app.use('/api/auth', authRoutes);
-
-// Placeholder upload route: returns a signed-url stub or job id
-app.post('/api/models/upload', (req, res) => {
-  // Expecting client to send metadata; actual upload should go to S3 with signed URL
-  const { filename, size } = req.body || {};
-  if (!filename || !size) {
-    return res.status(400).json({ error: 'filename and size are required' });
-  }
-
-  // TODO: create job in queue, generate signed URL, persist metadata
-  const uploadId = `upl_${Date.now()}`;
-  return res.json({ uploadId, uploadUrl: `https://example-s3-signed-url/${filename}` });
-});
+app.use('/api/models', modelImportRoutes);
+app.use('/api/exports', exportRoutes);
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => {

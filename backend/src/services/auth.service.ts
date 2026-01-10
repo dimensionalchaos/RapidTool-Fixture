@@ -34,7 +34,13 @@ export interface UserResponse {
 /**
  * Register a new user
  */
-export async function registerUser(email: string, password: string, name?: string): Promise<{
+export async function registerUser(
+  email: string,
+  password: string,
+  name: string,
+  phoneNumber?: string,
+  organization?: string
+): Promise<{
   user: UserResponse;
   verificationToken: string;
 }> {
@@ -53,14 +59,24 @@ export async function registerUser(email: string, password: string, name?: strin
   // Generate email verification token
   const verificationToken = generateVerificationToken();
 
-  // Create user
+  // Create user with tier and limits
   const user = await prisma.user.create({
     data: {
       email,
       passwordHash,
       verificationToken,
       emailVerified: false,
-      name: name || null,
+      name,
+      phoneNumber: phoneNumber || null,
+      organization: organization || null,
+      // Set default tier and limits
+      tier: 'FREE',
+      modelLimit: 5,
+      modelsUsed: 0,
+      // Initialize progress tracking
+      timeSpent: 0,
+      maxStepReached: 0,
+      lastSessionFinalStep: 0,
     },
     select: {
       id: true,
@@ -69,6 +85,22 @@ export async function registerUser(email: string, password: string, name?: strin
       createdAt: true,
     },
   });
+
+  // Create trial license for new user
+  try {
+    await prisma.license.create({
+      data: {
+        userId: user.id,
+        licenseType: 'TRIAL',
+        status: 'ACTIVE',
+        dateStart: new Date(),
+        dateEnd: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days trial
+      },
+    });
+  } catch (error) {
+    console.error('Failed to create trial license:', error);
+    // Don't fail registration if license creation fails
+  }
 
   // Send verification email
   try {

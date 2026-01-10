@@ -15,6 +15,7 @@ export interface FileMetadata {
   center: THREE.Vector3;
   processingTime: number;
   units: string;
+  importId?: string; // Backend import record ID
 }
 
 export interface ViewerConfig {
