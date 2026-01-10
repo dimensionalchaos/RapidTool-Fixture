@@ -40,7 +40,7 @@ app.use('/api/exports', exportRoutes);
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
   // eslint-disable-next-line no-console
-  console.log(`Backend listening on port ${port}`);
+console.log(`Backend listening on port ${port}`);
 });
 
 export default app;

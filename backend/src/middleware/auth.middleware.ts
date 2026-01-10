@@ -16,6 +16,7 @@ declare global {
     interface Request {
       user?: {
         userId: string;
+        name?: string;
         email: string;
       };
     }
@@ -27,11 +28,12 @@ declare global {
  * Expects token in Authorization header: "Bearer <token>"
  */
 export async function authenticateToken(
-  req: Request,
+  req: Request, 
   res: Response,
   next: NextFunction
 ): Promise<void> {
   try {
+    
     // Extract token from Authorization header
     const authHeader = req.headers.authorization;
     const token = authHeader && authHeader.split(' ')[1]; // Format: "Bearer TOKEN"
@@ -60,6 +62,7 @@ export async function authenticateToken(
       where: { id: decoded.userId },
       select: {
         id: true,
+        name:true,
         email: true,
         lockedUntil: true,
         emailVerified: true,
@@ -86,6 +89,7 @@ export async function authenticateToken(
     // Attach user info to request for downstream handlers
     req.user = {
       userId: user.id,
+      name:user.name,
       email: user.email,
     };
 
