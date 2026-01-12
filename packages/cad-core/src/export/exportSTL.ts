@@ -61,10 +61,29 @@ export function downloadFile(
   filename: string,
   mimeType: string = 'application/octet-stream'
 ): void {
+  // Helper to trigger the actual browser download
+  const triggerDownload = () => {
+    let blob: Blob;
+
+    if (data instanceof ArrayBuffer) {
+      blob = new Blob([data], { type: mimeType });
+    } else {
+      blob = new Blob([data], { type: 'text/plain' });
+    }
+
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
   // Notify backend to update export count
   const token = localStorage.getItem('accessToken');
   if (token) {
-    // Start of Selection
     const API_URL = (import.meta as any).env?.VITE_API_URL || 'http://localhost:3000';
     fetch(`${API_URL}/api/exports/track`, {
       method: 'POST',
@@ -72,30 +91,31 @@ export function downloadFile(
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${token}`
       },
+      body: JSON.stringify({
+        projectId: 'dummy-project-id', // TODO: Replace with actual project ID
+        filename: filename,
+        format: 'stl'
+      })
     })
       .then(res => res.json())
       .then(data => {
-        console.log('Export number updated:', data.exportCount);
+        if (data.success) {
+          console.log('Exports left:', data.exportCount);
+          // Trigger download only after successful tracking
+          triggerDownload();
+        } else {
+          console.error('Export tracking failed:', data.error);
+          alert('Failed to update export count. Download aborted.');
+        }
       })
-      .catch(err => console.error('Failed to track export:', err));
-  }
-
-  let blob: Blob;
-
-  if (data instanceof ArrayBuffer) {
-    blob = new Blob([data], { type: mimeType });
+      .catch(err => {
+        console.error('Failed to track export:', err);
+        alert('Network error tracking export. Download aborted.');
+      });
   } else {
-    blob = new Blob([data], { type: 'text/plain' });
+    // If no token (offline/dev mode?), just download
+    triggerDownload();
   }
-
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  URL.revokeObjectURL(url);
 }
 
 /**

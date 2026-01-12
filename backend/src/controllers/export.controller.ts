@@ -286,31 +286,70 @@ export async function saveExport(req: Request, res: Response): Promise<void> {
   }
 }
 
-// Track export count logic
+// Track export count logic (History Based: New row per export)
 export async function trackExport(req: Request, res: Response): Promise<void> {
   try {
     const userId = req.user?.userId;
+    let { projectId, filename, format } = req.body;
 
     if (!userId) {
       res.status(401).json({ success: false, error: 'Unauthorized' });
       return;
     }
 
-    // Upsert the export count
-    const record = await prisma.numExports.upsert({
+    // 1. Resolve Project ID (Handle dummy/missing)
+    if (!projectId || projectId === 'dummy-project-id') {
+      const existingProject = await prisma.project.findFirst({
+        where: { userId },
+      });
+      if (existingProject) {
+        projectId = existingProject.id;
+      } else {
+        // Create default project to allow export tracking
+        const newProject = await prisma.project.create({
+          data: {
+            userId,
+            name: 'Default Project',
+            description: 'Auto-created for exports',
+          },
+        });
+        projectId = newProject.id;
+      }
+    }
+
+    // 2. Calculate New Credits
+    // Get the *previous* last export to determine current balance
+    const lastExport = await prisma.export.findFirst({
       where: { userId },
-      update: { exports: { increment: 1 } },
-      create: { userId, exports: 1 },
+      orderBy: { createdAt: 'desc' },
+      select: { numberOfExportsDone: true }, // Explicitly select only existing columns
     });
 
-    res.json({ success: true, exportCount: record.exports });
+    // Default 5 credits if no history
+    const currentCredits = lastExport ? lastExport.numberOfExportsDone : 5;
+    const newCredits = currentCredits - 1;
+
+    // 3. Create New History Record
+    const exportRecord = await prisma.export.create({
+      data: {
+        userId,
+        projectId,
+        format: (format?.toUpperCase()) || 'STL',
+        filename: filename || 'unknown_export',
+        status: 'COMPLETED', // Mark as completed since it's post-download
+        numberOfExportsDone: newCredits, // Store the new balance
+      },
+      select: { numberOfExportsDone: true, id: true }, // Avoid selecting non-existent columns like error_code
+    });
+
+    res.json({ success: true, exportCount: newCredits });
   } catch (error) {
     console.error('[Export] Track failed:', error);
-    res.status(500).json({ success: false, error: 'Failed to to track export' });
+    res.status(500).json({ success: false, error: 'Failed to track export' });
   }
 }
 
-// Check export limit logic
+// Check export limit logic (History based)
 export async function checkExportLimit(req: Request, res: Response): Promise<void> {
   try {
     const userId = req.user?.userId;
@@ -320,12 +359,16 @@ export async function checkExportLimit(req: Request, res: Response): Promise<voi
       return;
     }
 
-    const record = await prisma.numExports.findUnique({
+    // Find the latest export record to see current credits
+    const lastExport = await prisma.export.findFirst({
       where: { userId },
+      orderBy: { createdAt: 'desc' },
+      select: { numberOfExportsDone: true },
     });
 
-    const exports = record?.exports || 0;
-    const canExport = exports < 5; // Allow max 5 exports (0,1,2,3,4). If 5, block.
+    // Default 5 credits if no history
+    const credits = lastExport ? lastExport.numberOfExportsDone : 5;
+    const canExport = credits > 0;
 
     res.json({ success: true, canExport });
   } catch (error) {
