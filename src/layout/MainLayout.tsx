@@ -25,12 +25,10 @@ export const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
         <div className="flex items-center gap-6">
           {/* STACKED FRACKTAL WORKS BRANDING */}
           {/* STACKED FRACKTAL WORKS BRANDING REPLACED BY IMAGE LOGO */}
-          <div>
-            <img
-              src="/image/Website-Header_black-1.png"
-              alt="Fracktal Works Logo"
-              className="h-10 w-auto object-contain"
-            />
+          <div className="flex items-center pt-2">
+            <span className="text-4xl leading-none" style={{ fontFamily: 'RealityHyper' }}>
+              Applied Additive
+            </span>
           </div>
         </div>
 
