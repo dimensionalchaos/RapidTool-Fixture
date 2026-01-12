@@ -11,11 +11,12 @@ import {
 } from '../services/export.service';
 import { ExportFormat } from '@prisma/client';
 import { createErrorLog } from '../services/errorLog.service';
+import { prisma } from '../lib/prisma';
 
 export async function requestExport(req: Request, res: Response): Promise<void> {
   try {
     const userId = req.user?.userId;
-    
+
     if (!userId) {
       res.status(401).json({
         success: false,
@@ -63,7 +64,7 @@ export async function requestExport(req: Request, res: Response): Promise<void> 
     });
   } catch (error) {
     console.error('[Export] Request failed:', error);
-    
+
     await createErrorLog({
       userId: req.user?.userId,
       category: 'EXPORT_ERROR',
@@ -87,7 +88,7 @@ export async function getExportStatus(req: Request, res: Response): Promise<void
   try {
     const { exportId } = req.params;
     const userId = req.user?.userId;
-    
+
     if (!userId) {
       res.status(401).json({
         success: false,
@@ -141,7 +142,7 @@ export async function downloadExport(req: Request, res: Response): Promise<void>
   try {
     const { exportId } = req.params;
     const userId = req.user?.userId;
-    
+
     if (!userId) {
       res.status(401).json({
         success: false,
@@ -177,7 +178,7 @@ export async function downloadExport(req: Request, res: Response): Promise<void>
 export async function getUserExportsList(req: Request, res: Response): Promise<void> {
   try {
     const userId = req.user?.userId;
-    
+
     if (!userId) {
       res.status(401).json({
         success: false,
@@ -206,7 +207,7 @@ export async function getProjectExportsList(req: Request, res: Response): Promis
   try {
     const { projectId } = req.params;
     const userId = req.user?.userId;
-    
+
     if (!userId) {
       res.status(401).json({
         success: false,
@@ -234,7 +235,7 @@ export async function saveExport(req: Request, res: Response): Promise<void> {
   try {
     const { exportId } = req.params;
     const userId = req.user?.userId;
-    
+
     if (!userId) {
       res.status(401).json({
         success: false,
@@ -282,5 +283,53 @@ export async function saveExport(req: Request, res: Response): Promise<void> {
       success: false,
       error: 'Failed to save export data',
     });
+  }
+}
+
+// Track export count logic
+export async function trackExport(req: Request, res: Response): Promise<void> {
+  try {
+    const userId = req.user?.userId;
+
+    if (!userId) {
+      res.status(401).json({ success: false, error: 'Unauthorized' });
+      return;
+    }
+
+    // Upsert the export count
+    const record = await prisma.numExports.upsert({
+      where: { userId },
+      update: { exports: { increment: 1 } },
+      create: { userId, exports: 1 },
+    });
+
+    res.json({ success: true, exportCount: record.exports });
+  } catch (error) {
+    console.error('[Export] Track failed:', error);
+    res.status(500).json({ success: false, error: 'Failed to to track export' });
+  }
+}
+
+// Check export limit logic
+export async function checkExportLimit(req: Request, res: Response): Promise<void> {
+  try {
+    const userId = req.user?.userId;
+
+    if (!userId) {
+      res.status(401).json({ success: false, error: 'Unauthorized' });
+      return;
+    }
+
+    const record = await prisma.numExports.findUnique({
+      where: { userId },
+    });
+
+    const exports = record?.exports || 0;
+    const canExport = exports < 5; // Allow max 5 exports (0,1,2,3,4). If 5, block.
+
+    res.json({ success: true, canExport });
+  } catch (error) {
+    console.error('[Export] Check limit failed:', error);
+    res.status(500).json({ success: false, error: 'Failed to check export limit' });
   }
 }

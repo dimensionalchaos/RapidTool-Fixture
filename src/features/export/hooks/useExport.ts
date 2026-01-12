@@ -14,8 +14,8 @@ import type { PlacedClamp } from '@/features/clamps';
 import { collectAllGeometries } from '../utils/geometryCollector';
 import { exportFixture } from '../services/exportService';
 import { getExportConfigForQuality } from '../types';
-import type { 
-  GeometryCollectionContext, 
+import type {
+  GeometryCollectionContext,
   ExportProgress,
   ClampExportData,
   ExportQuality,
@@ -84,7 +84,7 @@ export function useExport({
     baseTopY,
     exportQuality,
   });
-  
+
   // Update refs when values change
   useEffect(() => {
     paramsRef.current = {
@@ -106,23 +106,49 @@ export function useExport({
   const handleExportFixture = useCallback(async (e: CustomEvent) => {
     const { config } = e.detail as { config: ExportConfig };
     const params = paramsRef.current;
-    
+
     if (!params.mergedFixtureMesh) {
       console.error('[Export] No merged fixture mesh available');
-      window.dispatchEvent(new CustomEvent('export-complete', { 
-        detail: { success: false, error: 'No merged fixture available' } 
+      window.dispatchEvent(new CustomEvent('export-complete', {
+        detail: { success: false, error: 'No merged fixture available' }
       }));
       return;
+    }
+
+    // Check export limit
+    const token = localStorage.getItem('accessToken');
+    if (token) {
+      const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+      try {
+        const response = await fetch(`${API_URL}/api/exports/check-limit`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        const data = await response.json();
+        const canExport = data.canExport; // boolean
+
+        if (data.success && canExport === false) {
+          alert('Ran out of exports');
+          window.dispatchEvent(new CustomEvent('export-complete', {
+            detail: { success: false, error: 'Export limit reached' }
+          }));
+          return;
+        }
+      } catch (err) {
+        console.error('[Export] Failed to check limit:', err);
+        // Continue on error (fail open) or return? 
+        // User instruction was specific about checking num_exports > 5. 
+        // If we can't check, we proceed.
+      }
     }
 
     try {
       // Progress callback
       const onProgress = (progress: ExportProgress) => {
-        window.dispatchEvent(new CustomEvent('export-progress', { 
-          detail: progress 
+        window.dispatchEvent(new CustomEvent('export-progress', {
+          detail: progress
         }));
       };
-      
+
       // Create geometry collection context
       const ctx: GeometryCollectionContext = {
         basePlate: params.basePlate,
@@ -138,17 +164,17 @@ export function useExport({
         labels: labelsRef.current || [],
         baseTopY: params.baseTopY,
       };
-      
+
       // Collect all geometries
       const geometryCollection = await collectAllGeometries(ctx, onProgress);
-      
+
       // Get service config based on quality preset
       // Quality can also be overridden via the export event detail
       const quality = (e.detail as any).quality ?? params.exportQuality;
       const serviceConfig = getExportConfigForQuality(quality);
-      
+
       console.log(`[Export] Using quality preset: ${quality}`, serviceConfig);
-      
+
       // Export fixture
       const result = await exportFixture(
         geometryCollection,
@@ -158,16 +184,16 @@ export function useExport({
         serviceConfig,
         onProgress
       );
-      
+
       // Dispatch completion event
-      window.dispatchEvent(new CustomEvent('export-complete', { 
-        detail: result 
+      window.dispatchEvent(new CustomEvent('export-complete', {
+        detail: result
       }));
-      
+
     } catch (error) {
       console.error('[Export] Failed:', error);
-      window.dispatchEvent(new CustomEvent('export-complete', { 
-        detail: { success: false, error: error instanceof Error ? error.message : 'Export failed' } 
+      window.dispatchEvent(new CustomEvent('export-complete', {
+        detail: { success: false, error: error instanceof Error ? error.message : 'Export failed' }
       }));
     }
   }, [basePlateMeshRef, multiSectionBasePlateGroupRef, originalBaseplateGeoRef, loadedClampDataRef, labelsRef]);

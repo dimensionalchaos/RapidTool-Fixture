@@ -8,12 +8,12 @@
 
 import * as THREE from 'three';
 import { STLExporter } from 'three-stdlib';
-import type { 
-  ExportablePart, 
-  ExportConfig, 
-  ExportResult, 
+import type {
+  ExportablePart,
+  ExportConfig,
+  ExportResult,
   STLExportOptions,
-  NamingConfig 
+  NamingConfig
 } from './types';
 import { generateExportFilename } from './types';
 
@@ -29,15 +29,15 @@ export function meshToSTL(
   options: STLExportOptions = { binary: true }
 ): ArrayBuffer | string {
   const exporter = new STLExporter();
-  
+
   // Create a temporary scene with just this mesh
   const scene = new THREE.Scene();
   const clonedMesh = mesh.clone();
-  
+
   // Apply world matrix to get correct positioning
   clonedMesh.updateMatrixWorld(true);
   scene.add(clonedMesh);
-  
+
   if (options.binary) {
     const result = exporter.parse(scene, { binary: true });
     // Convert DataView to ArrayBuffer - create new ArrayBuffer from the data
@@ -61,14 +61,33 @@ export function downloadFile(
   filename: string,
   mimeType: string = 'application/octet-stream'
 ): void {
+  // Notify backend to update export count
+  const token = localStorage.getItem('accessToken');
+  if (token) {
+    // Start of Selection
+    const API_URL = (import.meta as any).env?.VITE_API_URL || 'http://localhost:3000';
+    fetch(`${API_URL}/api/exports/track`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+    })
+      .then(res => res.json())
+      .then(data => {
+        console.log('Export number updated:', data.exportCount);
+      })
+      .catch(err => console.error('Failed to track export:', err));
+  }
+
   let blob: Blob;
-  
+
   if (data instanceof ArrayBuffer) {
     blob = new Blob([data], { type: mimeType });
   } else {
     blob = new Blob([data], { type: 'text/plain' });
   }
-  
+
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
@@ -95,12 +114,12 @@ export function exportPartToSTL(
       filename: config.filename,
       sectionNumber: part.sectionIndex,
     };
-    
+
     const filename = generateExportFilename(namingConfig, 'stl');
     const stlData = meshToSTL(part.mesh, config.options);
-    
+
     downloadFile(stlData, filename, 'application/sla');
-    
+
     return {
       success: true,
       filenames: [filename],
@@ -128,17 +147,17 @@ export function exportPartsToSTL(
 ): ExportResult {
   const filenames: string[] = [];
   const errors: string[] = [];
-  
+
   for (let i = 0; i < parts.length; i++) {
     const part = parts[i];
     const namingConfig: NamingConfig = {
       filename: config.filename,
       sectionNumber: config.splitParts ? part.sectionIndex : undefined,
     };
-    
+
     const filename = generateExportFilename(namingConfig, 'stl');
     onProgress?.(i + 1, parts.length, filename);
-    
+
     try {
       const stlData = meshToSTL(part.mesh, config.options);
       downloadFile(stlData, filename, 'application/sla');
@@ -147,7 +166,7 @@ export function exportPartsToSTL(
       errors.push(`Failed to export ${filename}: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
-  
+
   if (errors.length > 0) {
     return {
       success: false,
@@ -155,7 +174,7 @@ export function exportPartsToSTL(
       filenames,
     };
   }
-  
+
   return {
     success: true,
     filenames,
@@ -170,22 +189,22 @@ export function exportPartsToSTL(
  */
 export function mergeMeshesForExport(meshes: THREE.Mesh[]): THREE.Mesh {
   const geometries: THREE.BufferGeometry[] = [];
-  
+
   for (const mesh of meshes) {
     const geometry = mesh.geometry.clone();
     mesh.updateMatrixWorld(true);
     geometry.applyMatrix4(mesh.matrixWorld);
     geometries.push(geometry);
   }
-  
+
   // Merge all geometries
   const mergedGeometry = mergeBufferGeometries(geometries);
-  
+
   // Cleanup cloned geometries
   for (const geom of geometries) {
     geom.dispose();
   }
-  
+
   return new THREE.Mesh(
     mergedGeometry,
     new THREE.MeshStandardMaterial({ color: 0x808080 })
@@ -200,42 +219,42 @@ export function mergeMeshesForExport(meshes: THREE.Mesh[]): THREE.Mesh {
  */
 function mergeBufferGeometries(geometries: THREE.BufferGeometry[]): THREE.BufferGeometry {
   const mergedGeometry = new THREE.BufferGeometry();
-  
+
   let totalVertices = 0;
   let totalIndices = 0;
-  
+
   // Calculate total counts
   for (const geom of geometries) {
     const posAttr = geom.getAttribute('position');
     totalVertices += posAttr.count;
-    
+
     if (geom.index) {
       totalIndices += geom.index.count;
     } else {
       totalIndices += posAttr.count;
     }
   }
-  
+
   // Create merged arrays
   const positions = new Float32Array(totalVertices * 3);
   const normals = new Float32Array(totalVertices * 3);
   const indices = new Uint32Array(totalIndices);
-  
+
   let vertexOffset = 0;
   let indexOffset = 0;
   let indexVertexOffset = 0;
-  
+
   for (const geom of geometries) {
     const posAttr = geom.getAttribute('position') as THREE.BufferAttribute;
     const normalAttr = geom.getAttribute('normal') as THREE.BufferAttribute;
-    
+
     // Copy positions
     for (let i = 0; i < posAttr.count; i++) {
       positions[(vertexOffset + i) * 3] = posAttr.getX(i);
       positions[(vertexOffset + i) * 3 + 1] = posAttr.getY(i);
       positions[(vertexOffset + i) * 3 + 2] = posAttr.getZ(i);
     }
-    
+
     // Copy normals
     if (normalAttr) {
       for (let i = 0; i < normalAttr.count; i++) {
@@ -244,7 +263,7 @@ function mergeBufferGeometries(geometries: THREE.BufferGeometry[]): THREE.Buffer
         normals[(vertexOffset + i) * 3 + 2] = normalAttr.getZ(i);
       }
     }
-    
+
     // Copy indices (with offset)
     if (geom.index) {
       for (let i = 0; i < geom.index.count; i++) {
@@ -257,14 +276,14 @@ function mergeBufferGeometries(geometries: THREE.BufferGeometry[]): THREE.Buffer
       }
       indexOffset += posAttr.count;
     }
-    
+
     indexVertexOffset += posAttr.count;
     vertexOffset += posAttr.count;
   }
-  
+
   mergedGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
   mergedGeometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
   mergedGeometry.setIndex(new THREE.BufferAttribute(indices, 1));
-  
+
   return mergedGeometry;
 }
