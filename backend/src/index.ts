@@ -19,8 +19,33 @@ const app = express();
 
 // Security middleware
 app.use(helmet());
-app.use(cors({ 
-  origin: process.env.CORS_ORIGIN || 'http://localhost:5173',
+app.use(cors({
+  origin: (origin, callback) => {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+
+    const allowedOrigins = [
+      process.env.CORS_ORIGIN,
+      'http://localhost:5173',
+      'http://localhost:8080',
+      'http://127.0.0.1:5173',
+      'http://127.0.0.1:8080'
+    ].filter(Boolean); // Remove undefined/null
+
+    // Check if origin is allowed
+    // 1. Exact match in whitelist
+    // 2. Local network IP (192.168.x.x or 10.x.x.x)
+    if (
+      allowedOrigins.includes(origin) ||
+      origin.startsWith('http://192.168.') ||
+      origin.startsWith('http://10.') ||
+      origin.startsWith('http://localhost')
+    ) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true, // Allow cookies to be sent
 }));
 app.use(express.json({ limit: '10mb' }));
@@ -42,7 +67,7 @@ app.use('/api/license', licenseRoutes);
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
   // eslint-disable-next-line no-console
-console.log(`Backend listening on port ${port}`);
+  console.log(`Backend listening on port ${port}`);
 });
 
 export default app;
