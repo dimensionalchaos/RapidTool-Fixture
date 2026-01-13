@@ -1,14 +1,11 @@
 import { prisma } from '../lib/prisma';
+import { ExportStatus, ExportFormat } from '@prisma/client';
 import { createErrorLog } from './errorLog.service';
-
-// Manually define types since Prisma isn't generating them due to DB mismatch
-export type ExportFormat = 'STL' | 'OBJ' | 'GLTF' | 'GLB' | 'THREE_MF' | 'STEP' | 'IGES';
-export type ExportStatus = 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED' | 'EXPIRED';
 
 interface ExportData {
   userId: string;
   projectId: string;
-  format: string; // Changed to string to match DB
+  format: ExportFormat;
   filename: string;
   settings?: any;
   includeSupports?: boolean;
@@ -87,7 +84,7 @@ export async function createExport(data: ExportData) {
 
 export async function updateExportStatus(
   exportId: string,
-  status: string, // Changed to string
+  status: ExportStatus,
   errorMessage?: string
 ) {
   try {
@@ -101,7 +98,7 @@ export async function updateExportStatus(
 
     if (status === 'FAILED' && errorMessage) {
       updateData.errorMessage = errorMessage;
-      // updateData.errorCode = 'EXPORT_FAILED'; // Column does not exist
+      updateData.errorCode = 'EXPORT_FAILED';
     }
 
     const updated = await prisma.export.update({

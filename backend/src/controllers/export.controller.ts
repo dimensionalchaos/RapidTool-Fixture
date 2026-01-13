@@ -9,7 +9,7 @@ import {
   getProjectExports,
   handleExportError,
 } from '../services/export.service';
-// import { ExportFormat } from '@prisma/client'; // Removed enum import
+import { ExportFormat } from '@prisma/client';
 import { createErrorLog } from '../services/errorLog.service';
 import { prisma } from '../lib/prisma';
 
@@ -44,7 +44,7 @@ export async function requestExport(req: Request, res: Response): Promise<void> 
     const exportRecord = await createExport({
       userId,
       projectId,
-      format: format as string, // Cast to string
+      format: format as ExportFormat,
       filename,
       settings,
       includeSupports,
@@ -301,7 +301,7 @@ export async function trackExport(req: Request, res: Response): Promise<void> {
     const exportRecord = await createExport({
       userId,
       projectId, // Can be 'dummy-project-id'
-      format: (format?.toUpperCase() as string) || 'STL', // Cast to string
+      format: (format?.toUpperCase() as ExportFormat) || 'STL',
       filename: filename || 'unknown_export',
       settings
     });
