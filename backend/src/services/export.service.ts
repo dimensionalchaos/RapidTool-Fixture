@@ -74,7 +74,7 @@ export async function createExport(data: ExportData) {
       },
     });
 
-    console.log(`[Export] Created export record: ${exportRecord.id} (Credits: ${newExportCount})`);
+    console.log(`[Export] Created export record: ${exportRecord.id} (Exports Done: ${newExportCount})`);
     return exportRecord;
   } catch (error) {
     console.error('[Export] Failed to create export record:', error);

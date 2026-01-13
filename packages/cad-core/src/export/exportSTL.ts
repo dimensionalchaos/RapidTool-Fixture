@@ -100,7 +100,7 @@ export function downloadFile(
       .then(res => res.json())
       .then(data => {
         if (data.success) {
-          console.log('Exports left:', data.exportCount);
+          console.log('Exports done:', data.exportCount);
           // Trigger download only after successful tracking
           triggerDownload();
         } else {
