@@ -15,7 +15,7 @@ export async function uploadModel(req: Request, res: Response): Promise<void> {
   try {
     const userId = req.user?.userId;
     const file = req.file;
-    
+
     if (!userId) {
       res.status(401).json({
         success: false,
@@ -40,8 +40,8 @@ export async function uploadModel(req: Request, res: Response): Promise<void> {
 
     const modelImport = await createModelImport({
       userId,
-      projectId: req.body.projectId,
-      filename: file.filename,
+      projectId: (req.body.projectId && req.body.projectId !== 'default-project') ? req.body.projectId : undefined,
+      filename: file.filename || file.originalname,
       originalFilename: file.originalname,
       fileSize: file.size,
       fileBuffer: file.buffer,
@@ -61,7 +61,7 @@ export async function uploadModel(req: Request, res: Response): Promise<void> {
     });
   } catch (error) {
     console.error('[ModelImport] Upload failed:', error);
-    
+
     await createErrorLog({
       userId: req.user?.userId,
       category: 'IMPORT_ERROR',
@@ -85,7 +85,7 @@ export async function getImportStatus(req: Request, res: Response): Promise<void
   try {
     const { importId } = req.params;
     const userId = req.user?.userId;
-    
+
     if (!userId) {
       res.status(401).json({
         success: false,
@@ -138,7 +138,7 @@ export async function getImportStatus(req: Request, res: Response): Promise<void
 export async function getUserImports(req: Request, res: Response): Promise<void> {
   try {
     const userId = req.user?.userId;
-    
+
     if (!userId) {
       res.status(401).json({
         success: false,
@@ -166,7 +166,7 @@ export async function getUserImports(req: Request, res: Response): Promise<void>
 export async function getModelUsage(req: Request, res: Response): Promise<void> {
   try {
     const userId = req.user?.userId;
-    
+
     if (!userId) {
       res.status(401).json({
         success: false,
@@ -195,7 +195,7 @@ export async function updateImportProgress(req: Request, res: Response): Promise
     const { importId } = req.params;
     const { status, progress, metadata } = req.body;
     const userId = req.user?.userId;
-    
+
     if (!userId) {
       res.status(401).json({
         success: false,
