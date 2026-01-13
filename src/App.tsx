@@ -16,7 +16,7 @@ import FileImport from './modules/FileImport';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { ProcessedFile } from './modules/FileImport/types';
 
-// --- NEW IMPORTS ---
+// MainPortal and MainLayout restored
 import MainPortal from './pages/MainPortal';
 import { MainLayout } from './layout/MainLayout';
 
@@ -24,19 +24,19 @@ const queryClient = new QueryClient();
 
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const { isAuthenticated, isLoading } = useAuthStore();
-  
+
   console.log('[ProtectedRoute] isAuthenticated:', isAuthenticated, 'isLoading:', isLoading);
-  
+
   if (isLoading) {
     console.log('[ProtectedRoute] Showing loading screen');
     return <div className="min-h-screen flex items-center justify-center">Loading...</div>;
   }
-  
+
   if (!isAuthenticated) {
     console.log('[ProtectedRoute] Not authenticated, redirecting to login');
     return <Navigate to="/auth/login" replace />;
   }
-  
+
   console.log('[ProtectedRoute] Authenticated, rendering children');
   return <>{children}</>;
 };
@@ -125,20 +125,20 @@ const App = () => {
               <Route path="/auth/forgot-password" element={<ForgotPasswordPage />} />
               <Route path="/auth/verify" element={<VerifyEmailPage />} />
               <Route path="/auth/reset-password" element={<ResetPasswordPage />} />
-              
-              {/* --- UPDATED ROOT ROUTE --- */}
-              <Route 
-                path="/" 
+
+              {/* --- RESTORED MAIN PORTAL ROUTE --- */}
+              <Route
+                path="/"
                 element={
                   <ProtectedRoute>
                     <MainLayout>
                       <MainPortal />
                     </MainLayout>
                   </ProtectedRoute>
-                } 
+                }
               />
 
-              {/* --- EXISTING FIXTURE ROUTE (UNTOUCHED) --- */}
+              {/* --- CAD APPLICATION ROUTE --- */}
               <Route
                 path="/app/fixture"
                 element={
@@ -148,7 +148,7 @@ const App = () => {
                 }
               />
 
-              {/* Catch-all: Redirect back to Portal if logged in, else login page handles itself */}
+              {/* Catch-all: Redirect back to Root */}
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </TooltipProvider>

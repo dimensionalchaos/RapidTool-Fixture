@@ -127,12 +127,11 @@ export async function loginUser(
   tokens: AuthTokens;
 }> {
   // Find user
-  
+
   const emailLower = email.toLowerCase();
   const user = await prisma.user.findUnique({
     where: { email: emailLower },
   });
-  console.log("This is the user object:", user)
   if (!user) {
     throw new Error('Invalid email or password');
   }
@@ -437,7 +436,29 @@ export async function requestPasswordReset(email: string): Promise<string> {
  * Reset password using reset token
  */
 export async function resetPassword(token: string, newPassword: string): Promise<void> {
+  console.log('DEBUG: resetPassword called with token:', token);
+
   const tokenHash = hashRefreshToken(token);
+  console.log('DEBUG: Generated hash for lookup:', tokenHash);
+
+  // 1. Debug: Find user strictly by token hash (ignoring expiry) to see if token exists at all
+  const userByHash = await prisma.user.findFirst({
+    where: { passwordResetToken: tokenHash },
+  });
+
+  if (!userByHash) {
+    console.error('DEBUG: No user found with this token hash. Token might be invalid or already used.');
+  } else {
+    console.log('DEBUG: User found by hash! Validating expiry...');
+    console.log('DEBUG: stored Expiry:', userByHash.passwordResetExpiry);
+    console.log('DEBUG: Current Time:', new Date());
+
+    if (userByHash.passwordResetExpiry && userByHash.passwordResetExpiry > new Date()) {
+      console.log('DEBUG: Token is valid and not expired.');
+    } else {
+      console.error('DEBUG: Token IS EXPIRED.');
+    }
+  }
 
   const user = await prisma.user.findFirst({
     where: {

@@ -16,6 +16,13 @@ let transporter: Transporter | null = null;
 function getTransporter(): Transporter {
   if (!transporter) {
     // Check if email is configured
+    console.log('DEBUG: Configuring Transporter');
+    console.log('DEBUG: SMTP_USER:', emailConfig.smtp.auth.user);
+    console.log('DEBUG: SMTP_PASS (Start):', emailConfig.smtp.auth.pass ? emailConfig.smtp.auth.pass.substring(0, 4) + '...' : 'undefined');
+    console.log('DEBUG: SMTP_HOST:', emailConfig.smtp.host);
+    console.log('DEBUG: SMTP_PORT:', emailConfig.smtp.port);
+    console.log('DEBUG: SMTP_SECURE:', emailConfig.smtp.secure);
+
     if (!emailConfig.smtp.auth.user || !emailConfig.smtp.auth.pass) {
       console.warn('⚠️  Email not configured. Emails will be logged to console instead.');
       // Create a test account for development
