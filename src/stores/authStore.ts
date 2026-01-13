@@ -151,3 +151,4 @@ window.addEventListener('auth:logout', () => {
   useAuthStore.getState().setUser(null);
   useAuthStore.getState().setError('Session expired. Please login again.');
 });
+

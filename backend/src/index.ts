@@ -7,6 +7,7 @@ import dotenv from 'dotenv';
 import authRoutes from './routes/auth.routes';
 import modelImportRoutes from './routes/modelImport.routes';
 import exportRoutes from './routes/export.routes';
+import licenseRoutes from './routes/license.routes';
 import { validateAuthConfig } from './config/auth.config';
 
 dotenv.config();
@@ -36,6 +37,7 @@ app.get('/api/health', (_req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/models', modelImportRoutes);
 app.use('/api/exports', exportRoutes);
+app.use('/api/license', licenseRoutes);
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
