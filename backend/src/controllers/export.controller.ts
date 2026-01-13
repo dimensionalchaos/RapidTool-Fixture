@@ -290,59 +290,23 @@ export async function saveExport(req: Request, res: Response): Promise<void> {
 export async function trackExport(req: Request, res: Response): Promise<void> {
   try {
     const userId = req.user?.userId;
-    let { projectId, filename, format } = req.body;
+    const { projectId, filename, format, settings } = req.body;
 
     if (!userId) {
       res.status(401).json({ success: false, error: 'Unauthorized' });
       return;
     }
 
-    // 1. Resolve Project ID (Handle dummy/missing)
-    if (!projectId || projectId === 'dummy-project-id') {
-      const existingProject = await prisma.project.findFirst({
-        where: { userId },
-      });
-      if (existingProject) {
-        projectId = existingProject.id;
-      } else {
-        // Create default project to allow export tracking
-        const newProject = await prisma.project.create({
-          data: {
-            userId,
-            name: 'Default Project',
-            description: 'Auto-created for exports',
-          },
-        });
-        projectId = newProject.id;
-      }
-    }
-
-    // 2. Calculate New Credits
-    // Get the *previous* last export to determine current balance
-    const lastExport = await prisma.export.findFirst({
-      where: { userId },
-      orderBy: { createdAt: 'desc' },
-      select: { numberOfExportsDone: true }, // Explicitly select only existing columns
+    // Call the service which now handles Auto-Project and Credit Logic
+    const exportRecord = await createExport({
+      userId,
+      projectId, // Can be 'dummy-project-id'
+      format: (format?.toUpperCase() as ExportFormat) || 'STL',
+      filename: filename || 'unknown_export',
+      settings
     });
 
-    // Default 5 credits if no history
-    const currentCredits = lastExport ? lastExport.numberOfExportsDone : 5;
-    const newCredits = currentCredits - 1;
-
-    // 3. Create New History Record
-    const exportRecord = await prisma.export.create({
-      data: {
-        userId,
-        projectId,
-        format: (format?.toUpperCase()) || 'STL',
-        filename: filename || 'unknown_export',
-        status: 'COMPLETED', // Mark as completed since it's post-download
-        numberOfExportsDone: newCredits, // Store the new balance
-      },
-      select: { numberOfExportsDone: true, id: true }, // Avoid selecting non-existent columns like error_code
-    });
-
-    res.json({ success: true, exportCount: newCredits });
+    res.json({ success: true, exportCount: exportRecord.numberOfExportsDone });
   } catch (error) {
     console.error('[Export] Track failed:', error);
     res.status(500).json({ success: false, error: 'Failed to track export' });

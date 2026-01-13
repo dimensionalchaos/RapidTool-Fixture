@@ -15,22 +15,63 @@ interface ExportData {
 
 export async function createExport(data: ExportData) {
   try {
+    let targetProjectId = data.projectId;
+
+    // 1. Resolve Project ID (Handle dummy/missing)
+    if (!targetProjectId || targetProjectId === 'dummy-project-id') {
+      const existingProject = await prisma.project.findFirst({
+        where: { userId: data.userId },
+      });
+      if (existingProject) {
+        targetProjectId = existingProject.id;
+      } else {
+        // Create default project to allow export tracking
+        const newProject = await prisma.project.create({
+          data: {
+            userId: data.userId,
+            name: 'Default Project',
+            description: 'Auto-created for exports',
+          },
+        });
+        targetProjectId = newProject.id;
+      }
+    }
+
+    // 2. Calculate New Export Count (Count UP)
+    // Get the *previous* last export to determine current accumulation
+    const lastExport = await prisma.export.findFirst({
+      where: { userId: data.userId },
+      orderBy: { createdAt: 'desc' },
+      select: { numberOfExportsDone: true },
+    });
+
+    const currentCount = lastExport ? lastExport.numberOfExportsDone : 0;
+    const EXPORT_LIMIT = 5;
+
+    if (currentCount >= EXPORT_LIMIT) {
+      throw new Error(`Export limit reached (${EXPORT_LIMIT}). Please upgrade to generate more exports.`);
+    }
+
+    const newExportCount = currentCount + 1;
+
+    // 3. Create Export Record
     const exportRecord = await prisma.export.create({
       data: {
         userId: data.userId,
-        projectId: data.projectId,
+        projectId: targetProjectId,
         format: data.format,
         filename: data.filename,
         settings: data.settings,
         includeSupports: data.includeSupports ?? true,
         includeClamps: data.includeClamps ?? true,
         includeBaseplate: data.includeBaseplate ?? true,
-        status: 'PENDING',
-        numberOfExportsDone: 1,
+        status: 'COMPLETED',
+        completedAt: new Date(),
+        numberOfExportsDone: newExportCount,
       },
     });
 
-    console.log(`[Export] Created export record: ${exportRecord.id}`);
+    console.log(`[Export] Created export record: ${exportRecord.id} (Credits: ${newExportCount})`);
     return exportRecord;
   } catch (error) {
     console.error('[Export] Failed to create export record:', error);
