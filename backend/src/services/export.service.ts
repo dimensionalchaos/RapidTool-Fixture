@@ -1,11 +1,14 @@
 import { prisma } from '../lib/prisma';
-import { ExportStatus, ExportFormat } from '@prisma/client';
 import { createErrorLog } from './errorLog.service';
+
+// Manually define types since Prisma isn't generating them due to DB mismatch
+export type ExportFormat = 'STL' | 'OBJ' | 'GLTF' | 'GLB' | 'THREE_MF' | 'STEP' | 'IGES';
+export type ExportStatus = 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED' | 'EXPIRED';
 
 interface ExportData {
   userId: string;
   projectId: string;
-  format: ExportFormat;
+  format: string; // Changed to string to match DB
   filename: string;
   settings?: any;
   includeSupports?: boolean;
@@ -48,11 +51,14 @@ export async function createExport(data: ExportData) {
     const currentCount = lastExport ? lastExport.numberOfExportsDone : 0;
     const EXPORT_LIMIT = 5;
 
-    if (currentCount >= EXPORT_LIMIT) {
+    // Fix possible null/undefined fallback
+    const countToCheck = currentCount ?? 0;
+
+    if (countToCheck >= EXPORT_LIMIT) {
       throw new Error(`Export limit reached (${EXPORT_LIMIT}). Please upgrade to generate more exports.`);
     }
 
-    const newExportCount = currentCount + 1;
+    const newExportCount = countToCheck + 1;
 
     // 3. Create Export Record
     const exportRecord = await prisma.export.create({
@@ -81,7 +87,7 @@ export async function createExport(data: ExportData) {
 
 export async function updateExportStatus(
   exportId: string,
-  status: ExportStatus,
+  status: string, // Changed to string
   errorMessage?: string
 ) {
   try {
@@ -95,7 +101,7 @@ export async function updateExportStatus(
 
     if (status === 'FAILED' && errorMessage) {
       updateData.errorMessage = errorMessage;
-      updateData.errorCode = 'EXPORT_FAILED';
+      // updateData.errorCode = 'EXPORT_FAILED'; // Column does not exist
     }
 
     const updated = await prisma.export.update({

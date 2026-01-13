@@ -9,7 +9,7 @@ import {
   getProjectExports,
   handleExportError,
 } from '../services/export.service';
-import { ExportFormat } from '@prisma/client';
+// import { ExportFormat } from '@prisma/client'; // Removed enum import
 import { createErrorLog } from '../services/errorLog.service';
 import { prisma } from '../lib/prisma';
 
@@ -44,7 +44,7 @@ export async function requestExport(req: Request, res: Response): Promise<void> 
     const exportRecord = await createExport({
       userId,
       projectId,
-      format: format as ExportFormat,
+      format: format as string, // Cast to string
       filename,
       settings,
       includeSupports,
@@ -301,7 +301,7 @@ export async function trackExport(req: Request, res: Response): Promise<void> {
     const exportRecord = await createExport({
       userId,
       projectId, // Can be 'dummy-project-id'
-      format: (format?.toUpperCase() as ExportFormat) || 'STL',
+      format: (format?.toUpperCase() as string) || 'STL', // Cast to string
       filename: filename || 'unknown_export',
       settings
     });
@@ -330,11 +330,11 @@ export async function checkExportLimit(req: Request, res: Response): Promise<voi
       select: { numberOfExportsDone: true },
     });
 
-    // Default 5 credits if no history
-    const credits = lastExport ? lastExport.numberOfExportsDone : 5;
-    const canExport = credits > 0;
+    // Default 0 exports if no history
+    const currentCount = lastExport ? lastExport.numberOfExportsDone : 0;
+    const canExport = (currentCount ?? 0) < 5;
 
-    res.json({ success: true, canExport });
+    res.json({ success: true, canExport, currentCount: currentCount ?? 0 });
   } catch (error) {
     console.error('[Export] Check limit failed:', error);
     res.status(500).json({ success: false, error: 'Failed to check export limit' });
