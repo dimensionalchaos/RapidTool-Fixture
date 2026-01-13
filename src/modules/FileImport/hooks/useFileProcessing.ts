@@ -180,8 +180,8 @@ export function useFileProcessing(): UseFileProcessingReturn {
       if (user) {
         try {
           console.log('[useFileProcessing] Uploading to backend...');
-          const projectId = 'default-project'; // TODO: Get actual project ID from context
-          const importResult = await modelImportAPI.uploadModel(file, projectId);
+          // Set projectId to null since no project exists yet (will be created later)
+          const importResult = await modelImportAPI.uploadModel(file, null);
           console.log('[useFileProcessing] Upload successful:', importResult);
           
           // Store import ID in metadata for future reference

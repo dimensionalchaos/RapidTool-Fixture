@@ -16,7 +16,7 @@ const router = Router();
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
-    fileSize: 100 * 1024 * 1024, // 100MB limit
+    fileSize: 50 * 1024 * 1024, // 50MB limit (prevents DB timeout on large files)
   },
   fileFilter: (req, file, cb) => {
     const allowedTypes = ['.stl', '.obj', '.gltf', '.glb', '.step', '.stp', '.iges', '.igs'];

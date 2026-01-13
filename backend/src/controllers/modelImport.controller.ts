@@ -38,10 +38,15 @@ export async function uploadModel(req: Request, res: Response): Promise<void> {
       size: file.size,
     });
 
+    // Generate unique filename (multer memoryStorage doesn't provide file.filename)
+    const timestamp = Date.now();
+    const sanitizedName = file.originalname.replace(/[^a-zA-Z0-9.-]/g, '_');
+    const uniqueFilename = `${timestamp}-${sanitizedName}`;
+
     const modelImport = await createModelImport({
       userId,
-      projectId: (req.body.projectId && req.body.projectId !== 'default-project') ? req.body.projectId : undefined,
-      filename: file.filename || file.originalname,
+      projectId: req.body.projectId,
+      filename: uniqueFilename,
       originalFilename: file.originalname,
       fileSize: file.size,
       fileBuffer: file.buffer,
