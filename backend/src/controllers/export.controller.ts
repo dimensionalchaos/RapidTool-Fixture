@@ -306,7 +306,11 @@ export async function trackExport(req: Request, res: Response): Promise<void> {
       settings
     });
 
-    res.json({ success: true, exportCount: exportRecord.numberOfExportsDone });
+    res.json({
+      success: true,
+      exportCount: exportRecord.numberOfExportsDone,
+      exportId: exportRecord.id
+    });
   } catch (error) {
     console.error('[Export] Track failed:', error);
     res.status(500).json({ success: false, error: 'Failed to track export' });

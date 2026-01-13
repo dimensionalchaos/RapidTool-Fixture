@@ -98,7 +98,6 @@ export async function updateExportStatus(
 
     if (status === 'FAILED' && errorMessage) {
       updateData.errorMessage = errorMessage;
-      updateData.errorCode = 'EXPORT_FAILED';
     }
 
     const updated = await prisma.export.update({

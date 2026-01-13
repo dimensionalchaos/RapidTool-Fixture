@@ -98,14 +98,39 @@ export function downloadFile(
       })
     })
       .then(res => res.json())
-      .then(data => {
-        if (data.success) {
-          console.log('Exports done:', data.exportCount);
-          // Trigger download only after successful tracking
+      .then(async response => {
+        if (response.success) {
+          console.log('Exports done:', response.exportCount);
+
+          if (response.exportId) {
+            try {
+              // Create Blob for upload using the outer 'data' variable
+              const uploadBlob = data instanceof ArrayBuffer
+                ? new Blob([data], { type: mimeType })
+                : new Blob([data], { type: 'text/plain' });
+
+              const formData = new FormData();
+              formData.append('file', uploadBlob, filename);
+
+              await fetch(`${API_URL}/api/exports/${response.exportId}/save`, {
+                method: 'POST',
+                headers: {
+                  'Authorization': `Bearer ${token}`
+                },
+                body: formData
+              });
+              console.log('Export backup saved to server');
+            } catch (uploadError) {
+              console.error('Failed to save export backup:', uploadError);
+              // We don't block download on upload failure, just log it
+            }
+          }
+
+          // Trigger download only after successful tracking (and upload attempt)
           triggerDownload();
         } else {
-          console.error('Export tracking failed:', data.error);
-          alert('Failed to update export count. Download aborted.');
+          console.error('Export tracking failed:', response.error);
+          alert(`Failed to update export count: ${response.error || 'Unknown error'}`);
         }
       })
       .catch(err => {

@@ -517,7 +517,7 @@ model Export {
   // Status
   status              ExportStatus @default(PENDING)
   errorMessage        String?      @map("error_message")
-  errorCode           String?      @map("error_code")
+
   
   // Export Count Tracking
   numberOfExportsDone Int          @default(1) @map("number_of_exports_done")
