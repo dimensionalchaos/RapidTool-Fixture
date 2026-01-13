@@ -22,14 +22,14 @@ const hasValidToken = () => {
   const token = localStorage.getItem('accessToken');
   if (!token) return false;
   
-  // Check if token is not a dummy token
+  // Clear dummy tokens from old client-side auth fallback
   if (token.startsWith('dummy-token-')) {
-    // Dummy tokens are only valid for current session
-    return true;
+    localStorage.removeItem('accessToken');
+    localStorage.removeItem('refreshToken');
+    return false;
   }
   
-  // For real tokens, we should validate them
-  // For now, just check if they exist
+  // For real JWT tokens, assume valid (will be validated by backend)
   return true;
 };
 
@@ -52,40 +52,16 @@ export const useAuthStore = create<AuthState>((set) => ({
     try {
       set({ isLoading: true, error: null });
       
-      try {
-        // Try backend authentication first
-        console.log('[AuthStore] Attempting backend authentication...');
-        const response = await authAPI.login({ email, password });
-        console.log('[AuthStore] Backend login successful:', response);
-        set({ 
-          user: response.user as User, 
-          isAuthenticated: true, 
-          isLoading: false 
-        });
-        console.log('[AuthStore] Auth state updated - isAuthenticated: true');
-      } catch (backendError: any) {
-        // If backend is unavailable, use simple client-side auth for development
-        console.warn('[AuthStore] Backend unavailable, using client-side auth');
-        
-        // Simple validation - just check if email and password are provided
-        if (email && password) {
-          // Store a dummy token to mark as authenticated
-          localStorage.setItem('accessToken', 'dummy-token-' + Date.now());
-          console.log('[AuthStore] Client-side auth successful, token stored');
-          set({ 
-            user: { 
-              id: 'local-user',
-              email, 
-              emailVerified: true 
-            } as User, 
-            isAuthenticated: true, 
-            isLoading: false 
-          });
-          console.log('[AuthStore] Auth state updated - isAuthenticated: true (client-side)');
-        } else {
-          throw new Error('Email and password required');
-        }
-      }
+      // Backend authentication only
+      console.log('[AuthStore] Attempting backend authentication...');
+      const response = await authAPI.login({ email, password });
+      console.log('[AuthStore] Backend login successful:', response);
+      set({ 
+        user: response.user as User, 
+        isAuthenticated: true, 
+        isLoading: false 
+      });
+      console.log('[AuthStore] Auth state updated - isAuthenticated: true');
     } catch (error: any) {
       console.error('[AuthStore] Login failed:', error);
       set({ 
