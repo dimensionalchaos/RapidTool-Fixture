@@ -36,11 +36,13 @@ export interface ModelImport {
  */
 export async function uploadModel(
   file: File,
-  projectId: string
+  projectId: string | null
 ): Promise<ModelImportResponse> {
   const formData = new FormData();
   formData.append('model', file);
-  formData.append('projectId', projectId);
+  if (projectId) {
+    formData.append('projectId', projectId);
+  }
 
   const response = await apiClient.instance.post<{
     success: boolean;
