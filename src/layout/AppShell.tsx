@@ -115,6 +115,7 @@ export interface AppShellHandle {
 
 interface AppShellProps {
   children: ReactNode;
+  onLogout?: () => void;
   onToggleDesignMode?: () => void;
   designMode?: boolean;
   isProcessing?: boolean;
@@ -153,22 +154,22 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
     const [selectedPartId, setSelectedPartId] = useSelectedPart();
     const [partVisibility, setPartVisibility] = usePartVisibility();
     const [baseplateVisible, setBaseplateVisible] = useBaseplateVisible();
-    
+
     // Processing state (Phase 7e)
     const [isProcessing, setIsProcessing] = useIsProcessing();
     const [fileError, setFileError] = useFileError();
     const [meshAnalysis, setMeshAnalysis] = useMeshAnalysis();
     const [meshProgress, setMeshProgress] = useMeshProgress();
     const [isMeshProcessing, setIsMeshProcessing] = useIsMeshProcessing();
-    
+
     // Dialog states (Phase 7f)
     const [isUnitsDialogOpen, setIsUnitsDialogOpen] = useUnitsDialog();
     const [isOptimizationDialogOpen, setIsOptimizationDialogOpen] = useOptimizationDialog();
-    
+
     // Pending file state (kept as local - transient)
     const [pendingProcessedFile, setPendingProcessedFile] = useState<ProcessedFile | null>(null);
     const [pendingFileSize, setPendingFileSize] = useState<number | undefined>(undefined);
-    
+
     // Processing results state (kept as local - transient)
     const [processingResult, setProcessingResult] = useState<{
       success: boolean;
@@ -270,8 +271,8 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
 
     const handleGenerateCavityPreview = useCallback(() => {
       setIsCavityProcessing(true);
-      window.dispatchEvent(new CustomEvent('generate-offset-mesh-preview', { 
-        detail: { settings: cavitySettings } 
+      window.dispatchEvent(new CustomEvent('generate-offset-mesh-preview', {
+        detail: { settings: cavitySettings }
       }));
       // Processing state will be cleared by the 3DScene when complete
       // We'll listen for the completion event
@@ -293,8 +294,8 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
     const handleExecuteCavity = useCallback(() => {
       setIsCavityProcessing(true);
       setIsApplyingCavity(true);
-      window.dispatchEvent(new CustomEvent('execute-cavity-subtraction', { 
-        detail: { settings: cavitySettings } 
+      window.dispatchEvent(new CustomEvent('execute-cavity-subtraction', {
+        detail: { settings: cavitySettings }
       }));
       // Listen for completion
       const handleComplete = () => {
@@ -327,14 +328,14 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
       setIsExporting(true);
       // Dispatch export event to 3DScene which has the merged fixture mesh
       window.dispatchEvent(new CustomEvent('export-fixture', { detail: { config } }));
-      
+
       // Listen for export completion
       const handleExportComplete = (e: CustomEvent) => {
         setIsExporting(false);
         window.removeEventListener('export-complete', handleExportComplete as EventListener);
       };
       window.addEventListener('export-complete', handleExportComplete as EventListener);
-      
+
       // Timeout fallback
       setTimeout(() => {
         setIsExporting(false);
@@ -350,8 +351,8 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
       setIsHolePlacementMode(true);
       // Dispatch event to 3D scene to start placement mode
       // Use depth (thickness in Y) not height (length in Z)
-      window.dispatchEvent(new CustomEvent('hole-start-placement', { 
-        detail: { config, depth: currentBaseplate?.depth ?? 20 } 
+      window.dispatchEvent(new CustomEvent('hole-start-placement', {
+        detail: { config, depth: currentBaseplate?.depth ?? 20 }
       }));
     }, [currentBaseplate?.depth]);
 
@@ -365,7 +366,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
       setMountingHoles(prev => [...prev, hole]);
       setPendingHoleConfig(null);
       setIsHolePlacementMode(false);
-      
+
       // Mark drill step as completed if not already
       if (!completedSteps.includes('drill')) {
         setCompletedSteps(prev => [...prev, 'drill']);
@@ -381,7 +382,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
       if (selectedHoleId === holeId) {
         setSelectedHoleId(null);
       }
-      
+
       // If no holes left, remove drill from completed steps
       setMountingHoles(currentHoles => {
         if (currentHoles.length === 0) {
@@ -396,7 +397,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
       const handleHoleCreated = (e: CustomEvent<PlacedHole>) => {
         handleHolePlaced(e.detail);
       };
-      
+
       const handlePlacementCancelled = () => {
         setPendingHoleConfig(null);
         setIsHolePlacementMode(false);
@@ -410,12 +411,12 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
       const handleHoleUpdatedFrom3D = (e: CustomEvent<PlacedHole>) => {
         handleHoleUpdate(e.detail);
       };
-      
+
       window.addEventListener('hole-placed', handleHoleCreated as EventListener);
       window.addEventListener('hole-placement-cancelled', handlePlacementCancelled);
       window.addEventListener('hole-select-request', handleHoleSelectRequest as EventListener);
       window.addEventListener('hole-updated', handleHoleUpdatedFrom3D as EventListener);
-      
+
       return () => {
         window.removeEventListener('hole-placed', handleHoleCreated as EventListener);
         window.removeEventListener('hole-placement-cancelled', handlePlacementCancelled);
@@ -471,18 +472,18 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
           setMeshProgress({ stage: 'analyzing', progress: 0, message: 'Analyzing mesh...' });
           const analysis = await analyzeMesh(processedFile.mesh.geometry, setMeshProgress);
           setMeshAnalysis(analysis);
-          
+
           // Store the processed file for later use
           setPendingProcessedFile(processedFile);
-          
+
           // Check if file is large (>5MB) - should be decimated for performance
           const isLargeFile = pendingFileRef.current && pendingFileRef.current.size > LARGE_FILE_THRESHOLD;
-          
+
           // If mesh has issues, needs decimation, or is a large file, show the optimization dialog
           if (analysis.issues.length > 0 || analysis.triangleCount > OPTIMIZATION_DIALOG_THRESHOLD || isLargeFile) {
             setIsProcessing(false);
             setIsOptimizationDialogOpen(true);
-            
+
             if (isLargeFile) {
               console.log(`[Mesh Import] Large file detected (${(pendingFileRef.current!.size / 1024 / 1024).toFixed(2)} MB) - optimization recommended`);
             }
@@ -503,10 +504,10 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
     const finalizeMeshImport = useCallback((processedFile: ProcessedFile) => {
       // Add to imported parts array
       setImportedParts(prev => [...prev, processedFile]);
-      
+
       // Select the newly imported part
       setSelectedPartId(processedFile.id);
-      
+
       // Calculate part diagonal and set adaptive pixels per unit for cavity settings
       if (processedFile.mesh?.geometry) {
         processedFile.mesh.geometry.computeBoundingBox();
@@ -515,9 +516,9 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
           const size = box.getSize(new THREE.Vector3());
           const diagonal = Math.sqrt(size.x * size.x + size.y * size.y + size.z * size.z);
           const adaptivePPU = getAdaptivePixelsPerUnit(diagonal);
-          
+
           console.log(`[AppShell] Part diagonal: ${diagonal.toFixed(1)}mm, adaptive px/mm: ${adaptivePPU}`);
-          
+
           // Update cavity settings with adaptive resolution
           setCavitySettings(prev => ({
             ...prev,
@@ -525,7 +526,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
           }));
         }
       }
-      
+
       // Dispatch event for 3D viewer to pick up (with all parts)
       window.dispatchEvent(new CustomEvent('part-imported', { detail: processedFile }));
 
@@ -547,51 +548,51 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
       if (!pendingProcessedFile) return;
 
       setIsMeshProcessing(true);
-      
+
       try {
         const hasRepairableIssues = meshAnalysis && meshAnalysis.issues.length > 0 && !meshAnalysis.issues.every(i => i.includes('High triangle count'));
         const doRepair = shouldRepair === true;
-        
+
         logger.debug(' ═══════════════════════════════════════════');
         logger.debug(' Processing mesh');
         console.log(`[Mesh Import]   Repair requested: ${shouldRepair}`);
         console.log(`[Mesh Import]   Has repairable issues: ${hasRepairableIssues}`);
         console.log(`[Mesh Import]   Will repair: ${doRepair}`);
-        
+
         if (doRepair && hasRepairableIssues) {
           logger.debug(' Starting Manifold3D repair...');
-          
+
           // Set initial progress immediately
-          setMeshProgress({ 
-            stage: 'repairing', 
-            progress: 0, 
-            message: 'Initializing repair...' 
+          setMeshProgress({
+            stage: 'repairing',
+            progress: 0,
+            message: 'Initializing repair...'
           });
-          
+
           const result = await repairAndDecimateMesh(
             pendingProcessedFile.mesh.geometry,
             DECIMATION_TARGET,
             { repair: true, decimate: false },
-            (p) => setMeshProgress({ 
-              stage: p.stage === 'complete' ? 'complete' : 'repairing', 
-              progress: p.progress, 
-              message: p.message 
+            (p) => setMeshProgress({
+              stage: p.stage === 'complete' ? 'complete' : 'repairing',
+              progress: p.progress,
+              message: p.message
             })
           );
-          
+
           if (result.success && result.geometry) {
             logger.debug(' ✓ Repair complete');
             console.log(`[Mesh Import]   Was repaired: ${result.wasRepaired}`);
             console.log(`[Mesh Import]   Original triangles: ${result.originalTriangles.toLocaleString()}`);
             console.log(`[Mesh Import]   Final triangles: ${result.finalTriangles.toLocaleString()}`);
-            
+
             const repairedMesh = new THREE.Mesh(
               result.geometry,
               pendingProcessedFile.mesh.material
             );
             repairedMesh.castShadow = true;
             repairedMesh.receiveShadow = true;
-            
+
             const updatedFile: ProcessedFile = {
               ...pendingProcessedFile,
               mesh: repairedMesh,
@@ -600,7 +601,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
                 triangles: result.finalTriangles,
               },
             };
-            
+
             finalizeMeshImport(updatedFile);
           } else {
             logger.debug(' ✗ Repair failed:', result.error);
@@ -624,48 +625,48 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
       if (!pendingProcessedFile) return;
 
       setIsMeshProcessing(true);
-      
+
       // Set initial progress immediately
-      setMeshProgress({ 
-        stage: 'decimating', 
-        progress: 0, 
-        message: 'Initializing optimization...' 
+      setMeshProgress({
+        stage: 'decimating',
+        progress: 0,
+        message: 'Initializing optimization...'
       });
-      
+
       try {
         logger.debug(' ═══════════════════════════════════════════');
         logger.debug(' Starting mesh optimization');
         console.log(`[Mesh Import]   Repair requested: ${shouldRepair}`);
-        
+
         let currentGeometry = pendingProcessedFile.mesh.geometry;
-        
+
         // Use legacy repair if requested (faster but less robust)
         if (shouldRepair && meshAnalysis && meshAnalysis.issues.length > 0 && !meshAnalysis.issues.every(i => i.includes('High triangle count'))) {
           setMeshProgress({ stage: 'repairing', progress: 0, message: 'Repairing mesh...' });
           const repairResult = await repairMesh(currentGeometry, setMeshProgress);
-          
+
           if (repairResult.success && repairResult.repairedGeometry) {
             logger.debug(' ✓ Quick repair complete');
             currentGeometry = repairResult.repairedGeometry;
           }
         }
-        
+
         setMeshProgress({ stage: 'decimating', progress: 0, message: 'Optimizing mesh...' });
         const decimationResult = await decimateMesh(currentGeometry, DECIMATION_TARGET, setMeshProgress);
-        
+
         if (decimationResult.success && decimationResult.decimatedGeometry) {
           logger.debug(' ✓ Optimization complete');
           console.log(`[Mesh Import]   Original: ${decimationResult.originalTriangles.toLocaleString()}`);
           console.log(`[Mesh Import]   Final: ${decimationResult.finalTriangles.toLocaleString()}`);
           console.log(`[Mesh Import]   Reduction: ${decimationResult.reductionPercent.toFixed(1)}%`);
-          
+
           const decimatedMesh = new THREE.Mesh(
             decimationResult.decimatedGeometry,
             pendingProcessedFile.mesh.material
           );
           decimatedMesh.castShadow = true;
           decimatedMesh.receiveShadow = true;
-          
+
           const updatedFile: ProcessedFile = {
             ...pendingProcessedFile,
             mesh: decimatedMesh,
@@ -674,7 +675,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
               triangles: decimationResult.finalTriangles,
             },
           };
-          
+
           finalizeMeshImport(updatedFile);
         } else {
           logger.debug(' ✗ Optimization failed:', decimationResult.error);
@@ -699,25 +700,25 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
       logger.debug(' handleRepairAndOptimize called');
       logger.debug(' Setting isMeshProcessing=true');
       setIsMeshProcessing(true);
-      
+
       // For large files (>5MB), use aggressive decimation target (50K triangles)
       // Otherwise use standard target (500K)
       const isLargeFile = pendingFileSize && pendingFileSize > LARGE_FILE_THRESHOLD;
       const LARGE_FILE_DECIMATION_TARGET = 50_000;
       const effectiveTarget = isLargeFile ? LARGE_FILE_DECIMATION_TARGET : DECIMATION_TARGET;
-      
+
       // Set initial progress immediately
       logger.debug(' Setting initial meshProgress');
-      setMeshProgress({ 
-        stage: 'repairing', 
-        progress: 0, 
-        message: 'Initializing mesh processing...' 
+      setMeshProgress({
+        stage: 'repairing',
+        progress: 0,
+        message: 'Initializing mesh processing...'
       });
-      
+
       // IMPORTANT: Allow UI to update before starting heavy processing
       // Without this delay, React can't re-render before the main thread is blocked
       await new Promise(resolve => setTimeout(resolve, 100));
-      
+
       try {
         logger.debug(' ═══════════════════════════════════════════');
         logger.debug(' Starting ROBUST Repair & Optimize with Manifold3D');
@@ -725,22 +726,22 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
         console.log(`[Mesh Import]   Target triangles: ${effectiveTarget.toLocaleString()}`);
         console.log(`[Mesh Import]   File size: ${pendingFileSize ? (pendingFileSize / 1024 / 1024).toFixed(2) + ' MB' : 'unknown'}`);
         console.log(`[Mesh Import]   Large file mode (>5MB): ${!!isLargeFile}`);
-        
+
         const result = await repairAndDecimateMesh(
           pendingProcessedFile.mesh.geometry,
           effectiveTarget,
-          { 
-            repair: true, 
-            decimate: true, 
+          {
+            repair: true,
+            decimate: true,
             forceDecimate: !!isLargeFile // Force decimation for large files
           },
-          (p) => setMeshProgress({ 
-            stage: p.stage === 'complete' ? 'complete' : p.stage === 'repairing' ? 'repairing' : 'decimating', 
-            progress: p.progress, 
-            message: p.message 
+          (p) => setMeshProgress({
+            stage: p.stage === 'complete' ? 'complete' : p.stage === 'repairing' ? 'repairing' : 'decimating',
+            progress: p.progress,
+            message: p.message
           })
         );
-        
+
         if (result.success && result.geometry) {
           logger.debug(' ✓ Repair & Optimize complete');
           console.log(`[Mesh Import]   Was repaired: ${result.wasRepaired}`);
@@ -749,14 +750,14 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
           console.log(`[Mesh Import]   Final: ${result.finalTriangles.toLocaleString()}`);
           console.log(`[Mesh Import]   Reduction: ${result.reductionPercent.toFixed(1)}%`);
           result.actions.forEach(action => console.log(`[Mesh Import]   → ${action}`));
-          
+
           const processedMesh = new THREE.Mesh(
             result.geometry,
             pendingProcessedFile.mesh.material
           );
           processedMesh.castShadow = true;
           processedMesh.receiveShadow = true;
-          
+
           const updatedFile: ProcessedFile = {
             ...pendingProcessedFile,
             mesh: processedMesh,
@@ -765,7 +766,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
               triangles: result.finalTriangles,
             },
           };
-          
+
           // Store results for display - don't auto-close
           setProcessingResult({
             success: true,
@@ -844,15 +845,15 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
     const handleStepChange = useCallback((step: WorkflowStep) => {
       // Log memory at step transitions for debugging
       //logMemoryUsage(`Step change: ${activeStep} → ${step}`);
-      
+
       setActiveStep(step);
-      
+
       // Cancel placement mode when leaving supports step
       if (step !== 'supports' && isPlacementMode) {
         setIsPlacementMode(false);
         window.dispatchEvent(new Event('supports-cancel-placement'));
       }
-      
+
     }, [isPlacementMode, activeStep]);
 
     // Listen for highlight-component events from double-click on 3D meshes
@@ -871,7 +872,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
       const handleHighlightComponent = (event: CustomEvent<{ category: string; id: string }>) => {
         const category = event.detail?.category;
         if (!category) return;
-        
+
         const targetStep = categoryToStep[category];
         if (targetStep && targetStep !== activeStep) {
           setActiveStep(targetStep);
@@ -887,10 +888,10 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
     const handleResetSession = () => {
       // Log memory before reset
       //logMemoryUsage('Session reset - before');
-      
+
       // Terminate all workers to free memory
       //terminateWorkers();
-      
+
       // Reset all session state - like starting fresh
       setProjectName('Untitled');
       setCurrentBaseplate(null);
@@ -910,12 +911,12 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
       setSelectedHoleId(null);
       setIsHolePlacementMode(false);
       setPendingHoleConfig(null);
-      
+
       // Dispatch events to reset the 3D scene and clear the file
       window.dispatchEvent(new CustomEvent('viewer-reset'));
       window.dispatchEvent(new CustomEvent('session-reset'));
       window.dispatchEvent(new Event('supports-cancel-placement'));
-      
+
       // Log memory after reset (delayed to allow GC)
       //setTimeout(() => logMemoryUsage('Session reset - after (delayed)'), 1000);
     };
@@ -954,10 +955,10 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
       const baseplateId = `baseplate-${Date.now()}`;
       // dimensions.height is the baseplate thickness (depth in Y direction)
       const baseplateDepth = dimensions?.height ?? 4;
-      
+
       // For multi-section, include the drawn sections
       let sections = option === 'multi-section' ? dimensions?.sections : undefined;
-      
+
       // If switching TO multi-section FROM a different existing baseplate type, clear all placed features
       // to prevent errors with existing supports, clamps, labels, holes
       // NOTE: Only clear if there IS a current baseplate AND it's not multi-section
@@ -967,51 +968,51 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
         setClamps([]);
         setLabels([]);
         setMountingHoles([]);
-        
+
         // Dispatch events to notify 3D scene to clear its internal state
         window.dispatchEvent(new Event('supports-clear-all'));
         window.dispatchEvent(new Event('clamps-clear-all'));
         window.dispatchEvent(new Event('labels-clear-all'));
         window.dispatchEvent(new Event('mounting-holes-clear-all'));
       }
-      
+
       // If we're adding to an existing multi-section baseplate, preserve the ID and merge sections
       if (option === 'multi-section' && currentBaseplate?.type === 'multi-section') {
         // Merge existing sections with new ones
         const existingSections = currentBaseplate.sections || [];
         const newSections = sections || [];
         sections = [...existingSections, ...newSections];
-        
-        setCurrentBaseplate({ 
+
+        setCurrentBaseplate({
           id: currentBaseplate.id, // Keep the same ID
-          type: option, 
-          padding: dimensions?.padding || dimensions?.oversizeXY, 
+          type: option,
+          padding: dimensions?.padding || dimensions?.oversizeXY,
           height: dimensions?.height,
           depth: baseplateDepth,
           sections
         });
       } else {
-        setCurrentBaseplate({ 
-          id: baseplateId, 
-          type: option, 
-          padding: dimensions?.padding || dimensions?.oversizeXY, 
+        setCurrentBaseplate({
+          id: baseplateId,
+          type: option,
+          padding: dimensions?.padding || dimensions?.oversizeXY,
           height: dimensions?.height,
           depth: baseplateDepth,
           sections
         });
       }
-      
+
       // Clear drawn sections after creating the baseplate
       if (option === 'multi-section') {
         setDrawnBaseplateSections([]);
         setIsBaseplateDrawingMode(false);
-        
+
         // Exit drawing mode - notify 3D scene to restore camera and enable orbit controls
         window.dispatchEvent(new CustomEvent('baseplate-drawing-mode-changed', {
           detail: { active: false }
         }));
       }
-      
+
       // Mark baseplates step as completed
       if (!completedSteps.includes('baseplates')) {
         setCompletedSteps(prev => [...prev, 'baseplates']);
@@ -1047,9 +1048,9 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
       // Use functional update to avoid stale closure issues
       setCurrentBaseplate(prev => {
         if (!prev || prev.type !== 'multi-section') return prev;
-        
+
         const updatedSections = (prev.sections || []).filter(s => s.id !== sectionId);
-        
+
         // If no sections left, remove the entire baseplate
         if (updatedSections.length === 0) {
           // Dispatch removal event - handleBaseplateRemoved will be called by the caller
@@ -1060,14 +1061,14 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
           }, 0);
           return null; // Remove the baseplate
         }
-        
+
         // Dispatch update event to 3D scene
         setTimeout(() => {
           window.dispatchEvent(new CustomEvent('baseplate-section-removed', {
             detail: { sectionId, sections: updatedSections }
           }));
         }, 0);
-        
+
         return {
           ...prev,
           sections: updatedSections,
@@ -1080,22 +1081,22 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
       // Use functional update to avoid stale closure issues
       setCurrentBaseplate(prev => {
         if (!prev || prev.type !== 'multi-section') return prev;
-        
+
         // Capture basePlateId before any async operations (Immer proxy will be revoked after set)
         const basePlateId = prev.id;
-        
+
         // Update the section in currentBaseplate
         // Also update original* values to prevent auto-resize snap-back
         const updatedSections = (prev.sections || []).map(s => {
           if (s.id !== sectionId) return s;
-          
+
           const updated = { ...s, ...updates };
           // Calculate new dimensions and center
           const newWidth = updated.maxX - updated.minX;
           const newDepth = updated.maxZ - updated.minZ;
           const newCenterX = (updated.minX + updated.maxX) / 2;
           const newCenterZ = (updated.minZ + updated.maxZ) / 2;
-          
+
           // Update original values to match user's manual changes
           return {
             ...updated,
@@ -1105,7 +1106,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
             originalCenterZ: newCenterZ,
           };
         });
-        
+
         // Dispatch event to update 3D scene - include source to prevent circular updates
         const updatedSection = updatedSections.find(s => s.id === sectionId);
         if (updatedSection) {
@@ -1128,7 +1129,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
             }));
           }, 0);
         }
-        
+
         return {
           ...prev,
           sections: updatedSections,
@@ -1139,7 +1140,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
     // Handle section selection from properties panel
     const handleSelectBaseplateSection = useCallback((sectionId: string | null) => {
       setSelectedBasePlateSectionId(sectionId);
-      
+
       // Dispatch event to highlight section in 3D scene
       window.dispatchEvent(new CustomEvent('baseplate-section-selected', {
         detail: { sectionId }
@@ -1156,18 +1157,18 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
       // Only handle events from 3DScene (gizmo drag), not from properties panel
       // This prevents circular updates
       if (e.detail.source === 'properties-panel') return;
-      
+
       const { sectionId, newBounds } = e.detail;
-      
+
       // Use functional update to avoid stale closure issues
       setCurrentBaseplate(prev => {
         if (!prev || prev.type !== 'multi-section') return prev;
-        
+
         // Update the section in currentBaseplate
-        const updatedSections = (prev.sections || []).map(s => 
+        const updatedSections = (prev.sections || []).map(s =>
           s.id === sectionId ? { ...s, ...newBounds } : s
         );
-        
+
         return {
           ...prev,
           sections: updatedSections,
@@ -1181,37 +1182,37 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
       if (active && currentBaseplate && currentBaseplate.type !== 'multi-section') {
         // Clear the existing baseplate
         handleBaseplateRemoved(currentBaseplate.id);
-        
+
         // Clear all features that depend on baseplate geometry
         setSupports([]);
         setClamps([]);
         setLabels([]);
         setMountingHoles([]);
-        
+
         // Dispatch events to notify 3D scene to clear its internal state
         window.dispatchEvent(new Event('supports-clear-all'));
         window.dispatchEvent(new Event('clamps-clear-all'));
         window.dispatchEvent(new Event('labels-clear-all'));
         window.dispatchEvent(new Event('mounting-holes-clear-all'));
       }
-      
+
       setIsBaseplateDrawingMode(active);
       // Dispatch event to 3D scene to enable/disable drawing mode
-      window.dispatchEvent(new CustomEvent('baseplate-drawing-mode-changed', { 
-        detail: { 
+      window.dispatchEvent(new CustomEvent('baseplate-drawing-mode-changed', {
+        detail: {
           active,
-          padding: currentBaseplateParams.padding 
-        } 
+          padding: currentBaseplateParams.padding
+        }
       }));
     }, [currentBaseplateParams, currentBaseplate]);
 
     // Handle adding more sections to existing multi-section baseplate
     const handleAddBaseplateSection = useCallback(() => {
       if (!currentBaseplate || currentBaseplate.type !== 'multi-section') return;
-      
+
       // Navigate to baseplates step
       setActiveStep('baseplates');
-      
+
       // Enable drawing mode
       handleToggleDrawingMode(true);
     }, [currentBaseplate, handleToggleDrawingMode]);
@@ -1220,30 +1221,30 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
       // Use functional update to avoid stale closure issues
       setCurrentBaseplate(prev => {
         if (!prev) return prev;
-        
+
         // Capture id before any async operations (Immer proxy will be revoked after set)
         const basePlateId = prev.id;
-        
+
         const updatedBaseplate = {
           ...prev,
           ...updates
         };
-        
+
         // Capture dimensions before setTimeout (avoid accessing Immer proxy after revocation)
         const dimensions = {
           padding: updatedBaseplate.padding,
           height: updatedBaseplate.height,
           oversizeXY: updatedBaseplate.padding
         };
-        
+
         // Dispatch event to update baseplate in 3D scene
         // Use setTimeout to dispatch after state update
         setTimeout(() => {
-          window.dispatchEvent(new CustomEvent('update-baseplate', { 
-            detail: { basePlateId, dimensions } 
+          window.dispatchEvent(new CustomEvent('update-baseplate', {
+            detail: { basePlateId, dimensions }
           }));
         }, 0);
-        
+
         return updatedBaseplate;
       });
     }, []); // No dependencies needed with functional update
@@ -1323,7 +1324,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
           depth
         });
       };
-      
+
       window.addEventListener('baseplate-config-updated', handleConfigUpdate as EventListener);
       return () => window.removeEventListener('baseplate-config-updated', handleConfigUpdate as EventListener);
     }, []);
@@ -1339,7 +1340,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
       const handleSectionSelected = (e: CustomEvent<{ sectionId: string }>) => {
         setSelectedBasePlateSectionId(e.detail.sectionId);
       };
-      
+
       window.addEventListener('baseplate-section-selected', handleSectionSelected as EventListener);
       return () => window.removeEventListener('baseplate-section-selected', handleSectionSelected as EventListener);
     }, []);
@@ -1361,17 +1362,17 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
           }
           return [...prev, support];
         });
-        
+
         // Mark supports step as completed
         if (!completedSteps.includes('supports')) {
           setCompletedSteps(prev => [...prev, 'supports']);
         }
-        
+
         // Record to undo stack
         const state = { type: 'support-created', support };
         setUndoStack(prev => [...prev, state]);
         setRedoStack([]);
-        
+
         // Exit placement mode after creating a support (so user can create another by clicking a type)
         setIsPlacementMode(false);
       };
@@ -1456,7 +1457,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
             return [...prev, label];
           });
           setSelectedLabelId(label.id);
-          
+
           // Mark labels step as completed
           if (!completedSteps.includes('labels')) {
             setCompletedSteps(prev => [...prev, 'labels']);
@@ -1508,7 +1509,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
             return [...prev, clamp];
           });
           setSelectedClampId(clamp.id);
-          
+
           // Mark clamps step as completed
           if (!completedSteps.includes('clamps')) {
             setCompletedSteps(prev => [...prev, 'clamps']);
@@ -1759,17 +1760,17 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
         <div className="flex-1 flex overflow-hidden">
           {/* Left Static Vertical Toolbar */}
           <aside className="w-14 flex-shrink-0 border-r border-border/50 tech-glass">
-            <VerticalToolbar 
-              onToolSelect={handleToolSelect} 
+            <VerticalToolbar
+              onToolSelect={handleToolSelect}
               activeTool={activeStep}
               onAccountClick={() => setIsAccountSettingsOpen(true)}
             />
           </aside>
 
           {/* Collapsible Context Options Panel */}
-          <aside 
+          <aside
             className="border-r border-border/50 tech-glass flex flex-col overflow-hidden flex-shrink-0"
-            style={{ 
+            style={{
               width: isContextPanelCollapsed ? 48 : 320,
               transition: 'width 300ms ease-in-out'
             }}
@@ -1809,7 +1810,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
                   completedSteps={completedSteps}
                   skippedSteps={skippedSteps}
                   onSkipStep={(step) => {
-                    setSkippedSteps(prev => 
+                    setSkippedSteps(prev =>
                       prev.includes(step) ? prev : [...prev, step]
                     );
                   }}
@@ -1832,9 +1833,9 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
                       onSelectBaseplate={(type, options) => {
                         // Store params for drawing mode
                         setCurrentBaseplateParams({ padding: options.padding, height: options.height });
-                        
+
                         window.dispatchEvent(new CustomEvent('create-baseplate', {
-                          detail: { 
+                          detail: {
                             type: 'baseplate',
                             option: type,
                             dimensions: {
@@ -1923,7 +1924,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
                           setCompletedSteps(prev => [...prev, 'labels']);
                         }
                       }}
-                      onUpdateLabel={(labelId, updates) => setLabels(prev => prev.map(l => 
+                      onUpdateLabel={(labelId, updates) => setLabels(prev => prev.map(l =>
                         l.id === labelId ? { ...l, ...updates } as any : l
                       ))}
                       onDeleteLabel={(labelId) => {
@@ -1989,7 +1990,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
             {/* Floating Tips Overlay */}
             {(() => {
               const currentStepConfig = WORKFLOW_STEPS.find(s => s.id === activeStep);
-              
+
               // Determine the next step hint based on current step
               // Order: import → baseplates → supports → clamps → labels → drill → cavity → export
               const getNextStepInfo = () => {
@@ -2005,10 +2006,10 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
                 };
               };
               const nextStepInfo = getNextStepInfo();
-              
+
               // Check if current step is optional
               const isCurrentStepOptional = currentStepConfig?.isOptional || false;
-              
+
               return currentStepConfig?.helpText?.length ? (
                 <div className="absolute top-4 left-4 z-10 max-w-xs">
                   <div className="tech-glass rounded-lg p-3 text-xs text-muted-foreground font-tech space-y-1.5 bg-background/80 backdrop-blur-sm border border-border/50 shadow-lg">
@@ -2055,9 +2056,9 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
           </main>
 
           {/* Right Properties Panel - Fixed to right side */}
-          <aside 
+          <aside
             className="border-l border-border/50 tech-glass flex flex-col overflow-hidden flex-shrink-0"
-            style={{ 
+            style={{
               width: isPropertiesCollapsed ? 48 : 280,
               transition: 'width 300ms ease-in-out'
             }}
@@ -2091,8 +2092,8 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
             {!isPropertiesCollapsed && (
               <div className="p-4 flex-1 overflow-auto">
                 {/* Part Properties Accordion - File Details, Transform controls, Baseplate, and Supports */}
-                <PartPropertiesAccordion 
-                  hasModel={importedParts.length > 0} 
+                <PartPropertiesAccordion
+                  hasModel={importedParts.length > 0}
                   currentFile={actualFile}
                   importedParts={importedParts}
                   selectedPartId={selectedPartId}
@@ -2140,8 +2141,8 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
                       window.dispatchEvent(new CustomEvent('part-selected', { detail: null }));
                     }
                     // Dispatch event for 3D viewer
-                    window.dispatchEvent(new CustomEvent('part-visibility-changed', { 
-                      detail: { partId, visible } 
+                    window.dispatchEvent(new CustomEvent('part-visibility-changed', {
+                      detail: { partId, visible }
                     }));
                   }}
                   // Cavity settings props (simplified - main controls in CavityStepContent)
@@ -2153,12 +2154,12 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
                   selectedLabelId={selectedLabelId}
                   onLabelSelect={setSelectedLabelId}
                   onLabelUpdate={(labelId, updates) => {
-                    setLabels(prev => prev.map(l => 
+                    setLabels(prev => prev.map(l =>
                       l.id === labelId ? { ...l, ...updates } : l
                     ));
                     // Dispatch event for 3D scene
-                    window.dispatchEvent(new CustomEvent('label-update', { 
-                      detail: { labelId, updates } 
+                    window.dispatchEvent(new CustomEvent('label-update', {
+                      detail: { labelId, updates }
                     }));
                   }}
                   onLabelDelete={(labelId) => {

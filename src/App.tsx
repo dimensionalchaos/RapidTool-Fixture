@@ -16,9 +16,9 @@ import FileImport from './modules/FileImport';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { ProcessedFile } from './modules/FileImport/types';
 
-// MainPortal and MainLayout removed for architecture refactor
-// import MainPortal from './pages/MainPortal';
-// import { MainLayout } from './layout/MainLayout';
+// MainPortal and MainLayout restored
+import MainPortal from './pages/MainPortal';
+import { MainLayout } from './layout/MainLayout';
 
 const queryClient = new QueryClient();
 
@@ -126,9 +126,21 @@ const App = () => {
               <Route path="/auth/verify" element={<VerifyEmailPage />} />
               <Route path="/auth/reset-password" element={<ResetPasswordPage />} />
 
-              {/* --- UPDATED ROOT ROUTE - NOW POINTS TO FIXTURE APP --- */}
+              {/* --- RESTORED MAIN PORTAL ROUTE --- */}
               <Route
                 path="/"
+                element={
+                  <ProtectedRoute>
+                    <MainLayout>
+                      <MainPortal />
+                    </MainLayout>
+                  </ProtectedRoute>
+                }
+              />
+
+              {/* --- CAD APPLICATION ROUTE --- */}
+              <Route
+                path="/app/fixture"
                 element={
                   <ProtectedRoute>
                     <MainApp />
@@ -136,10 +148,7 @@ const App = () => {
                 }
               />
 
-              {/* --- OLD FIXTURE ROUTE REMOVED (Redundant) --- */}
-              {/* <Route path="/app/fixture" element={<ProtectedRoute><MainApp /></ProtectedRoute>} /> */}
-
-              {/* Catch-all: Redirect back to Root (Fixture App) if logged in */}
+              {/* Catch-all: Redirect back to Root */}
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </TooltipProvider>
