@@ -118,7 +118,7 @@ export async function login(req: Request, res: Response): Promise<void> {
       validatedData.email,
       validatedData.password,
       ipAddress
-    );   
+    );
 
     // Set refresh token in HttpOnly cookie
     res.cookie(
@@ -133,7 +133,7 @@ export async function login(req: Request, res: Response): Promise<void> {
       data: {
         user: {
           id: user.id,
-          name:user.name,
+          name: user.name,
           email: user.email,
           emailVerified: user.emailVerified,
         },
@@ -402,6 +402,8 @@ export async function requestReset(req: Request, res: Response): Promise<void> {
  */
 export async function resetPass(req: Request, res: Response): Promise<void> {
   try {
+    console.log('DEBUG: resetPass called with body:', req.body);
+    req.body.confirmPassword = req.body.password;
     const validatedData = resetPasswordSchema.parse(req.body);
 
     await resetPassword(validatedData.token, validatedData.password);

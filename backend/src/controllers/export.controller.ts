@@ -11,11 +11,12 @@ import {
 } from '../services/export.service';
 import { ExportFormat } from '@prisma/client';
 import { createErrorLog } from '../services/errorLog.service';
+import { prisma } from '../lib/prisma';
 
 export async function requestExport(req: Request, res: Response): Promise<void> {
   try {
     const userId = req.user?.userId;
-    
+
     if (!userId) {
       res.status(401).json({
         success: false,
@@ -63,7 +64,7 @@ export async function requestExport(req: Request, res: Response): Promise<void> 
     });
   } catch (error) {
     console.error('[Export] Request failed:', error);
-    
+
     await createErrorLog({
       userId: req.user?.userId,
       category: 'EXPORT_ERROR',
@@ -87,7 +88,7 @@ export async function getExportStatus(req: Request, res: Response): Promise<void
   try {
     const { exportId } = req.params;
     const userId = req.user?.userId;
-    
+
     if (!userId) {
       res.status(401).json({
         success: false,
@@ -141,7 +142,7 @@ export async function downloadExport(req: Request, res: Response): Promise<void>
   try {
     const { exportId } = req.params;
     const userId = req.user?.userId;
-    
+
     if (!userId) {
       res.status(401).json({
         success: false,
@@ -177,7 +178,7 @@ export async function downloadExport(req: Request, res: Response): Promise<void>
 export async function getUserExportsList(req: Request, res: Response): Promise<void> {
   try {
     const userId = req.user?.userId;
-    
+
     if (!userId) {
       res.status(401).json({
         success: false,
@@ -206,7 +207,7 @@ export async function getProjectExportsList(req: Request, res: Response): Promis
   try {
     const { projectId } = req.params;
     const userId = req.user?.userId;
-    
+
     if (!userId) {
       res.status(401).json({
         success: false,
@@ -234,7 +235,7 @@ export async function saveExport(req: Request, res: Response): Promise<void> {
   try {
     const { exportId } = req.params;
     const userId = req.user?.userId;
-    
+
     if (!userId) {
       res.status(401).json({
         success: false,
@@ -282,5 +283,64 @@ export async function saveExport(req: Request, res: Response): Promise<void> {
       success: false,
       error: 'Failed to save export data',
     });
+  }
+}
+
+// Track export count logic (History Based: New row per export)
+export async function trackExport(req: Request, res: Response): Promise<void> {
+  try {
+    const userId = req.user?.userId;
+    const { projectId, filename, format, settings } = req.body;
+
+    if (!userId) {
+      res.status(401).json({ success: false, error: 'Unauthorized' });
+      return;
+    }
+
+    // Call the service which now handles Auto-Project and Credit Logic
+    const exportRecord = await createExport({
+      userId,
+      projectId, // Can be 'dummy-project-id'
+      format: (format?.toUpperCase() as ExportFormat) || 'STL',
+      filename: filename || 'unknown_export',
+      settings
+    });
+
+    res.json({
+      success: true,
+      exportCount: exportRecord.numberOfExportsDone,
+      exportId: exportRecord.id
+    });
+  } catch (error) {
+    console.error('[Export] Track failed:', error);
+    res.status(500).json({ success: false, error: 'Failed to track export' });
+  }
+}
+
+// Check export limit logic (History based)
+export async function checkExportLimit(req: Request, res: Response): Promise<void> {
+  try {
+    const userId = req.user?.userId;
+
+    if (!userId) {
+      res.status(401).json({ success: false, error: 'Unauthorized' });
+      return;
+    }
+
+    // Find the latest export record to see current credits
+    const lastExport = await prisma.export.findFirst({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+      select: { numberOfExportsDone: true },
+    });
+
+    // Default 0 exports if no history
+    const currentCount = lastExport ? lastExport.numberOfExportsDone : 0;
+    const canExport = (currentCount ?? 0) < 5;
+
+    res.json({ success: true, canExport, currentCount: currentCount ?? 0 });
+  } catch (error) {
+    console.error('[Export] Check limit failed:', error);
+    res.status(500).json({ success: false, error: 'Failed to check export limit' });
   }
 }

@@ -2,6 +2,8 @@ import { Router } from 'express';
 import multer from 'multer';
 import {
   requestExport,
+  trackExport,
+  checkExportLimit,
   getExportStatus,
   downloadExport,
   getUserExportsList,
@@ -25,6 +27,12 @@ router.use(authenticateToken);
 
 // Request new export
 router.post('/request', requestExport);
+
+// Track export count (NEW)
+router.post('/track', trackExport);
+
+// Check export limit (NEW)
+router.get('/check-limit', checkExportLimit);
 
 // Get export status
 router.get('/:exportId', getExportStatus);
