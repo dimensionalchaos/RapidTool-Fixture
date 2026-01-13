@@ -102,7 +102,8 @@ import {
   Redo2,
   Pin,
   Box,
-  Zap
+  Zap,
+  X
 } from "lucide-react";
 import { IconIsoFace, IconIsoTop, IconIsoLeftFace, IconIsoCorner } from "@/components/icons";
 import { RapidToolLogo } from "@/components/RapidToolLogo";
@@ -138,6 +139,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
     const [currentBaseplate, setCurrentBaseplate] = useState<{ id: string; type: string; padding?: number; height?: number; depth?: number; sections?: Array<{ id: string; minX: number; maxX: number; minZ: number; maxZ: number }> } | null>(null);
     const [selectedBasePlateSectionId, setSelectedBasePlateSectionId] = useState<string | null>(null);
 
+
     // Multi-section baseplate drawing state
     const [isBaseplateDrawingMode, setIsBaseplateDrawingMode] = useState(false);
     const [drawnBaseplateSections, setDrawnBaseplateSections] = useState<Array<{ id: string; minX: number; maxX: number; minZ: number; maxZ: number }>>([]);
@@ -146,6 +148,13 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
     // Workflow State (Phase 7c)
     useInitializeFixtureWorkflow();
     const [activeStep, setActiveStep] = useWorkflowStep();
+
+    const [isTipsVisible, setIsTipsVisible] = useState(true);
+
+    // Reset tips visibility when step changes
+    useEffect(() => {
+      setIsTipsVisible(true);
+    }, [activeStep]);
     const [completedSteps, setCompletedSteps] = useCompletedSteps();
     const [skippedSteps, setSkippedSteps] = useSkippedSteps();
 
@@ -2011,8 +2020,14 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
               const isCurrentStepOptional = currentStepConfig?.isOptional || false;
 
               return currentStepConfig?.helpText?.length ? (
-                <div className="absolute top-4 left-4 z-10 max-w-xs">
-                  <div className="tech-glass rounded-lg p-3 text-xs text-muted-foreground font-tech space-y-1.5 bg-background/80 backdrop-blur-sm border border-border/50 shadow-lg">
+                <div className={`absolute top-4 left-4 z-10 max-w-xs transition-opacity duration-300 ${isTipsVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
+                  <div className="relative tech-glass rounded-lg p-3 text-xs text-muted-foreground font-tech space-y-1.5 bg-background/80 backdrop-blur-sm border border-border/50 shadow-lg pr-6">
+                    <button
+                      onClick={() => setIsTipsVisible(false)}
+                      className="absolute top-2 right-2 p-0.5 text-muted-foreground/50 hover:text-foreground transition-colors"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
                     <p className="font-semibold text-foreground flex items-center gap-1.5">
                       <span>💡</span> Tips
                       {isCurrentStepOptional && (
