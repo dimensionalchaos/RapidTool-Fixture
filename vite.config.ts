@@ -62,6 +62,8 @@ export default defineConfig(({ mode }) => ({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
+      "@rapidtool/cad-core": path.resolve(__dirname, "./packages/cad-core/src"),
+      "@rapidtool/cad-ui": path.resolve(__dirname, "./packages/cad-ui/src"),
     },
   },
   optimizeDeps: {
