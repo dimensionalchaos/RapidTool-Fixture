@@ -45,8 +45,13 @@ export async function createExport(data: ExportData) {
       select: { numberOfExportsDone: true },
     });
 
+    const user = await prisma.user.findUnique({
+      where: { id: data.userId },
+      select: { modelLimit: true }
+    });
+
     const currentCount = lastExport ? lastExport.numberOfExportsDone : 0;
-    const EXPORT_LIMIT = 5;
+    const EXPORT_LIMIT = user?.modelLimit ?? 5;
 
     // Fix possible null/undefined fallback
     const countToCheck = currentCount ?? 0;
@@ -56,6 +61,12 @@ export async function createExport(data: ExportData) {
     }
 
     const newExportCount = countToCheck + 1;
+
+    // Sync User's modelsUsed with export count
+    await prisma.user.update({
+      where: { id: data.userId },
+      data: { modelsUsed: newExportCount }
+    });
 
     // 3. Create Export Record
     const exportRecord = await prisma.export.create({

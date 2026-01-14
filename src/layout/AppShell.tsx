@@ -31,6 +31,7 @@ import MeshOptimizationDialog from "@/modules/FileImport/components/MeshOptimiza
 import { useFileProcessing } from "@/modules/FileImport/hooks/useFileProcessing";
 import { LARGE_FILE_THRESHOLD } from "@/modules/FileImport/hooks/useFileProcessing";
 import { ProcessedFile } from "@/modules/FileImport/types";
+import { modelImportAPI } from "@/services/api/modelImport";
 import {
   useInitializeFixtureWorkflow,
   useWorkflowStep,
@@ -458,7 +459,21 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
     };
 
     // Handle file selection - show units dialog
-    const handleFileSelected = useCallback((file: File) => {
+    const handleFileSelected = useCallback(async (file: File) => {
+      try {
+        // Check export limits before starting import
+        const stats = await modelImportAPI.getModelUsageStats();
+        if (stats.used >= stats.limit) {
+          // setFileError(`You have reached your export limit of ${stats.limit}. Please upgrade to continue.`);
+          window.alert(`You have reached your export limit of ${stats.limit}. Please upgrade to continue.`);
+          return;
+        }
+      } catch (err) {
+        console.error('Failed to check usage stats:', err);
+        // Continue if check fails? Or show error?
+        // For now, we'll continue to avoid blocking legitimate users if stats API is down temporarily
+      }
+
       logger.info('File selected:', file.name, 'Size:', (file.size / 1024 / 1024).toFixed(2), 'MB');
       pendingFileRef.current = file;
       setPendingFileSize(file.size);

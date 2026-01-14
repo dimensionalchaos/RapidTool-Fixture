@@ -3,7 +3,6 @@ import {
   createModelImport,
   updateImportStatus,
   updateImportMetadata,
-  incrementUserModelCount,
   getUserModelUsage,
   getModelImportById,
   getUserModelImports,
@@ -43,6 +42,8 @@ export async function uploadModel(req: Request, res: Response): Promise<void> {
     const sanitizedName = file.originalname.replace(/[^a-zA-Z0-9.-]/g, '_');
     const uniqueFilename = `${timestamp}-${sanitizedName}`;
 
+
+
     const modelImport = await createModelImport({
       userId,
       projectId: req.body.projectId,
@@ -53,7 +54,8 @@ export async function uploadModel(req: Request, res: Response): Promise<void> {
       fileHash: req.body.fileHash,
     });
 
-    await incrementUserModelCount(userId);
+    // NOTE: We no longer increment modelsUsed here. 
+    // It is updated only on export to match export count.
 
     res.status(201).json({
       success: true,
