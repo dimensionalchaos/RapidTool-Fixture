@@ -16,10 +16,6 @@ import FileImport from './modules/FileImport';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { ProcessedFile } from './modules/FileImport/types';
 
-// MainPortal and MainLayout restored
-import MainPortal from './pages/MainPortal';
-import { MainLayout } from './layout/MainLayout';
-
 const queryClient = new QueryClient();
 
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
@@ -126,21 +122,9 @@ const App = () => {
               <Route path="/auth/verify" element={<VerifyEmailPage />} />
               <Route path="/auth/reset-password" element={<ResetPasswordPage />} />
 
-              {/* --- RESTORED MAIN PORTAL ROUTE --- */}
+              {/* --- CAD APPLICATION ROUTE (Now at root) --- */}
               <Route
                 path="/"
-                element={
-                  <ProtectedRoute>
-                    <MainLayout>
-                      <MainPortal />
-                    </MainLayout>
-                  </ProtectedRoute>
-                }
-              />
-
-              {/* --- CAD APPLICATION ROUTE --- */}
-              <Route
-                path="/app/fixture"
                 element={
                   <ProtectedRoute>
                     <MainApp />

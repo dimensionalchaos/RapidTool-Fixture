@@ -1,10 +1,25 @@
 {
   "files": [],
-  "references": [{ "path": "./tsconfig.app.json" }, { "path": "./tsconfig.node.json" }],
+  "references": [
+    {
+      "path": "./tsconfig.app.json"
+    },
+    {
+      "path": "./tsconfig.node.json"
+    }
+  ],
   "compilerOptions": {
     "baseUrl": ".",
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": [
+        "./src/*"
+      ],
+      "@rapidtool/cad-core": [
+        "./packages/cad-core/src"
+      ],
+      "@rapidtool/cad-ui": [
+        "./packages/cad-ui/src"
+      ]
     },
     "noImplicitAny": false,
     "noUnusedParameters": false,
