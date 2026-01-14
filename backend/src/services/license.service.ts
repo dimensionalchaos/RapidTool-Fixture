@@ -6,6 +6,7 @@
 
 import { prisma } from '../lib/prisma';
 import { LicenseType, LicenseStatus, UserTier } from '@prisma/client';
+import { licenseConfig } from '../config/license.config';
 
 // ============================================================================
 // TYPES & INTERFACES
@@ -42,12 +43,12 @@ export interface UpgradeTierResult {
 // ============================================================================
 
 const TIER_LIMITS = {
-  FREE: 5,
-  PREMIUM: 999999,
+  FREE: licenseConfig.freeModelLimit,
+  PREMIUM: licenseConfig.premiumModelLimit,
 } as const;
 
-const TRIAL_DURATION_DAYS = 14;
-const EXPIRY_WARNING_DAYS = 7;
+const TRIAL_DURATION_DAYS = licenseConfig.trialDurationDays;
+const EXPIRY_WARNING_DAYS = licenseConfig.expiryWarningDays;
 
 // ============================================================================
 // LICENSE CRUD OPERATIONS

@@ -11,6 +11,8 @@ import {
   saveExport,
 } from '../controllers/export.controller';
 import { authenticateToken } from '../middleware/auth.middleware';
+import { validate } from '../middleware/validation.middleware';
+import { createExportSchema, getExportSchema, downloadExportSchema } from '../validators/export.validator';
 
 const router = Router();
 
@@ -26,19 +28,19 @@ const upload = multer({
 router.use(authenticateToken);
 
 // Request new export
-router.post('/request', requestExport);
+router.post('/request', validate(createExportSchema), requestExport);
 
 // Track export count (NEW)
-router.post('/track', trackExport);
+router.post('/track', validate(createExportSchema), trackExport);
 
 // Check export limit (NEW)
 router.get('/check-limit', checkExportLimit);
 
 // Get export status
-router.get('/:exportId', getExportStatus);
+router.get('/:exportId', validate(getExportSchema), getExportStatus);
 
 // Download export file
-router.get('/:exportId/download', downloadExport);
+router.get('/:exportId/download', validate(downloadExportSchema), downloadExport);
 
 // Save export data (for backend processing to store result)
 router.post('/:exportId/save', upload.single('file'), saveExport);

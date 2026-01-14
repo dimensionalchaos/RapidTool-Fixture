@@ -9,6 +9,8 @@ import {
 } from '../controllers/modelImport.controller';
 import { authenticateToken } from '../middleware/auth.middleware';
 import { checkModelLimit } from '../middleware/license.middleware';
+import { validate } from '../middleware/validation.middleware';
+import { getModelSchema, updateProgressSchema } from '../validators/modelImport.validator';
 
 const router = Router();
 
@@ -37,10 +39,10 @@ router.use(authenticateToken);
 router.post('/upload', checkModelLimit, upload.single('model'), uploadModel);
 
 // Get import status
-router.get('/:importId', getImportStatus);
+router.get('/:importId', validate(getModelSchema), getImportStatus);
 
 // Update import progress (for processing status updates)
-router.patch('/:importId', updateImportProgress);
+router.patch('/:importId', validate(updateProgressSchema), updateImportProgress);
 
 // Get user's imports
 router.get('/', getUserImports);
