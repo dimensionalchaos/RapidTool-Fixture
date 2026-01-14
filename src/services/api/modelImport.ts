@@ -52,6 +52,7 @@ export async function uploadModel(
     headers: {
       'Content-Type': 'multipart/form-data',
     },
+    timeout: 300000, // 5 minutes for large file uploads
   });
 
   return response.data.data;
