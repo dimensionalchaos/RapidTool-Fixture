@@ -17,6 +17,7 @@ class ApiClient {
     this.client = axios.create({
       baseURL: `${API_URL}/api`,
       timeout: API_TIMEOUT,
+      withCredentials: true, // Enable cookies for localtest.me domain
       headers: {
         'Content-Type': 'application/json',
       },
@@ -28,10 +29,8 @@ class ApiClient {
   private setupInterceptors() {
     this.client.interceptors.request.use(
       (config: InternalAxiosRequestConfig) => {
-        const token = this.getAccessToken();
-        if (token && config.headers) {
-          config.headers.Authorization = `Bearer ${token}`;
-        }
+        // We now rely on HttpOnly cookies for authentication
+        // No need to manually attach the Authorization header from localStorage
         return config;
       },
       (error) => Promise.reject(error)
