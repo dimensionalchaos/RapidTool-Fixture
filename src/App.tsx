@@ -101,16 +101,6 @@ const MainApp = () => {
   );
 };
 
-const AuthCheck = ({ children }: { children: React.ReactNode }) => {
-  const { fetchCurrentUser } = useAuthStore();
-
-  useEffect(() => {
-    fetchCurrentUser();
-  }, []);
-
-  return <>{children}</>;
-};
-
 const App = () => {
   return (
     <QueryClientProvider client={queryClient}>
@@ -124,29 +114,27 @@ const App = () => {
           <TooltipProvider>
             <Toaster />
             <Sonner />
-            <AuthCheck>
-              <Routes>
-                {/* Public Routes */}
-                <Route path="/auth/login" element={<LoginPage />} />
-                <Route path="/auth/register" element={<RegisterPage />} />
-                <Route path="/auth/forgot-password" element={<ForgotPasswordPage />} />
-                <Route path="/auth/verify" element={<VerifyEmailPage />} />
-                <Route path="/auth/reset-password" element={<ResetPasswordPage />} />
+            <Routes>
+              {/* Public Routes */}
+              <Route path="/auth/login" element={<LoginPage />} />
+              <Route path="/auth/register" element={<RegisterPage />} />
+              <Route path="/auth/forgot-password" element={<ForgotPasswordPage />} />
+              <Route path="/auth/verify" element={<VerifyEmailPage />} />
+              <Route path="/auth/reset-password" element={<ResetPasswordPage />} />
 
-                {/* --- CAD APPLICATION ROUTE (Now at root) --- */}
-                <Route
-                  path="/"
-                  element={
-                    <ProtectedRoute>
-                      <MainApp />
-                    </ProtectedRoute>
-                  }
-                />
+              {/* --- CAD APPLICATION ROUTE (Now at root) --- */}
+              <Route
+                path="/"
+                element={
+                  <ProtectedRoute>
+                    <MainApp />
+                  </ProtectedRoute>
+                }
+              />
 
-                {/* Catch-all: Redirect back to Root */}
-                <Route path="*" element={<Navigate to="/" replace />} />
-              </Routes>
-            </AuthCheck>
+              {/* Catch-all: Redirect back to Root */}
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
           </TooltipProvider>
         </ThemeProvider>
       </BrowserRouter>

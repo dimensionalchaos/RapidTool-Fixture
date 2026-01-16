@@ -6,7 +6,7 @@ interface AuthState {
   isLoading: boolean;
   isAuthenticated: boolean;
   error: string | null;
-
+  
   setUser: (user: User | null) => void;
   setLoading: (loading: boolean) => void;
   setError: (error: string | null) => void;
@@ -17,41 +17,57 @@ interface AuthState {
   clearError: () => void;
 }
 
+// Check if user has valid token on initialization
+const hasValidToken = () => {
+  const token = localStorage.getItem('accessToken');
+  if (!token) return false;
+  
+  // Clear dummy tokens from old client-side auth fallback
+  if (token.startsWith('dummy-token-')) {
+    localStorage.removeItem('accessToken');
+    localStorage.removeItem('refreshToken');
+    return false;
+  }
+  
+  // For real JWT tokens, assume valid (will be validated by backend)
+  return true;
+};
+
 export const useAuthStore = create<AuthState>((set) => ({
   user: null,
-  isLoading: true, // Start in loading state while checking cookies
-  isAuthenticated: false,
+  isLoading: false,
+  isAuthenticated: hasValidToken(),
   error: null,
 
   setUser: (user) => set({ user, isAuthenticated: !!user }),
-
+  
   setLoading: (loading) => set({ isLoading: loading }),
-
+  
   setError: (error) => set({ error }),
-
+  
   clearError: () => set({ error: null }),
 
   login: async (email, password) => {
     console.log('[AuthStore] Login attempt for:', email);
     try {
       set({ isLoading: true, error: null });
-
+      
       // Backend authentication only
       console.log('[AuthStore] Attempting backend authentication...');
       const response = await authAPI.login({ email, password });
       console.log('[AuthStore] Backend login successful:', response);
-      set({
-        user: response.user as User,
-        isAuthenticated: true,
-        isLoading: false
+      set({ 
+        user: response.user as User, 
+        isAuthenticated: true, 
+        isLoading: false 
       });
       console.log('[AuthStore] Auth state updated - isAuthenticated: true');
     } catch (error: any) {
       console.error('[AuthStore] Login failed:', error);
-      set({
-        error: error.message || 'Login failed',
+      set({ 
+        error: error.message || 'Login failed', 
         isLoading: false,
-        isAuthenticated: false
+        isAuthenticated: false 
       });
       throw error;
     }
@@ -64,9 +80,9 @@ export const useAuthStore = create<AuthState>((set) => ({
       set({ isLoading: false });
       return response;
     } catch (error: any) {
-      set({
-        error: error.message || 'Registration failed',
-        isLoading: false
+      set({ 
+        error: error.message || 'Registration failed', 
+        isLoading: false 
       });
       throw error;
     }
@@ -76,16 +92,16 @@ export const useAuthStore = create<AuthState>((set) => ({
     try {
       set({ isLoading: true });
       await authAPI.logout();
-      set({
-        user: null,
-        isAuthenticated: false,
+      set({ 
+        user: null, 
+        isAuthenticated: false, 
         isLoading: false,
-        error: null
+        error: null 
       });
     } catch (error: any) {
-      set({
-        error: error.message || 'Logout failed',
-        isLoading: false
+      set({ 
+        error: error.message || 'Logout failed', 
+        isLoading: false 
       });
       throw error;
     }
@@ -93,21 +109,16 @@ export const useAuthStore = create<AuthState>((set) => ({
 
   fetchCurrentUser: async () => {
     try {
-      // Don't set isLoading to true here, we assume it's already true if this is the initial check
+      // Don't set isLoading to prevent infinite render loops
       const user = await authAPI.getCurrentUser();
-      set({
-        user,
-        isAuthenticated: true,
-        isLoading: false
+      set({ 
+        user, 
+        isAuthenticated: true
       });
-      console.log('[AuthStore] Current user fetched successfully');
     } catch (error: any) {
+      // Don't log user out if fetch fails - they may still have valid token
+      // Silently fail to prevent blocking the app
       console.warn('[AuthStore] Failed to fetch current user:', error.message);
-      set({
-        user: null,
-        isAuthenticated: false,
-        isLoading: false
-      });
     }
   },
 }));
