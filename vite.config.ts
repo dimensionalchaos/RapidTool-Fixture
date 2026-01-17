@@ -2,7 +2,7 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react-swc";
 import path from "path";
 import { componentTagger } from "lovable-tagger";
-import obfuscatorPlugin from "rollup-plugin-obfuscator";
+// import obfuscatorPlugin from "rollup-plugin-obfuscator";
 
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => ({
@@ -15,50 +15,50 @@ export default defineConfig(({ mode }) => ({
     react(),
     mode === "development" && componentTagger(),
     // Code obfuscation for production builds only
-    mode === "production" && obfuscatorPlugin({
-      options: {
-        // Performance-optimized obfuscation settings
-        compact: true,
-        controlFlowFlattening: false, // Disabled - significant performance hit
-        deadCodeInjection: false, // Disabled - increases bundle size
-        debugProtection: false, // Disabled - can break debugging tools
-        disableConsoleOutput: true, // Remove console.* calls in production
-        identifierNamesGenerator: "hexadecimal", // Rename variables to hex
-        log: false,
-        numbersToExpressions: true, // Convert numbers to expressions
-        renameGlobals: false, // Don't rename globals - breaks Three.js
-        selfDefending: false, // Disabled - can cause issues
-        simplify: true, // Simplify code
-        splitStrings: true, // Split strings into chunks
-        splitStringsChunkLength: 10,
-        stringArray: true, // Move strings to array
-        stringArrayCallsTransform: true,
-        stringArrayEncoding: ["base64"], // Encode strings
-        stringArrayIndexShift: true,
-        stringArrayRotate: true,
-        stringArrayShuffle: true,
-        stringArrayWrappersCount: 2,
-        stringArrayWrappersChainedCalls: true,
-        stringArrayWrappersParametersMaxCount: 4,
-        stringArrayWrappersType: "function",
-        stringArrayThreshold: 0.75,
-        transformObjectKeys: true, // Obfuscate object keys
-        unicodeEscapeSequence: false, // Disabled - increases size
-      },
-      // Only obfuscate our application code, not vendor chunks
-      include: [
-        "src/**/*.js",
-        "src/**/*.ts",
-        "src/**/*.tsx",
-        "packages/cad-core/**/*.ts",
-        "packages/cad-ui/**/*.ts",
-        "packages/cad-ui/**/*.tsx",
-      ],
-      exclude: [
-        "node_modules/**",
-        "**/*vendor*.js", // Don't obfuscate vendor chunks
-      ],
-    }),
+    // mode === "production" && obfuscatorPlugin({
+    //   options: {
+    //     // Performance-optimized obfuscation settings
+    //     compact: true,
+    //     controlFlowFlattening: false, // Disabled - significant performance hit
+    //     deadCodeInjection: false, // Disabled - increases bundle size
+    //     debugProtection: false, // Disabled - can break debugging tools
+    //     disableConsoleOutput: true, // Remove console.* calls in production
+    //     identifierNamesGenerator: "hexadecimal", // Rename variables to hex
+    //     log: false,
+    //     numbersToExpressions: true, // Convert numbers to expressions
+    //     renameGlobals: false, // Don't rename globals - breaks Three.js
+    //     selfDefending: false, // Disabled - can cause issues
+    //     simplify: true, // Simplify code
+    //     splitStrings: true, // Split strings into chunks
+    //     splitStringsChunkLength: 10,
+    //     stringArray: true, // Move strings to array
+    //     stringArrayCallsTransform: true,
+    //     stringArrayEncoding: ["base64"], // Encode strings
+    //     stringArrayIndexShift: true,
+    //     stringArrayRotate: true,
+    //     stringArrayShuffle: true,
+    //     stringArrayWrappersCount: 2,
+    //     stringArrayWrappersChainedCalls: true,
+    //     stringArrayWrappersParametersMaxCount: 4,
+    //     stringArrayWrappersType: "function",
+    //     stringArrayThreshold: 0.75,
+    //     transformObjectKeys: true, // Obfuscate object keys
+    //     unicodeEscapeSequence: false, // Disabled - increases size
+    //   },
+    //   // Only obfuscate our application code, not vendor chunks
+    //   include: [
+    //     "src/**/*.js",
+    //     "src/**/*.ts",
+    //     "src/**/*.tsx",
+    //     "packages/cad-core/**/*.ts",
+    //     "packages/cad-ui/**/*.ts",
+    //     "packages/cad-ui/**/*.tsx",
+    //   ],
+    //   exclude: [
+    //     "node_modules/**",
+    //     "**/*vendor*.js", // Don't obfuscate vendor chunks
+    //   ],
+    // }),
   ].filter(Boolean),
   resolve: {
     alias: {
