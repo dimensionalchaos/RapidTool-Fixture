@@ -294,12 +294,12 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
       window.addEventListener('offset-mesh-preview-complete', handleComplete);
       // Timeout fallback in case the event doesn't fire
       setTimeout(() => setIsCavityProcessing(false), 30000);
-    }, [cavitySettings]);
+    }, [cavitySettings, setIsCavityProcessing, setHasCavityPreview]);
 
     const handleClearCavityPreview = useCallback(() => {
       window.dispatchEvent(new CustomEvent('clear-offset-mesh-preview'));
       setHasCavityPreview(false);
-    }, []);
+    }, [setHasCavityPreview]);
 
     const handleExecuteCavity = useCallback(() => {
       setIsCavityProcessing(true);
@@ -320,13 +320,13 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
         setIsCavityProcessing(false);
         setIsApplyingCavity(false);
       }, 60000);
-    }, [cavitySettings]);
+    }, [cavitySettings, setIsCavityProcessing, setIsApplyingCavity, setHasCavityPreview, setIsCavityApplied]);
 
     const handleResetCavity = useCallback(() => {
       setIsCavityApplied(false);
       setHasCavityPreview(false);
       window.dispatchEvent(new CustomEvent('reset-cavity'));
-    }, []);
+    }, [setIsCavityApplied, setHasCavityPreview]);
 
     // ─────────────────────────────────────────────────────────────────────────
     // Export Handlers (Phase 7e - Processing)
