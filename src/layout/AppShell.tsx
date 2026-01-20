@@ -284,17 +284,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
       window.dispatchEvent(new CustomEvent('generate-offset-mesh-preview', {
         detail: { settings: cavitySettings }
       }));
-      // Processing state will be cleared by the 3DScene when complete
-      // We'll listen for the completion event
-      const handleComplete = () => {
-        setIsCavityProcessing(false);
-        setHasCavityPreview(true);
-        window.removeEventListener('offset-mesh-preview-complete', handleComplete);
-      };
-      window.addEventListener('offset-mesh-preview-complete', handleComplete);
-      // Timeout fallback in case the event doesn't fire
-      setTimeout(() => setIsCavityProcessing(false), 30000);
-    }, [cavitySettings, setIsCavityProcessing, setHasCavityPreview]);
+    }, [cavitySettings, setIsCavityProcessing]);
 
     const handleClearCavityPreview = useCallback(() => {
       window.dispatchEvent(new CustomEvent('clear-offset-mesh-preview'));
@@ -307,26 +297,41 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
       window.dispatchEvent(new CustomEvent('execute-cavity-subtraction', {
         detail: { settings: cavitySettings }
       }));
-      // Listen for completion
-      const handleComplete = () => {
-        setIsCavityProcessing(false);
-        setIsApplyingCavity(false);
-        setHasCavityPreview(false);
-        setIsCavityApplied(true);
-        window.removeEventListener('cavity-subtraction-complete', handleComplete);
-      };
-      window.addEventListener('cavity-subtraction-complete', handleComplete);
-      setTimeout(() => {
-        setIsCavityProcessing(false);
-        setIsApplyingCavity(false);
-      }, 60000);
-    }, [cavitySettings, setIsCavityProcessing, setIsApplyingCavity, setHasCavityPreview, setIsCavityApplied]);
+    }, [cavitySettings, setIsCavityProcessing, setIsApplyingCavity]);
 
     const handleResetCavity = useCallback(() => {
       setIsCavityApplied(false);
       setHasCavityPreview(false);
       window.dispatchEvent(new CustomEvent('reset-cavity'));
     }, [setIsCavityApplied, setHasCavityPreview]);
+
+    // Listen for cavity preview completion events
+    useEffect(() => {
+      let timeoutId: NodeJS.Timeout | null = null;
+
+      const handlePreviewComplete = () => {
+        if (timeoutId) clearTimeout(timeoutId);
+        setIsCavityProcessing(false);
+        setHasCavityPreview(true);
+      };
+
+      const handleCavityComplete = () => {
+        if (timeoutId) clearTimeout(timeoutId);
+        setIsCavityProcessing(false);
+        setIsApplyingCavity(false);
+        setHasCavityPreview(false);
+        setIsCavityApplied(true);
+      };
+
+      window.addEventListener('offset-mesh-preview-complete', handlePreviewComplete);
+      window.addEventListener('cavity-subtraction-complete', handleCavityComplete);
+
+      return () => {
+        if (timeoutId) clearTimeout(timeoutId);
+        window.removeEventListener('offset-mesh-preview-complete', handlePreviewComplete);
+        window.removeEventListener('cavity-subtraction-complete', handleCavityComplete);
+      };
+    }, [setIsCavityProcessing, setHasCavityPreview, setIsApplyingCavity, setIsCavityApplied]);
 
     // ─────────────────────────────────────────────────────────────────────────
     // Export Handlers (Phase 7e - Processing)
