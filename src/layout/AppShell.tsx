@@ -300,10 +300,18 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
     }, [cavitySettings, setIsCavityProcessing, setIsApplyingCavity]);
 
     const handleResetCavity = useCallback(() => {
+      // Reset all cavity state flags
       setIsCavityApplied(false);
       setHasCavityPreview(false);
+      setIsCavityProcessing(false);
+      setIsApplyingCavity(false);
+
+      // Reset cavity settings to defaults
+      setCavitySettings(DEFAULT_CAVITY_SETTINGS);
+
+      // Dispatch event to 3D scene to clear visual elements
       window.dispatchEvent(new CustomEvent('reset-cavity'));
-    }, [setIsCavityApplied, setHasCavityPreview]);
+    }, [setIsCavityApplied, setHasCavityPreview, setIsCavityProcessing, setIsApplyingCavity, setCavitySettings]);
 
     // Listen for cavity preview completion events
     useEffect(() => {
