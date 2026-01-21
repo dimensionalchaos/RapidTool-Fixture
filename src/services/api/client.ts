@@ -69,22 +69,17 @@ class ApiClient {
 
     this.refreshPromise = (async () => {
       try {
-        const refreshToken = this.getRefreshToken();
-        if (!refreshToken) {
-          throw new Error('No refresh token available');
-        }
-
-        const response = await axios.post(`${API_URL}/api/auth/refresh`, {
-          refreshToken,
-        }, {
+        // Rely on HttpOnly cookie for refresh token
+        const response = await axios.post(`${API_URL}/api/auth/refresh`, {}, {
           withCredentials: true
         });
 
-        const { accessToken, refreshToken: newRefreshToken } = response.data;
+        const { accessToken, refreshToken: newRefreshToken } = response.data.data || response.data;
         this.setTokens(accessToken, newRefreshToken);
         return accessToken;
       } catch (error) {
         this.clearTokens();
+        window.dispatchEvent(new CustomEvent('auth:logout'));
         throw error;
       } finally {
         this.refreshPromise = null;
@@ -121,9 +116,13 @@ class ApiClient {
     return localStorage.getItem('refreshToken');
   }
 
-  public setTokens(accessToken: string, refreshToken: string): void {
-    localStorage.setItem('accessToken', accessToken);
-    localStorage.setItem('refreshToken', refreshToken);
+  public setTokens(accessToken: string, refreshToken?: string | null): void {
+    if (accessToken) {
+      localStorage.setItem('accessToken', accessToken);
+    }
+    if (refreshToken) {
+      localStorage.setItem('refreshToken', refreshToken);
+    }
   }
 
   public clearTokens(): void {
@@ -142,7 +141,7 @@ export const apiClient = {
   instance: apiClientInstance.instance,
   getAccessToken: () => apiClientInstance.getAccessToken(),
   getRefreshToken: () => apiClientInstance.getRefreshToken(),
-  setTokens: (accessToken: string, refreshToken: string) => apiClientInstance.setTokens(accessToken, refreshToken),
+  setTokens: (accessToken: string, refreshToken?: string | null) => apiClientInstance.setTokens(accessToken, refreshToken),
   clearTokens: () => apiClientInstance.clearTokens(),
 };
 

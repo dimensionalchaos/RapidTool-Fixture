@@ -92,15 +92,9 @@ export const authAPI = {
   },
 
   async refreshToken(): Promise<RefreshResponse> {
-    const refreshToken = apiClient.getRefreshToken();
-    if (!refreshToken) {
-      throw new Error('No refresh token available');
-    }
+    // Rely on HttpOnly cookie
+    const response = await apiClient.instance.post<{ success: boolean; data: RefreshResponse }>('/auth/refresh', {});
 
-    const response = await apiClient.instance.post<{ success: boolean; data: RefreshResponse }>('/auth/refresh', {
-      refreshToken,
-    });
-    
     const refreshData = response.data.data;
     apiClient.setTokens(refreshData.accessToken, refreshData.refreshToken);
     return refreshData;
